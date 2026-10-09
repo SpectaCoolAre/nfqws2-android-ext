@@ -171,7 +171,7 @@ function openMenu(anchor, items){
     mi.setAttribute('role', 'menuitem');
     mi.innerHTML = ('icon' in it ? '<span class="mi-icon">' + (it.icon ? icon(it.icon, 's24') :
         '<span style="display:block;width:24px;height:24px"></span>') + '</span>' : '') +
-      '<span class="mi-text">' + esc(it.label) + '</span>';
+      '<span class="mi-text">' + esc(it.label) + (it.sub ? '<span class="mi-sub">' + esc(it.sub) + '</span>' : '') + '</span>';
     mi.onclick = () => { close(); if(it.onClick) it.onClick(); };
     menu.append(mi);
   }
@@ -331,6 +331,22 @@ async function ctlx(a, ms, onLine){
   return await sh(ctlCmd(a), ms, onLine);
 }
 const errText = (r, fallback) => ((r.err || '').trim() || (r.out || '').trim().split('\n').pop() || t(fallback));
+
+/* Буфер обмена: Clipboard API, а где WebView его не даёт — старый execCommand */
+async function copyText(text){
+  try { await navigator.clipboard.writeText(text); return true; }
+  catch(e){
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+    document.body.append(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch(e2) {}
+    ta.remove();
+    return ok;
+  }
+}
 
 /* ── Snackbar: M3 (label + optional text action, 4s / 8s с действием) ──── */
 let snackAction = null;

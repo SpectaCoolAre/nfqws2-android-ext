@@ -989,6 +989,49 @@ cmd_probe_dpi() {
   echo done
 }
 
+# ---------------------------------------------------------------- открыть папку в проводнике
+# Общего способа «открой эту папку» в Android нет: каждый проводник понимает
+# свой MIME у VIEW. Спрашиваем систему, кто берёт папку по каждому из
+# известных MIME, и добавляем установленные root-проводники, которых
+# система не назвала. Открытие перебирает MIME; не вышло — запускаем само
+# приложение, а WebUI копирует путь в буфер.
+FM_MIMES="resource/folder inode/directory vnd.android.document/directory x-directory/normal"
+FM_KNOWN="bin.mt.plus bin.mt.plus.canary com.mixplorer com.mixplorer.silver pl.solidexplorer2 com.speedsoftware.rootexplorer nextapp.fx me.zhanghai.android.files com.amaze.filemanager com.cxinventor.file.explorer com.lonelycatgames.Xplore com.ghisler.android.TotalCommander com.alphainventor.filemanager com.rhmsoft.fm"
+fm_dir_ok() { case "$1" in "$CONFDIR"|"$CONFDIR"/*|"$MODDIR"|"$MODDIR"/*) [ -d "$1" ] ;; *) return 1 ;; esac; }
+cmd_fm_list() { # <папка> -> строки «APP <пакет> <компонент|->»
+  local dir="$1" m pkgs="" p
+  fm_dir_ok "$dir" || { echo "Нет такой папки" >&2; return 1; }
+  for m in $FM_MIMES; do
+    cmd package query-activities --brief -a android.intent.action.VIEW -d "file://$dir" -t "$m" 2>/dev/null |
+      grep -E '^[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+$'
+  done | awk -F/ '!seen[$1]++ { print "APP\t" $1 "\t" $0 }' > "$STATE_DIR/fm.apps"
+  pkgs=$(pm list packages 2>/dev/null | sed 's/^package://')
+  for p in $FM_KNOWN; do
+    printf '%s\n' "$pkgs" | grep -qx "$p" || continue
+    grep -q "	$p	" "$STATE_DIR/fm.apps" || printf 'APP\t%s\t-\n' "$p" >> "$STATE_DIR/fm.apps"
+  done
+  cat "$STATE_DIR/fm.apps"; rm -f "$STATE_DIR/fm.apps"
+}
+cmd_fm_open() { # <папка> <пакет> [компонент] -> «opened» или «launched»
+  local dir="$1" pkg="$2" comp="${3:--}" m out launcher
+  fm_dir_ok "$dir" || { echo "Нет такой папки" >&2; return 1; }
+  case "$pkg" in ''|*[!A-Za-z0-9_.]*) echo "Неверное имя пакета" >&2; return 1 ;; esac
+  case "$comp" in -|*/*) ;; *) echo "Неверный компонент" >&2; return 1 ;; esac
+  for m in $FM_MIMES; do
+    if [ "$comp" != - ]; then
+      out=$(am start -a android.intent.action.VIEW -d "file://$dir" -t "$m" -n "$comp" 2>&1)
+    else
+      out=$(am start -a android.intent.action.VIEW -d "file://$dir" -t "$m" -p "$pkg" 2>&1)
+    fi
+    case "$out" in *Error*|*error*|*Exception*) continue ;; esac
+    echo opened; return 0
+  done
+  launcher=$(cmd package resolve-activity --brief -c android.intent.category.LAUNCHER "$pkg" 2>/dev/null | tail -n 1)
+  case "$launcher" in */*) am start -n "$launcher" >/dev/null 2>&1 && { echo launched; return 0; } ;; esac
+  monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 && { echo launched; return 0; }
+  echo "Не удалось открыть приложение" >&2; return 1
+}
+
 # ---------------------------------------------------------------- проверка одного домена
 # «Почему не открывается?»: в каких списках домен (с учётом того, что запись
 # списка покрывает и поддомены), какие из них подключены к текущему запуску
@@ -1282,6 +1325,8 @@ EOF
   net-info) cmd_net_info ;;
   probe-dpi) cmd_probe_dpi "${2:-all}" ;;
   domain-check) cmd_domain_check "$2" ;;
+  fm-list) cmd_fm_list "$2" ;;
+  fm-open) cmd_fm_open "$2" "$3" "$4" ;;
   # Список изменений из архива модуля — для «Что нового» в WebUI
   changelog) cat "$MODDIR/changelog.md" 2>/dev/null || { echo "Нет changelog.md в модуле" >&2; exit 1; } ;;
   probe-cancel) cmd_probe_cancel ;;

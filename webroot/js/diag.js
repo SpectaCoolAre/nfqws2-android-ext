@@ -33,17 +33,6 @@ async function loadArgs(){
   renderArgs();
 }
 async function copyArgs(){
-  const text = $('args').textContent;
-  let ok = false;
-  try { await navigator.clipboard.writeText(text); ok = true; }
-  catch(e){
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
-    document.body.append(ta);
-    ta.select();
-    try { ok = document.execCommand('copy'); } catch(e2) {}
-    ta.remove();
-  }
+  const ok = await copyText($('args').textContent);
   toast(ok ? t('Аргументы скопированы') : t('Не удалось скопировать: выделите текст вручную'));
 }

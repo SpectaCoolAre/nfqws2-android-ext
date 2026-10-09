@@ -582,5 +582,15 @@ EN = {
  "Изменения в этой версии": "Changes in this version",
  "Понятно": "Got it",
  "Что нового в {0}": "What's new in {0}",
- "Список изменений недоступен": "The changelog is not available"
+ "Список изменений недоступен": "The changelog is not available",
+ "Открыть в файловом менеджере": "Open in a file manager",
+ "Папка модуля или настроек — в MT Manager и других root-проводниках": "The module or settings folder — in MT Manager or another root file manager",
+ "Настройки и списки": "Settings and lists",
+ "Папка модуля": "Module folder",
+ "Копировать путь": "Copy path",
+ "Путь скопирован: {0}": "Path copied: {0}",
+ "Не нашлось проводника с root-доступом — путь можно скопировать": "No root file manager found — you can copy the path",
+ "Не удалось открыть приложение": "Couldn't open the app",
+ "Приложение не открывает папки по ссылке: путь скопирован, вставьте его в адресную строку": "The app doesn't open folders by link: the path is copied, paste it into its address bar",
+ "Откройте вручную: {0}": "Open it manually: {0}"
 };

@@ -458,6 +458,9 @@ body.nav-hidden .content { padding-bottom: calc(var(--bottom-inset) + 24px); }
 }
 .menu .mi .mi-icon { color: var(--md-sys-color-on-surface-variant); flex: none; display: grid; place-items: center; }
 .menu .mi .mi-text { flex: 1 1 auto; min-width: 0; }
+.menu .mi:has(.mi-sub) { padding-top: 8px; padding-bottom: 8px; }
+.menu .mi .mi-sub { display: block; font-size: var(--ts-body-small); line-height: var(--lh-body-small);
+  color: var(--md-sys-color-on-surface-variant); font-family: var(--md-font-code); overflow: hidden; text-overflow: ellipsis; }
 .menu .sep { height: 1px; margin: 8px 0; background: var(--md-sys-color-outline-variant); }
 .menu-back { position: fixed; inset: 0; z-index: 59; }
 

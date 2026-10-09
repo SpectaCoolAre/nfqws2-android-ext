@@ -407,6 +407,46 @@ ctl domain-check 'bad host'
 assert_rc 1 "$ctl_rc" "a malformed domain is refused"
 rm -f "$MOCKBIN/ping" "$MOCKBIN/curl"
 
+# ── открыть папку в проводнике ────────────────────────────────────────────────
+section "fm-list / fm-open"
+
+mkdir -p "$SANDBOX/fmdir"
+cat > "$MOCKBIN/cmd" <<'EOF'
+#!/bin/sh
+case "$*" in
+  *query-activities*resource/folder*) echo "com.mixplorer/com.mixplorer.activities.BrowseActivity" ;;
+  *query-activities*inode/directory*) echo "com.mixplorer/com.mixplorer.activities.BrowseActivity"; echo "com.android.documentsui/.files.FilesActivity" ;;
+  *resolve-activity*) echo "priority=0"; echo "bin.mt.plus/bin.mt.plus.Main" ;;
+esac
+EOF
+cat > "$MOCKBIN/pm" <<'EOF'
+#!/bin/sh
+printf 'package:bin.mt.plus\npackage:com.mixplorer\npackage:org.other\n'
+EOF
+cat > "$MOCKBIN/am" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$MOCK_DIR/am.log"
+case "$*" in *bin.mt.plus*VIEW*|*VIEW*bin.mt.plus*) echo "Error: Activity not started, unable to resolve Intent" ;; *) echo "Starting: Intent" ;; esac
+EOF
+chmod 0755 "$MOCKBIN/cmd" "$MOCKBIN/pm" "$MOCKBIN/am"
+# Папки только модуля и настроек: подменяем проверку для песочницы
+ctl fm-list /etc
+assert_rc 1 "$ctl_rc" "only the module and settings folders can be opened"
+ctl fm-list "$CONFDIR"
+assert_rc 0 "$ctl_rc" "fm-list runs for the settings folder"
+assert_contains "$ctl_out" "$(printf 'APP\tcom.mixplorer\tcom.mixplorer/com.mixplorer.activities.BrowseActivity')" "apps the system names for a folder are listed once"
+assert_contains "$ctl_out" "$(printf 'APP\tbin.mt.plus\t-')" "an installed root file manager is added even if the system did not name it"
+assert_not_contains "$ctl_out" "org.other" "other apps are not"
+: > "$MOCK_DIR/am.log"
+ctl fm-open "$CONFDIR" com.mixplorer com.mixplorer/com.mixplorer.activities.BrowseActivity
+assert_eq "opened" "$ctl_out" "a folder handler opens the folder"
+assert_contains "$(cat "$MOCK_DIR/am.log")" "file://$CONFDIR" "with a file:// link to it"
+ctl fm-open "$CONFDIR" bin.mt.plus -
+assert_eq "launched" "$ctl_out" "an app that takes no folder link is launched instead"
+ctl fm-open "$CONFDIR" 'bad;pkg' -
+assert_rc 1 "$ctl_rc" "a malformed package name is refused"
+rm -f "$MOCKBIN/cmd" "$MOCKBIN/am"; cp "$TESTS_DIR/lib/mock/android-stub" "$MOCKBIN/pm"; chmod 0755 "$MOCKBIN/pm"
+
 # ── doctor / status ───────────────────────────────────────────────────────────
 section "doctor"
 
