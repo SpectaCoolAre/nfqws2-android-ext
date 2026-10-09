@@ -3,8 +3,9 @@
 * text=auto eol=lf
 
 # Разработческое не должно попадать в собранный модуль. Штатная сборка —
-# tools/build.py (она пакует по allow-list), но если кто-то собирает через
-# `git archive`, export-ignore даёт тот же результат.
+# release.yml (пакует по allow-list), но если кто-то собирает через
+# `git archive`, export-ignore даёт тот же результат. changelog.md нужен в
+# модуле: из него WebUI показывает «Что нового».
 tests/          export-ignore
 tools/          export-ignore
 .workbuddy-ai/  export-ignore
@@ -13,4 +14,3 @@ tools/          export-ignore
 CONTRIBUTING.md export-ignore
 docs/           export-ignore
 update.json     export-ignore
-changelog.md    export-ignore
