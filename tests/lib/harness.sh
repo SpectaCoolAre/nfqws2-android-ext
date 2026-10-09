@@ -112,6 +112,8 @@ sandbox_init() {
 
   cp "$TESTS_DIR/lib/mock/iptables"    "$MOCKBIN/iptables"
   cp "$TESTS_DIR/lib/mock/iptables"    "$MOCKBIN/ip6tables"
+  cp "$TESTS_DIR/lib/mock/iptables-restore" "$MOCKBIN/iptables-restore"
+  cp "$TESTS_DIR/lib/mock/iptables-restore" "$MOCKBIN/ip6tables-restore"
   cp "$TESTS_DIR/lib/mock/rm"          "$MOCKBIN/rm"
   for n in pm getprop sysctl modprobe settings; do
     cp "$TESTS_DIR/lib/mock/android-stub" "$MOCKBIN/$n"

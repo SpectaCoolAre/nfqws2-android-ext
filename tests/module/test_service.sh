@@ -208,6 +208,37 @@ assert_no_file "$CONFDIR/state/desired" "the service is not marked as desired"
 assert_no_file "$CONFDIR/state/nfqws2.pid" "and the daemon is rolled back"
 unset MOCK_IPT_FAIL
 
+section "iptables-restore: one batch gives the same rules as one call per rule"
+
+# Слепок всех цепочек обеих команд и таблиц
+ipt_snapshot() {
+  (cd "$MOCK_IPT_STORE" && find . -type f | sort | while IFS= read -r f; do echo "== $f"; cat "$f"; done)
+}
+conf_reset
+printf 'WATCHDOG=0\nIPV6_ENABLED=1\nNAT_FIX=1\nBLOCK_QUIC=1\nAPP_MODE=include\nENABLE_HOTSPOT=1\n' >> "$CONFFILE"
+printf 'com.termux\n' > "$CONFDIR/apps.list"
+load_conf >/dev/null 2>&1
+unset MOCK_IPT_FEATURES
+for feat in "" "multiport owner connmark CONNMARK NFQUEUE MASQUERADE"; do
+  MOCK_IPT_FEATURES="$feat"; [ -n "$feat" ] && export MOCK_IPT_FEATURES || unset MOCK_IPT_FEATURES
+  label=${feat:+connmark_out}; label=${label:-connbytes}
+  ipt_reset; rm -f "$CONFDIR/state/limiter" "$CONFDIR/state/app_uids"
+  MOCK_IPT_RESTORE_FAIL=1; export MOCK_IPT_RESTORE_FAIL
+  firewall_start >/dev/null 2>&1
+  one=$(ipt_snapshot); lim1=$(cat "$CONFDIR/state/limiter" 2>/dev/null); uid1=$(cat "$CONFDIR/state/app_uids" 2>/dev/null)
+  ipt_reset; rm -f "$CONFDIR/state/limiter" "$CONFDIR/state/app_uids"
+  unset MOCK_IPT_RESTORE_FAIL
+  firewall_start >/dev/null 2>&1
+  assert_rc 0 $? "$label: the batch applies"
+  batch=$(ipt_snapshot)
+  assert_eq "$one" "$batch" "$label: same chains and rules as without iptables-restore"
+  assert_contains "$batch" "MASQUERADE" "$label: NAT_FIX is part of the batch"
+  assert_eq "$lim1" "$(cat "$CONFDIR/state/limiter" 2>/dev/null)" "$label: the limiter is still recorded for the UI"
+  assert_eq "$uid1" "$(cat "$CONFDIR/state/app_uids" 2>/dev/null)" "$label: and the app UIDs"
+done
+unset MOCK_IPT_FEATURES
+firewall_stop >/dev/null 2>&1
+
 section "watchdog and netwatch helpers"
 
 # Both are started through one shared helper now, and the helper's return value

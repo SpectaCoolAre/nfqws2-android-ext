@@ -272,7 +272,7 @@ app_uid_count() {
 
 # 0 = app filter applied, 1 = off/not applicable, 2 = error
 app_rules() {
-  local CMD="$1" uids n chunk mark
+  local CMD="$1" uids n chunk mark FAM="${FW_FAMILY:-$1}"
   if ! app_mode_active; then
     $CMD -w -t mangle -F $IPT_GROUP_APP 2>/dev/null
     $CMD -w -t mangle -X $IPT_GROUP_APP 2>/dev/null
@@ -280,12 +280,12 @@ app_rules() {
     return 1
   fi
   if ! app_features_ok "$CMD"; then
-    [ "$CMD" = "iptables" ] && log_msg "Нет xt_owner/xt_CONNMARK — фильтр по приложениям не применяется"
+    [ "$FAM" = "iptables" ] && log_msg "Нет xt_owner/xt_CONNMARK — фильтр по приложениям не применяется"
     return 2
   fi
   uids=$(resolve_app_uids)
   n=$(printf '%s\n' "$uids" | tr ',' '\n' | grep -cE '^[0-9]+$')
-  if [ "$CMD" = "iptables" ]; then
+  if [ "$FAM" = "iptables" ]; then
     printf '%s\n' "$uids" > "$APP_UIDS_FILE"
     n=$(app_uid_count)
   fi
@@ -423,6 +423,7 @@ has_ipt_feature() {
 }
 
 _ipt_cap_cache_get() { # <command> <probe key>
+  [ "$1" = _fw_batch_cmd ] && set -- "$FW_PROBE_CMD" "$2"
   [ -n "$MOCK_IPT_FEATURES" ] && return 1
   local kernel value
   kernel=$(uname -r 2>/dev/null) || return 1
@@ -438,6 +439,7 @@ _ipt_cap_cache_get() { # <command> <probe key>
 }
 
 _ipt_cap_cache_put() { # <command> <probe key> <value>
+  [ "$1" = _fw_batch_cmd ] && set -- "$FW_PROBE_CMD" "$2" "$3"
   [ -n "$MOCK_IPT_FEATURES" ] && return 0
   local kernel tmp
   kernel=$(uname -r 2>/dev/null) || return 0
@@ -530,6 +532,69 @@ _fw_add_rule() {
   fi
 }
 
+_fw_batch_cmd() {
+  local table=mangle arg line original="$*"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -w) shift ;;
+      -t) table="$2"; shift 2 ;;
+      *) break ;;
+    esac
+  done
+  [ "$#" -gt 0 ] || return 1
+  # run via real command to reflect actual kernel
+  case "$*" in
+    *nfqws_test*) "$FW_PROBE_CMD" $original; return $? ;;
+  esac
+  case "$1" in
+    -D) return 1 ;;
+    -N|-F|-X|-A|-I)
+      line="$1"; shift
+      for arg in "$@"; do line="$line $arg"; done
+      printf '%s|%s\n' "$table" "$line" >> "$FW_BATCH_FILE"
+      return 0 ;;
+  esac
+  return 1
+}
+
+# Пакетная загрузка правил: тот же построитель _firewall_start, но вместо
+# iptables — _fw_batch_cmd, который складывает команды в файл, а потом всё
+# применяется одним iptables-restore. Построитель смотрит на имя команды
+# (NAT_FIX, файл лимитера, UID приложений — только для iptables), поэтому
+# настоящая команда передаётся в FW_FAMILY.
+_firewall_start_restore() {
+  local CMD="$1" restore raw rules table line current="" restore_file
+  restore_file="${FW_RESTORE_DIR}/${CMD}.rules"
+  raw="${FW_RESTORE_DIR}/${CMD}.raw"
+  rules="${FW_RESTORE_DIR}/${CMD}.input"
+
+  command -v "${CMD}-restore" >/dev/null 2>&1 || return 1
+  _firewall_stop "$CMD" || true
+  FW_BATCH_FILE="$raw"
+  FW_PROBE_CMD="$CMD"
+  : > "$raw"
+  FW_FAMILY="$CMD"
+  _firewall_start _fw_batch_cmd || { FW_FAMILY=""; rm -f "$raw"; return 1; }
+  FW_FAMILY=""
+
+  current=""
+  : > "$rules"
+  while IFS='|' read -r table line; do
+    [ "$table" = "$current" ] || {
+      [ -z "$current" ] || printf 'COMMIT\n' >> "$rules"
+      current="$table"
+      printf '*%s\n' "$table" >> "$rules"
+    }
+    printf '%s\n' "$line" >> "$rules"
+  done < "$raw"
+  [ -z "$current" ] || printf 'COMMIT\n' >> "$rules"
+
+  "${CMD}-restore" --noflush < "$rules"
+  local rc=$?
+  rm -f "$raw" "$rules"
+  return "$rc"
+}
+
 _fw_iface_rules() {
   local CMD="$1" OUT="$2" IN="$3"
   local JNFQ="-j NFQUEUE --queue-num $NFQUEUE_NUM --queue-bypass"
@@ -567,7 +632,7 @@ _fw_iface_rules() {
   fi
 
   # NAT fix for UDP
-  if [ "$CMD" = "iptables" ] && [ "$NAT_FIX" = "1" ]; then
+  if [ "${FW_FAMILY:-$CMD}" = "iptables" ] && [ "$NAT_FIX" = "1" ]; then
     $CMD -w -t nat -A $IPT_GROUP_NAT $OUT -p udp -m mark --mark $MARK_PROCESSED -j MASQUERADE
   fi
 
@@ -584,14 +649,14 @@ _fw_iface_rules() {
 }
 
 _firewall_start() {
-  local CMD="$1" IF ex
+  local CMD="$1" IF ex FAM="${FW_FAMILY:-$1}"
 
   IPT_TCP_PORTS=$(printf '%s' "$TCP_PORTS" | tr '-' ':')
   IPT_UDP_EFF=$(printf '%s' "$UDP_PORTS" | tr '-' ':')
   [ "$BLOCK_QUIC" = "1" ] && IPT_UDP_EFF=$(port_list_without "$IPT_UDP_EFF" 443)
 
   LIMITER=$(detect_limiter "$CMD")
-  [ "$CMD" = "iptables" ] && echo "$LIMITER" > "$STATE_DIR/limiter" 2>/dev/null
+  [ "$FAM" = "iptables" ] && echo "$LIMITER" > "$STATE_DIR/limiter" 2>/dev/null
 
   HAS_MULTIPORT=0
   has_multiport "$CMD" && HAS_MULTIPORT=1
@@ -609,7 +674,7 @@ _firewall_start() {
     _fw_counter_chain "$CMD" $IPT_GROUP_QIN $CNT_IN_MASK $CNT_IN_STEP "$PKT_LIMIT_IN"
   fi
 
-  if [ "$CMD" = "iptables" ] && [ "$NAT_FIX" = "1" ]; then
+  if [ "$FAM" = "iptables" ] && [ "$NAT_FIX" = "1" ]; then
     $CMD -w -t nat -N $IPT_GROUP_NAT 2>/dev/null
     $CMD -w -t nat -F $IPT_GROUP_NAT
     while $CMD -w -t nat -D POSTROUTING -j $IPT_GROUP_NAT 2>/dev/null; do :; done
@@ -638,7 +703,7 @@ _firewall_start() {
 
   $CMD -w -t mangle -I POSTROUTING 1 -j $IPT_GROUP_POST
   $CMD -w -t mangle -I PREROUTING 1 -j $IPT_GROUP_PRE
-  if [ "$CMD" = "iptables" ] && [ "$NAT_FIX" = "1" ]; then
+  if [ "$FAM" = "iptables" ] && [ "$NAT_FIX" = "1" ]; then
     $CMD -w -t nat -I POSTROUTING 1 -j $IPT_GROUP_NAT
   fi
 
@@ -696,6 +761,9 @@ _firewall_stop() {
 firewall_iptables()  { _firewall_start iptables; }
 firewall_ip6tables() { [ "$IPV6_ENABLED" = "0" ] && return 0; _firewall_start ip6tables; }
 
+firewall_iptables_restore()  { _firewall_start_restore iptables; }
+firewall_ip6tables_restore() { [ "$IPV6_ENABLED" = "0" ] && return 0; _firewall_start_restore ip6tables; }
+
 # Аппаратное ускорение раздачи (tether offload): на многих телефонах трафик
 # раздачи обрабатывает модем в обход iptables, и nfqws2 его не видит. Пока
 # включён обход для точки доступа, ускорение выключаем. Прежнее значение
@@ -727,8 +795,20 @@ restore_tether_offload() {
 # check both rc: firewall_ip6tables returns 0 when IPv6 is off, masking an iptables failure
 firewall_start() {
   local rc=0
-  firewall_iptables || rc=1
-  firewall_ip6tables || rc=1
+  FW_RESTORE_DIR="$STATE_DIR/firewall-restore"
+  mkdir -p "$FW_RESTORE_DIR" 2>/dev/null
+  if command -v iptables-restore >/dev/null 2>&1; then
+    firewall_iptables_restore || { firewall_iptables || rc=1; }
+  else
+    firewall_iptables || rc=1
+  fi
+  if [ "$IPV6_ENABLED" = "0" ]; then
+    :
+  elif command -v ip6tables-restore >/dev/null 2>&1; then
+    firewall_ip6tables_restore || { firewall_ip6tables || rc=1; }
+  else
+    firewall_ip6tables || rc=1
+  fi
   apply_tether_offload
   return $rc
 }

@@ -1,0 +1,19 @@
+#!/bin/sh
+# Mock iptables-restore / ip6tables-restore: разбирает формат restore и
+# выполняет каждую строку мок-командой iptables (ip6tables) той же таблицы.
+# Ошибка любой строки — код 1, как у настоящего restore (он атомарен; здесь
+# хватает того, что вызывающий увидит отказ и пойдёт обычным путём).
+# MOCK_IPT_RESTORE_FAIL=1 — restore недоступен/падает.
+[ -n "${MOCK_IPT_RESTORE_FAIL:-}" ] && exit 1
+BIN="${0%-restore}"
+TABLE=mangle
+while IFS= read -r line; do
+  case "$line" in
+    ''|'#'*|COMMIT) continue ;;
+    '*'*) TABLE="${line#\*}"; continue ;;
+    :*) continue ;;
+  esac
+  # shellcheck disable=SC2086
+  "$BIN" -w -t "$TABLE" $line || exit 1
+done
+exit 0
