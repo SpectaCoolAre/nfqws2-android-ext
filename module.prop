@@ -1,7 +1,7 @@
 id=nfqws2-android
 name=nfqws2 for Android
-version=v1.9.6
-versionCode=1096
+version=v1.9.7
+versionCode=1097
 author=deathwatcher
 description=Обход DPI на базе nfqws2.
 updateJson=https://raw.githubusercontent.com/Dea1hwa1cher/nfqws2-android/main/update.json
