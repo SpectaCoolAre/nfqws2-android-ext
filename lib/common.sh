@@ -44,6 +44,7 @@ IPT_GROUP_QIN="nfqws_qin" # like QOUT, for incoming when connbytes is missing
 IPT_GROUP_APP="nfqws_app"
 IPT_GROUP_FWD="nfqws_fwd"
 NET_STRATEGIES_DIR="$CONFDIR/net_strategies"
+IPT_CAP_CACHE="$STATE_DIR/iptables-capabilities"
 
 # xt_owner allows max 128 ranges per rule
 APP_UID_MAX=128
@@ -421,6 +422,38 @@ has_ipt_feature() {
   ipt_probe "$@" >/dev/null 2>&1
 }
 
+_ipt_cap_cache_get() { # <command> <probe key>
+  [ -n "$MOCK_IPT_FEATURES" ] && return 1
+  local kernel value
+  kernel=$(uname -r 2>/dev/null) || return 1
+  [ -n "$kernel" ] && [ -f "$IPT_CAP_CACHE" ] || return 1
+  value=$(while IFS='|' read -r k c p v; do
+    [ "$k" = "$kernel" ] && [ "$c" = "$1" ] && [ "$p" = "$2" ] && {
+      printf '%s' "$v"
+      break
+    }
+  done < "$IPT_CAP_CACHE")
+  [ -n "$value" ] || return 1
+  printf '%s' "$value"
+}
+
+_ipt_cap_cache_put() { # <command> <probe key> <value>
+  [ -n "$MOCK_IPT_FEATURES" ] && return 0
+  local kernel tmp
+  kernel=$(uname -r 2>/dev/null) || return 0
+  [ -n "$kernel" ] || return 0
+  mkdir -p "$STATE_DIR" 2>/dev/null
+  tmp="$IPT_CAP_CACHE.tmp"
+  if [ -f "$IPT_CAP_CACHE" ]; then
+    while IFS='|' read -r k c p v; do
+      [ "$k" = "$kernel" ] && [ "$c" = "$1" ] && [ "$p" = "$2" ] && continue
+      printf '%s|%s|%s|%s\n' "$k" "$c" "$p" "$v"
+    done < "$IPT_CAP_CACHE" > "$tmp"
+  fi
+  printf '%s|%s|%s|%s\n' "$kernel" "$1" "$2" "$3" >> "$tmp"
+  mv -f "$tmp" "$IPT_CAP_CACHE"
+}
+
 ipt_probe() {
   local CMD="$1"; shift
   local err rc
@@ -433,13 +466,27 @@ ipt_probe() {
   return $rc
 }
 
+# Кэш — только положительных ответов: «нет» могло быть оттого, что модуль
+# ядра ещё не загружен (проверка на загрузке раньше modprobe), а запомненное
+# «нет» держало бы худший режим до смены ядра. Отрицательный ответ дешевле
+# перепроверить при следующей сборке правил.
 detect_limiter() {
   local C="${1:-iptables}"
+  [ "$(_ipt_cap_cache_get "$C" limiter)" = connbytes ] && { echo connbytes; return 0; }
   if has_ipt_feature $C -m connbytes --connbytes-dir=original --connbytes-mode=packets --connbytes 1:15 -j RETURN; then
+    _ipt_cap_cache_put "$C" limiter connbytes
     echo connbytes
   else
     echo connmark_out
   fi
+}
+
+has_multiport() {
+  local C="$1"
+  [ "$(_ipt_cap_cache_get "$C" multiport)" = 1 ] && return 0
+  has_ipt_feature "$C" -p tcp -m multiport --dports 80,443 -j RETURN || return 1
+  _ipt_cap_cache_put "$C" multiport 1
+  return 0
 }
 
 _fw_counter_chain() {
@@ -547,7 +594,7 @@ _firewall_start() {
   [ "$CMD" = "iptables" ] && echo "$LIMITER" > "$STATE_DIR/limiter" 2>/dev/null
 
   HAS_MULTIPORT=0
-  has_ipt_feature $CMD -p tcp -m multiport --dports 80,443 -j RETURN && HAS_MULTIPORT=1
+  has_multiport "$CMD" && HAS_MULTIPORT=1
 
   $CMD -w -t mangle -N $IPT_GROUP_POST 2>/dev/null
   $CMD -w -t mangle -F $IPT_GROUP_POST
