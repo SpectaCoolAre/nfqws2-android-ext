@@ -110,6 +110,24 @@ validate_conf "$CONFFILE" >/dev/null 2>&1; assert_rc 1 $? "command substitution 
 out=$(validate_conf "$CONFFILE" 2>&1)
 assert_contains "$out" "line 2" "the offending line number is reported"
 
+# ── dry_run_check and validate_conf_file ──────────────────────────────────────
+section "dry_run_check and validate_conf_file"
+
+conf_reset
+validate_conf_file "$CONFFILE"
+assert_rc 0 $? "valid conf file passes validate_conf_file"
+
+printf 'NFQWS_BASE_ARGS="--new"\n' > "$CONFFILE"
+validate_conf_file "$CONFFILE" >/dev/null 2>&1
+assert_rc 1 $? "config with --new in base args is rejected by validate_conf_file"
+
+conf_reset
+MOCK_NFQWS_DRY_RUN_FAIL=1
+export MOCK_NFQWS_DRY_RUN_FAIL
+validate_conf_file "$CONFFILE" >/dev/null 2>&1
+assert_rc 1 $? "validate_conf_file fails when nfqws2 dry-run rejects parameters"
+unset MOCK_NFQWS_DRY_RUN_FAIL
+
 # ── import_safe_name ──────────────────────────────────────────────────────────
 section "import_safe_name"
 

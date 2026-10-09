@@ -124,8 +124,9 @@ set_strategy() {
     echo "Стратегия '$name' не найдена" >&2
     return 1
   fi
-  if ! build_strategy_conf "$name" "$tmp" || ! validate_conf "$tmp" >/dev/null 2>&1; then
-    echo "Ошибка валидации стратегии '$name'" >&2
+  local err
+  if ! build_strategy_conf "$name" "$tmp" || ! err=$(validate_conf_file "$tmp" 2>&1); then
+    echo "Ошибка валидации стратегии '$name': $err" >&2
     rm -f "$tmp"
     return 1
   fi
@@ -237,6 +238,14 @@ cmd_doctor() {
   row ok abi "$arch, $(M ядро kernel) $(uname -r)"
   [ -x "$NFQWS_BIN" ] && row ok nfqws2 "$(ls -l "$NFQWS_BIN" | awk '{print $5}') $(M байт bytes)" \
     || row fail nfqws2 "$(M 'бинарник не найден или не исполняемый' 'binary is missing or not executable')"
+  if [ -x "$NFQWS_BIN" ]; then
+    local _dry_err
+    if _dry_err=$(validate_conf_file "$CONFFILE" 2>&1); then
+      row ok dry_run "$(M 'параметры nfqws2 валидны (--dry-run)' 'nfqws2 parameters valid (--dry-run)')"
+    else
+      row fail dry_run "$(M "ошибка параметров: $_dry_err" "parameter error: $_dry_err")"
+    fi
+  fi
   command -v iptables >/dev/null 2>&1 && row ok iptables "$(M есть present)" || row fail iptables "$(M 'не найден' 'not found')"
   command -v ip6tables >/dev/null 2>&1 && row ok ip6tables "$(M есть present)" || row warn ip6tables "$(M 'нет — отключите обработку IPv6' 'missing — turn IPv6 processing off')"
   has_ipt_feature iptables -p tcp --dport 65000 -j NFQUEUE --queue-num "$NFQUEUE_NUM" --queue-bypass \
@@ -1012,11 +1021,25 @@ case "$1" in
   start|stop|restart|reload) sh "$SERVICE" "$1" ;;
   doctor) cmd_doctor ;;
 
+  check|dry-run)
+    target="${2:-$CONFFILE}"
+    if [ ! -f "$target" ]; then
+      echo "Файл не найден: $target" >&2
+      exit 1
+    fi
+    if err=$(validate_conf_file "$target" 2>&1); then
+      echo "OK: параметры nfqws2 проверены (--dry-run)"
+      exit 0
+    else
+      echo "Ошибка проверки: $err" >&2
+      exit 1
+    fi ;;
+
   get-conf) cat "$CONFFILE" ;;
   save-conf-b64)
     t="$STATE_DIR/save.tmp"; b64d "$2" > "$t"
     if [ ! -s "$t" ]; then echo "Пустой конфиг" >&2; rm -f "$t"; exit 1; fi
-    if err=$(validate_conf "$t" 2>&1); then
+    if err=$(validate_conf_file "$t" 2>&1); then
       cp -f "$CONFFILE" "$CONFFILE.bak" 2>/dev/null; mv -f "$t" "$CONFFILE"; chmod 0644 "$CONFFILE"; echo OK; need_restart_note
     else echo "Конфиг отклонён: $err" >&2; rm -f "$t"; exit 1; fi ;;
   # Сброс — к исходнику текущей стратегии, а не к стандартному конфигу: так
@@ -1045,6 +1068,15 @@ case "$1" in
     b64d "$3" | tr -d '\r' > "$t"
     [ -s "$t" ] || { echo "Пустая стратегия" >&2; rm -f "$t"; exit 1; }
     if ! err=$(validate_conf "$t" 2>&1); then echo "Стратегия отклонена: $err" >&2; rm -f "$t"; exit 1; fi
+    test_conf="$STATE_DIR/strat_test.$$.tmp"
+    if merge_user_keys "$t" "$CONFFILE" > "$test_conf" 2>/dev/null; then
+      if ! err=$(validate_conf_file "$test_conf" 2>&1); then
+        echo "Стратегия отклонена: $err" >&2
+        rm -f "$t" "$test_conf"
+        exit 1
+      fi
+      rm -f "$test_conf"
+    fi
     case "$n" in
       imp:*) dst="$IMPORTS_DIR/${n#imp:}.conf" ;;
       *) dst="$USER_STRATEGIES_DIR/$n.conf"
@@ -1180,7 +1212,7 @@ EOF
   dns-*) dns_ctl "$@" ;;
   clear-logs) : > "$SERVICE_LOG"; : > "$NFQWS_LOG"; rm -f "$LOG_DIR/nfqws2-debug.log" "$LOG_DIR/auto.log"; [ -f "$LOG_DIR/dns.log" ] && : > "$LOG_DIR/dns.log"; echo OK ;;
   *)
-    echo "Команды: status json-status is-running start stop restart reload doctor get-conf save-conf-b64 reset-conf conf-modified" >&2
+    echo "Команды: status json-status is-running check dry-run start stop restart reload doctor get-conf save-conf-b64 reset-conf conf-modified" >&2
     echo "         list-strategies get-strategy set-strategy strategy-get-b64 strategy-save-b64 strategy-reset" >&2
     echo "         import-add-b64 list-imports get-import-merged-b64 rename-import delete-import" >&2
     echo "         get-list save-list-b64 list-update add-domain clear-auto reset-lists set set-mode list-apps" >&2

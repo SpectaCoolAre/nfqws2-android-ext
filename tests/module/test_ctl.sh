@@ -217,6 +217,26 @@ assert_rc 1 "$ctl_rc" "an empty config is rejected"
 
 assert_file "$CONFFILE.bak" "a backup of the previous config is kept"
 
+# ── check / dry-run ───────────────────────────────────────────────────────────
+section "check and dry-run"
+
+ctl check
+assert_rc 0 "$ctl_rc" "check succeeds on valid config"
+assert_contains "$ctl_out" "OK" "check reports OK"
+
+ctl dry-run
+assert_rc 0 "$ctl_rc" "dry-run alias succeeds"
+
+MOCK_NFQWS_DRY_RUN_FAIL=1
+export MOCK_NFQWS_DRY_RUN_FAIL
+ctl check
+assert_rc 1 "$ctl_rc" "check reports failure when dry-run fails"
+assert_contains "$ctl_out" "Ошибка проверки" "failure is announced"
+
+ctl save-conf-b64 "$(b64 'NFQWS_BASE_ARGS="--invalid"')"
+assert_rc 1 "$ctl_rc" "save-conf-b64 rejects config failing dry-run"
+unset MOCK_NFQWS_DRY_RUN_FAIL
+
 # ── strategies ────────────────────────────────────────────────────────────────
 section "strategies"
 

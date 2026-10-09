@@ -99,6 +99,16 @@ assert_contains "$(cat "$SERVICE_LOG")" "refusing to start" "and the tail itself
 unset MOCK_NFQWS_FAIL
 assert_no_file "$CONFDIR/state/nfqws2.pid" "no pidfile is left behind"
 
+section "start: preflight dry-run rejection"
+: > "$SERVICE_LOG"
+MOCK_NFQWS_DRY_RUN_FAIL=2
+export MOCK_NFQWS_DRY_RUN_FAIL
+svc start
+assert_rc 1 "$svc_rc" "start reports failure when dry-run rejects parameters"
+assert_contains "$(cat "$SERVICE_LOG")" "--dry-run" "the dry-run failure is announced in service.log"
+assert_no_file "$CONFDIR/state/nfqws2.pid" "no pidfile on dry-run failure"
+unset MOCK_NFQWS_DRY_RUN_FAIL
+
 # A command that succeeds still has to say so — propagating the status must not
 # turn everything red.
 svc status

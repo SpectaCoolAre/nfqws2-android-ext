@@ -8,7 +8,7 @@
 # test run (the pidfile PID has to stay alive for is_running() to accept it).
 #
 # The received argv is saved so tests can assert the assembled startup arguments.
-# Known options for unsupported_opts detection: lua-desync filter-tcp payload lua-init
+# Known options for unsupported_opts detection: lua-desync filter-tcp payload lua-init dry-run
 :
 
 [ -n "$MOCK_NFQWS_ARGS_FILE" ] && printf '%s\n' "$*" > "$MOCK_NFQWS_ARGS_FILE"
@@ -16,6 +16,12 @@
 pidfile=""
 for a in "$@"; do
   case "$a" in
+    --dry-run)
+      case "${MOCK_NFQWS_DRY_RUN_FAIL:-}" in
+        ''|0) echo "command line parameters verified"; exit 0 ;;
+        *) echo "mock nfqws2: invalid argument in dry-run"; exit "$MOCK_NFQWS_DRY_RUN_FAIL" ;;
+      esac
+      ;;
     --pidfile=*) pidfile="${a#--pidfile=}" ;;
   esac
 done

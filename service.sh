@@ -39,6 +39,14 @@ start() {
   args=$(_startup_args)
   printf '%s\n' "$args" > "$ARGS_FILE"
 
+  local dry_err
+  if ! dry_err=$(dry_run_check "$args"); then
+    log_msg "Ошибка: проверка nfqws2 --dry-run не пройдена"
+    printf '%s\n' "$dry_err" >> "$NFQWS_LOG"
+    start_failed "Ошибка: параметры запуска nfqws2 некорректны (проверка --dry-run отклонена)."
+    return 1
+  fi
+
   cd "$MODDIR/bin" || return 1
   set -f
 

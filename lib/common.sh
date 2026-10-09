@@ -360,6 +360,54 @@ _startup_args() {
   printf '%s' "$args" | tr -s ' '
 }
 
+dry_run_check() { # <args...>
+  [ -x "$NFQWS_BIN" ] || return 0
+  local out rc
+  out=$(
+    cd "$MODDIR/bin" 2>/dev/null || exit 1
+    set -f
+    if [ "$#" -eq 1 ]; then
+      set -- $1
+    fi
+    "$NFQWS_BIN" --dry-run "$@" 2>&1
+  )
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if [ -n "$out" ]; then
+      printf '%s\n' "$out"
+    else
+      echo "nfqws2: ошибка параметров (код $rc)"
+    fi
+    return "$rc"
+  fi
+  return 0
+}
+
+validate_conf_file() { # <conf_file>
+  local f="$1" err out rc
+  [ -f "$f" ] || { echo "Файл не найден: $f"; return 1; }
+  err=$(validate_conf "$f" 2>&1) || { echo "$err"; return 1; }
+  out=$(
+    export CONFDIR MODDIR
+    . "$f" >/dev/null 2>&1 || { echo "Ошибка синтаксиса в $f"; exit 1; }
+    set_defaults
+    err=$(validate_args_conf) || { echo "$err"; exit 1; }
+    local args
+    args=$(_startup_args)
+    dry_run_check "$args" || exit 1
+  )
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if [ -n "$out" ]; then
+      printf '%s\n' "$out"
+    else
+      echo "Ошибка валидации параметров nfqws2 (код $rc)"
+    fi
+    return "$rc"
+  fi
+  return 0
+}
+
 kernel_modules() {
   command -v modprobe >/dev/null 2>&1 || return 0
   modprobe -a -q nfnetlink_queue xt_multiport xt_connbytes xt_NFQUEUE xt_CONNMARK xt_connmark xt_owner nf_conntrack 2>/dev/null
