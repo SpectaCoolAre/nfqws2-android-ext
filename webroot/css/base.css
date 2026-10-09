@@ -15,6 +15,11 @@
   /* ── Type ── */
   --md-font: 'Roboto', system-ui, -apple-system, 'Segoe UI', 'Noto Sans', sans-serif;
   --md-font-code: 'Roboto Mono', ui-monospace, 'Cascadia Mono', Menlo, Consolas, monospace;
+  --ts-display-large: 57px;   --lh-display-large: 64px;
+  --ts-display-medium: 45px;  --lh-display-medium: 52px;
+  --ts-display-small: 36px;   --lh-display-small: 44px;
+  --ts-headline-large: 32px;  --lh-headline-large: 40px;
+  --ts-headline-medium: 28px; --lh-headline-medium: 36px;
   --ts-headline-small: 24px;  --lh-headline-small: 32px;
   --ts-title-large: 22px;     --lh-title-large: 28px;
   --ts-title-medium: 16px;    --lh-title-medium: 24px;
@@ -26,8 +31,11 @@
   --ts-label-medium: 12px;    --lh-label-medium: 16px;
   --ts-label-small: 11px;     --lh-label-small: 16px;
   /* Трекинг M3: без него шкала «на глаз» ближе, чем надо */
-  --tr-title-small: .1px;
-  --tr-body-large: .5px;       --tr-body-medium: .25px;  --tr-body-small: .4px;
+  --tr-display-large: -.25px; --tr-display-medium: 0px;   --tr-display-small: 0px;
+  --tr-headline-large: 0px;   --tr-headline-medium: 0px;  --tr-headline-small: 0px;
+  --tr-title-large: 0px;      --tr-title-medium: .15px;   --tr-title-small: .1px;
+  --tr-body-large: .5px;      --tr-body-medium: .25px;    --tr-body-small: .4px;
+  --tr-label-large: .1px;     --tr-label-medium: .5px;    --tr-label-small: .5px;
   /* Emphasized weights M3 Expressive */
   --w-regular: 400; --w-medium: 500; --w-emph: 600; --w-bold: 700;
 
@@ -150,6 +158,15 @@ svg.icon.s18 { width: 18px; height: 18px; }
 svg.icon.s20 { width: 20px; height: 20px; }
 svg.icon.s24 { width: 24px; height: 24px; }
 :where(button, a, input, select, textarea, label.clickable, [tabindex]):focus-visible {
+  outline: 3px solid var(--md-sys-color-secondary); outline-offset: 2px;
+}
+.switch:focus-visible {
+  outline: 3px solid var(--md-sys-color-secondary); outline-offset: 2px; border-radius: var(--shape-full);
+}
+.segmented .seg:focus-visible {
+  outline: 3px solid var(--md-sys-color-secondary); outline-offset: -2px; z-index: 2;
+}
+.chip:focus-visible {
   outline: 3px solid var(--md-sys-color-secondary); outline-offset: 2px;
 }
 [hidden] { display: none !important; }
@@ -484,10 +501,25 @@ body.nav-hidden .content { padding-bottom: calc(var(--bottom-inset) + 24px); }
 }
 .switch:checked { background: var(--md-sys-color-primary); border-color: var(--md-sys-color-primary); }
 .switch:checked::before { left: 22px; width: 24px; height: 24px; background: var(--md-sys-color-on-primary); }
+.switch::after {
+  content: ""; position: absolute; top: 50%; left: 22px; width: 24px; height: 24px;
+  border-radius: 50%; pointer-events: none;
+  background: var(--md-sys-color-primary);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9.55 18 3.85 12.3 5.275 10.875 9.55 15.15 18.725 5.975 20.15 7.4Z' fill='black'/%3E%3C/svg%3E") no-repeat center / 16px 16px;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9.55 18 3.85 12.3 5.275 10.875 9.55 15.15 18.725 5.975 20.15 7.4Z' fill='black'/%3E%3C/svg%3E") no-repeat center / 16px 16px;
+  transform: translateY(-50%) scale(0);
+  opacity: 0;
+  transition: transform var(--dur-medium) var(--spring-strong), opacity var(--dur-short) var(--standard);
+}
+.switch:checked::after {
+  transform: translateY(-50%) scale(1);
+  opacity: 1;
+}
 @media (hover: hover) { .switch:hover { border-color: var(--md-sys-color-on-surface); } }
 .switch:disabled { background: color-mix(in srgb, var(--md-sys-color-on-surface) calc(var(--state-disabled-container) * 100%), transparent);
   border-color: transparent; pointer-events: none; }
 .switch:disabled::before { background: color-mix(in srgb, var(--md-sys-color-on-surface) calc(var(--state-disabled-content) * 100%), transparent); }
+.switch:disabled::after { background: color-mix(in srgb, var(--md-sys-color-on-surface) calc(var(--state-disabled-content) * 100%), transparent); }
 
 /* ── M3 checkbox 18dp ────────────────────────────────────────────────── */
 .checkbox {
