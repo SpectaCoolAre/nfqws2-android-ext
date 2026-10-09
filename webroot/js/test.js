@@ -55,6 +55,19 @@ function selectTestTab(tab){
   const showWeb = tab === 'all' || tab === 'web';
   const showTcp = tab === 'all' || tab === 'tcp16';
   const showDns = tab === 'all' || tab === 'dns';
+  // «Домен» — своя форма вместо общего запуска и его результатов
+  const dom = tab === 'domain';
+  ['test-run', 'test-warn', 'test-recommendation', 'test-empty'].forEach(id => {
+    const el = $(id);
+    if(!el) return;
+    if(dom){ if(!el.hidden) el.dataset.domHidden = '1'; el.hidden = true; }
+    else if(el.dataset.domHidden){ delete el.dataset.domHidden; el.hidden = false; }
+  });
+  $('test-sec-domain').hidden = !dom;
+  if(dom){
+    $('test-sec-web').hidden = $('test-sec-tcp16').hidden = $('test-sec-dns').hidden = true;
+    return;
+  }
 
   if($('test-sec-web')) $('test-sec-web').hidden = !showWeb;
   if($('test-sec-tcp16')) $('test-sec-tcp16').hidden = !showTcp;
@@ -528,4 +541,104 @@ function copyTestReport(){
     document.body.removeChild(ta);
     toast(t('Отчёт скопирован в буфер обмена'));
   }
+}
+
+/* ══ Проверка одного домена ══════════════════════════════════════════════
+   domain-check отвечает строками MODE / LIST / IP / R (попытки) / done; итог
+   складываем здесь: исключён ли домен, попадает ли под обход, открывается ли. */
+const DC_ROLE = {
+  host: 'список обхода', auto: 'автообучение', exclude: 'исключения',
+  ipset: 'IP-список обхода', 'ipset-exclude': 'IP-исключения', idle: 'не подключён к текущей стратегии'
+};
+let dcRunning = false;
+async function runDomainCheck(){
+  const q = $('dc-q').value.trim();
+  if(!q || dcRunning) return;
+  dcRunning = true;
+  $('dc-go').disabled = true;
+  $('dc-q').blur();
+  const st = {mode: '', lists: [], ip: '', tries: []};
+  const paint = done => setHTML('dc-res', dcRender(q, st, done), false);
+  paint(false);
+  const r = await ctlx(['domain-check', q], 60000, line => {
+    const p = line.split('\t');
+    if(p[0] === 'MODE') st.mode = p[1];
+    else if(p[0] === 'LIST') st.lists.push({file: p[1], role: p[2], entry: p[3]});
+    else if(p[0] === 'IP') st.ip = p[1];
+    else if(p[0] === 'R'){ const [ok, v] = (p[2] || '').split(' '); st.tries.push({ok: ok === 'ok', v}); }
+    else return;
+    paint(false);
+  });
+  dcRunning = false;
+  $('dc-go').disabled = false;
+  if(r.code){ setHTML('dc-res', banner('danger', 'error', errText(r, 'Не удалось проверить домен')), false); return; }
+  if(!st.mode) r.out.split('\n').forEach(line => {   // exec без построчной выдачи
+    const p = line.split('\t');
+    if(p[0] === 'MODE') st.mode = p[1];
+    else if(p[0] === 'LIST') st.lists.push({file: p[1], role: p[2], entry: p[3]});
+    else if(p[0] === 'IP') st.ip = p[1];
+    else if(p[0] === 'R'){ const [ok, v] = (p[2] || '').split(' '); st.tries.push({ok: ok === 'ok', v}); }
+  });
+  paint(true);
+}
+function dcVerdict(st){
+  const has = role => st.lists.some(l => l.role === role);
+  if(has('exclude') || has('ipset-exclude')) return ['warn', 'warn', t('В исключениях: обход к этому домену не применяется')];
+  if(has('host') || has('auto') || has('ipset')) return ['ok', 'check', t('Под обходом')];
+  if(st.mode === 'all') return ['ok', 'check', t('Под обходом: режим «все сайты, кроме исключений»')];
+  return ['warn', 'info', t('Не под обходом: домена нет в списках, которые использует текущая стратегия')];
+}
+function dcRender(q, st, done){
+  const out = [];
+  if(st.mode){
+    const [kind, ic, text] = dcVerdict(st);
+    out.push(banner(kind === 'ok' ? '' : 'warn', ic, text));
+    if(!S.running) out.push(banner('', 'info', t('Служба остановлена — сейчас обход не работает ни для каких доменов.')));
+  }
+  const rows = [];
+  if(st.mode) rows.push(dcRow('list', t('Списки'), st.lists.length
+    ? st.lists.map(l => l.file + ' — ' + l.entry + ' (' + t(DC_ROLE[l.role] || l.role) + ')').join('\n')
+    : t('Ни в одном списке')));
+  if(st.ip) rows.push(dcRow('globe', t('IP-адрес'), st.ip));
+  const n = st.tries.length, ok = st.tries.filter(x => x.ok);
+  if(n || !done){
+    let sub;
+    if(!n) sub = t('Проверяю…');
+    else if(ok.length) sub = t('Открылся {0} из {1}, ~{2} мс', ok.length, n, Math.round(ok.reduce((a, x) => a + (+x.v || 0), 0) / ok.length));
+    else sub = t('Не открылся: {0}', [...new Set(st.tries.map(x => t(PROBE_REASON[x.v] || PROBE_REASON.other)))].join(', '));
+    rows.push(dcRow('test', t('Доступность через обход'), sub, n && !done ? '' : (n ? (ok.length === n ? 'ok' : ok.length ? 'warn' : 'bad') : '')));
+  } else if(done) rows.push(dcRow('test', t('Доступность через обход'), t('Нет curl или wget — открыть сайт с устройства нечем')));
+  if(rows.length) out.push('<div class="list">' + rows.join('') + '</div>');
+  if(done && st.mode){
+    const acts = [];
+    const host = st.lists.find(l => l.role === 'host' || l.role === 'auto' || l.role === 'exclude' || l.role === 'idle');
+    if(!st.lists.some(l => l.role === 'host'))
+      acts.push('<button class="btn tonal with-icon state" onclick="dcAddUser(' + jsArg(q) + ')">' + icon('add', 's18') + '<span>' + esc(t('Добавить в user.list')) + '</span></button>');
+    if(host && /^[a-z0-9_]+\.list$/.test(host.file))
+      acts.push('<button class="btn text state" onclick="dcOpenList(' + jsArg(host.file.replace(/\.list$/, '')) + ', ' + jsArg(host.entry) + ')">' + esc(t('Открыть {0}', host.file)) + '</button>');
+    if(acts.length) out.push('<div class="row">' + acts.join('') + '</div>');
+  }
+  return out.join('');
+}
+function dcRow(ic, title, sub, status){
+  const st = status ? '<span class="status ' + status + '">' + icon(status === 'ok' ? 'check' : status === 'warn' ? 'warn' : 'error', 's16') + '</span>' : '';
+  return '<div class="list-item two-line">' +
+    '<span class="li-icon plain">' + icon(ic, 's24') + '</span>' +
+    '<span class="li-text"><span class="li-primary">' + esc(title) + '</span>' +
+      '<span class="li-secondary selectable-pre">' + esc(sub) + '</span></span>' + st + '</div>';
+}
+async function dcAddUser(q){
+  const r = await withBusy(['add-domain', q]);
+  if(r.code){ toast(errText(r, 'Не удалось добавить')); return; }
+  toast((r.out || '').trim() || t('Добавлено'));
+  runDomainCheck();
+}
+/* Открыть список в редакторе сразу на найденной записи */
+async function dcOpenList(key, entry){
+  openSlideEditor('list', key);
+  for(let i = 0; i < 100 && (!editorCtx || $('panel-editor-text').readOnly); i++) await new Promise(r => setTimeout(r, 100));
+  if(!editorCtx) return;
+  toggleFind(true, true);
+  $('find-q').value = entry;
+  findRun();
 }

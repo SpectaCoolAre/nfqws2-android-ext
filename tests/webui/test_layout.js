@@ -617,6 +617,49 @@ const VIEWPORTS = [
     await ctx.close();
   }
 
+  // ── reachability: one domain ─────────────────────────────────────────────
+  {
+    sect('reachability: one domain');
+    const ctx = await browser.newContext({ viewport: { width: 360, height: 800 }, isMobile: true, hasTouch: true });
+    await ctx.addInitScript(STUB);
+    await ctx.addInitScript(`(function(){
+      var base = window.ksu.exec;
+      window.__dc = 'MODE\\tlist\\nIP\\t1.2.3.4\\nR\\t1\\tfail tls_rst\\nR\\t2\\tfail tls_rst\\nR\\t3\\tfail drop\\ndone';
+      window.ksu.exec = function(cmd, opts, cb){
+        if (cmd.indexOf('domain-check') < 0) return base.apply(this, arguments);
+        var id = typeof cb === 'string' ? cb : opts;
+        setTimeout(function(){ if (window[id]) window[id](0, window.__dc, ''); }, 0);
+        return 'job';
+      };
+    })();`);
+    const page = await ctx.newPage();
+    const pageErrors = [];
+    page.on('pageerror', e => pageErrors.push(e.message));
+    await page.goto(INDEX, { waitUntil: 'load' });
+    await page.waitForTimeout(500);
+    await page.evaluate(() => navigate('test')); await page.waitForTimeout(800);
+    await page.click('#test-tabs .seg[data-tab="domain"]');
+    eq(true, await page.isVisible('#test-sec-domain'), 'the Domain tab shows the domain form');
+    eq(false, await page.isVisible('#tb'), 'and hides the batch run button');
+    await page.fill('#dc-q', 'blocked.example');
+    await page.click('#dc-go'); await page.waitForTimeout(400);
+    let res = await page.textContent('#dc-res');
+    truthy(res.includes('Не под обходом'), 'a domain outside the lists of a list-mode strategy is reported as not bypassed');
+    truthy(res.includes('Ни в одном списке') && res.includes('1.2.3.4'), 'with the lists and the IP');
+    truthy(res.includes('Не открылся') && res.includes('TLS RST'), 'and why it did not open');
+    eq(true, await page.isVisible('#dc-res button:has-text("Добавить в user.list")'), 'it offers to add the domain to user.list');
+    await page.evaluate(() => { window.__dc = 'MODE\tauto\nLIST\texclude.list\texclude\tblocked.example\nR\t1\tok 120\ndone'; });
+    await page.click('#dc-go'); await page.waitForTimeout(400);
+    res = await page.textContent('#dc-res');
+    truthy(res.includes('В исключениях'), 'an excluded domain is reported as excluded');
+    eq(true, await page.isVisible('#dc-res button:has-text("Открыть exclude.list")'), 'with a shortcut to the list it is in');
+    await page.click('#test-tabs .seg[data-tab="all"]');
+    eq(true, await page.isVisible('#tb'), 'back on All the batch run button returns');
+    eq(false, await page.isVisible('#test-sec-domain'), 'and the domain form hides');
+    eq('', pageErrors.join(' | '), 'no script errors');
+    await ctx.close();
+  }
+
   // ── repeated reachability check ─────────────────────────────────────────
   // The second run must start from an empty screen: rows of the first run used
   // to stay, the new ones were appended below them with the same ids, and the

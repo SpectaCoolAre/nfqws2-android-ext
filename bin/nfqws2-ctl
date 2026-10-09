@@ -989,6 +989,79 @@ cmd_probe_dpi() {
   echo done
 }
 
+# ---------------------------------------------------------------- проверка одного домена
+# «Почему не открывается?»: в каких списках домен (с учётом того, что запись
+# списка покрывает и поддомены), какие из них подключены к текущему запуску
+# nfqws2, попадает ли его IP в ipset-списки и открывается ли он через обход.
+# Строки (TAB): MODE <list|auto|all|custom> | LIST <файл> <роль> <запись>
+# | IP <адрес> | R <попытка> <ok мс|fail причина> | done
+# Роли: host, exclude, auto — из аргументов запуска; ipset, ipset-exclude —
+# по IP; idle — список есть, но текущий запуск его не использует.
+domain_norm() {
+  printf '%s' "$1" | tr 'A-Z' 'a-z' | sed 's#^[a-z]*://##; s#[/?:].*##; s/^\*\.//; s/^\.//; s/\.$//'
+}
+ip_in_ipsets() { # <ip> <файл>... -> файлы, где есть подсеть с этим IP (IPv4)
+  local ip="$1"; shift
+  awk -v ip="$ip" '
+    function n(a,   p) { split(a, p, "."); return ((p[1] * 256 + p[2]) * 256 + p[3]) * 256 + p[4] }
+    BEGIN { x = n(ip) }
+    FNR == 1 { found = 0 }
+    found || /^[ \t]*(#|$)/ || index($0, ":") { next }
+    {
+      sub(/[ \t\r].*$/, ""); net = $0; bits = 32
+      if ((k = index(net, "/"))) { bits = substr(net, k + 1) + 0; net = substr(net, 1, k - 1) }
+      if (net !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) next
+      size = 2 ^ (32 - bits); lo = int(n(net) / size) * size
+      if (x >= lo && x < lo + size) { found = 1; print FILENAME "\t" $0 }
+    }' "$@" 2>/dev/null
+}
+cmd_domain_check() {
+  local d cand f role used args entry tool kind bin ip="" k
+  d=$(domain_norm "$1")
+  case "$d" in ''|*[!a-z0-9.-]*|*..*) echo "Некорректный домен" >&2; return 1 ;; esac
+  # домен и все родительские: a.b.c -> a.b.c, b.c, c
+  cand="$STATE_DIR/domain.cand"; mkdir -p "$STATE_DIR"
+  k="$d"; : > "$cand"
+  while :; do printf '%s\n' "$k" >> "$cand"; case "$k" in *.*) k=${k#*.} ;; *) break ;; esac; done
+
+  printf 'MODE\t%s\n' "$(current_mode 2>/dev/null || echo custom)"
+  args=$(_startup_args 2>/dev/null)
+  used=$(printf '%s\n' "$args" | tr ' ' '\n' | awk -F= '
+    $1 ~ /^--(hostlist|hostlist-exclude|hostlist-auto|ipset|ipset-exclude)$/ { print substr($1, 3), substr($0, length($1) + 2) }')
+
+  # Списки доменов: подключённые к запуску и остальные (idle)
+  for f in "$LISTS_DIR"/*.list; do
+    [ -f "$f" ] || continue
+    case "${f##*/}" in ipset*|probe_*|apps.list|tcp16.list) continue ;; esac
+    entry=$(tr -d '\r' < "$f" | sed 's/^[*.]*//' | grep -Fxf "$cand" 2>/dev/null | awk '{ print length, $0 }' | sort -rn | head -n1 | cut -d' ' -f2-)
+    [ -n "$entry" ] || continue
+    role=$(printf '%s\n' "$used" | awk -v f="$f" '$2 == f { r = $1 } END {
+      if (r == "hostlist") print "host"; else if (r == "hostlist-exclude") print "exclude"; else if (r == "hostlist-auto") print "auto"; else print "idle" }')
+    printf 'LIST\t%s\t%s\t%s\n' "${f##*/}" "$role" "$entry"
+  done
+  rm -f "$cand"
+
+  tool=$(probe_tool); kind="${tool%% *}"; bin="${tool#* }"
+  # IP — как его видит система (резолвер Android, с DNS модуля, если он включён)
+  ip=$(ping -c 1 -W 2 "$d" 2>/dev/null | sed -n '1s/^PING [^(]*(\([0-9.]*\)).*/\1/p')
+  if [ -n "$ip" ]; then
+    printf 'IP\t%s\n' "$ip"
+    ip_in_ipsets "$ip" "$LISTS_DIR"/ipset*.list | while IFS='	' read -r f entry; do
+      role=$(printf '%s\n' "$used" | awk -v f="$f" '$2 == f { r = $1 } END {
+        if (r == "ipset") print "ipset"; else if (r == "ipset-exclude") print "ipset-exclude"; else print "idle" }')
+      printf 'LIST\t%s\t%s\t%s\n' "${f##*/}" "$role" "$entry"
+    done
+  fi
+
+  [ "$kind" = none ] && { echo done; return 0; }
+  setup_probe_app_rule
+  trap 'cleanup_probe_app_rule' EXIT INT TERM
+  for k in 1 2 3; do ( printf 'R\t%s\t%s\n' "$k" "$(probe_attempt "$kind" "$bin" "$d")" ) & done
+  wait
+  cleanup_probe_app_rule
+  echo done
+}
+
 # ---------------------------------------------------------------- обновления списков
 # Установщик кладёт новую версию списка в .pending, если пользователь правил
 # свой; здесь её можно принять.
@@ -1208,6 +1281,7 @@ EOF
     echo OK ;;
   net-info) cmd_net_info ;;
   probe-dpi) cmd_probe_dpi "${2:-all}" ;;
+  domain-check) cmd_domain_check "$2" ;;
   probe-cancel) cmd_probe_cancel ;;
   dns-*) dns_ctl "$@" ;;
   clear-logs) : > "$SERVICE_LOG"; : > "$NFQWS_LOG"; rm -f "$LOG_DIR/nfqws2-debug.log" "$LOG_DIR/auto.log"; [ -f "$LOG_DIR/dns.log" ] && : > "$LOG_DIR/dns.log"; echo OK ;;

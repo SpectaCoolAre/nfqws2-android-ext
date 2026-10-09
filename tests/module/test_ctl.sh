@@ -384,6 +384,29 @@ fi
 ctl export-logs
 assert_rc 0 "$ctl_rc" "export-logs works"
 
+# ── проверка одного домена ────────────────────────────────────────────────────
+section "domain-check"
+
+printf 'youtube.com\n' >> "$LISTS_DIR/user.list"
+printf 'www.googlevideo.com\n' >> "$LISTS_DIR/exclude.list"
+printf '203.0.113.0/24\n' >> "$LISTS_DIR/ipset.list"
+printf 'nothing-else.org\n' > "$LISTS_DIR/roblox.list"
+printf '#!/bin/sh\necho "PING $4 (203.0.113.7) 56(84) bytes of data."\n' > "$MOCKBIN/ping"
+printf '#!/bin/sh\nexit 0\n' > "$MOCKBIN/curl"
+chmod 0755 "$MOCKBIN/ping" "$MOCKBIN/curl"
+ctl domain-check 'https://M.YouTube.com/watch?v=1'
+assert_rc 0 "$ctl_rc" "domain-check runs"
+assert_contains "$ctl_out" "$(printf 'LIST\tuser.list\thost\tyoutube.com')" "a subdomain is found by its parent entry, as nfqws2 matches it"
+assert_contains "$ctl_out" "$(printf 'IP\t203.0.113.7')" "the resolved IP is reported"
+assert_contains "$ctl_out" "$(printf 'LIST\tipset.list\tipset\t203.0.113.0/24')" "and matched against the ipset subnets"
+assert_match "$ctl_out" "R	[123]	ok" "the site is opened through the bypass"
+assert_contains "$ctl_out" "done" "the output ends with done"
+ctl domain-check www.googlevideo.com
+assert_contains "$ctl_out" "$(printf 'LIST\texclude.list\texclude')" "an exclusion is reported as such"
+ctl domain-check 'bad host'
+assert_rc 1 "$ctl_rc" "a malformed domain is refused"
+rm -f "$MOCKBIN/ping" "$MOCKBIN/curl"
+
 # ── doctor / status ───────────────────────────────────────────────────────────
 section "doctor"
 

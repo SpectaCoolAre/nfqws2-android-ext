@@ -84,6 +84,8 @@ pre.appear > * { animation: none; }
   background: color-mix(in srgb, var(--md-sys-color-tertiary) 38%, transparent);
   outline: 1.5px solid var(--md-sys-color-tertiary); }
 .find-mark[hidden] { display: none; }
+/* Проверка домена: многострочные значения (списки), их можно выделить */
+.li-secondary.selectable-pre { white-space: pre-line; -webkit-user-select: text; user-select: text; }
 .code-edit.plain > textarea { color: var(--md-sys-color-on-surface); -webkit-text-fill-color: currentColor; }
 
 /* Цвета токенов — VS Code Light / Dark, как в nfqws-keenetic-web */

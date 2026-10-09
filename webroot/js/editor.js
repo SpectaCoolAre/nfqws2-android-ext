@@ -237,12 +237,12 @@ $('panel-editor-text').addEventListener('scroll', () => {
    к соседнему совпадению по кругу. Текущее совпадение обведено рамкой; поле
    ввода в фокус не берём — на больших файлах клавиатура уронила бы WebView. */
 let findRes = null;   // {q, at: [позиции], cur, starts: [начала строк]}
-function toggleFind(force){
+function toggleFind(force, noFocus){
   const bar = $('find-bar'), on = force != null ? force : bar.hidden;
   bar.hidden = !on;
   $('panel-find-btn').setAttribute('aria-pressed', String(on));
   $('panel-find-btn').classList.toggle('selected', on);
-  if(on) setTimeout(() => $('find-q').focus(), 50);
+  if(on && !noFocus) setTimeout(() => $('find-q').focus(), 50);
   else findReset();
 }
 function findReset(keepQuery){
