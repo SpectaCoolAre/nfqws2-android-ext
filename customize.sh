@@ -35,8 +35,8 @@ rm -rf "$MODPATH/tests" "$MODPATH/tools" "$MODPATH/.workbuddy-ai" \
 rm -f "$MODPATH"/*.zip
 
 for f in \
-  service.sh action.sh uninstall.sh lib/common.sh lib/dns.sh bin/nfqws2-ctl \
-  defaults/nfqws2.conf \
+  service.sh action.sh boot-completed.sh uninstall.sh lib/common.sh lib/dns.sh bin/nfqws2-ctl \
+  system/bin/nfqws2-ctl defaults/nfqws2.conf \
   "binaries/$BIN/nfqws2" "binaries/$BIN/dnsproxy"
 do
   [ -s "$MODPATH/$f" ] || abort "! Missing or empty module file: $f"
@@ -122,6 +122,7 @@ fi
 busybox chmod +x "$MODPATH/bin/nfqws2"
 busybox chmod +x "$MODPATH/bin/nfqws2-ctl"
 busybox chmod +x "$MODPATH/bin/dnsproxy"
+busybox chmod +x "$MODPATH/boot-completed.sh"
 # Обёртка для терминала: без +x Magisk смонтирует её в /system/bin неисполняемой
 busybox chmod 0755 "$MODPATH/system/bin/nfqws2-ctl"
 

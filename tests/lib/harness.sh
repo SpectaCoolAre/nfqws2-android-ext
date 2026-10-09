@@ -92,6 +92,7 @@ sandbox_init() {
     cp -R "$REPO_DIR"/defaults/dns-presets/. "$MODDIR/defaults/dns-presets/"
   fi
   cp "$REPO_DIR/service.sh"            "$MODDIR/service.sh"
+  cp "$REPO_DIR/boot-completed.sh"     "$MODDIR/boot-completed.sh" 2>/dev/null || true
   cp "$REPO_DIR/module.prop"           "$MODDIR/module.prop"
   cp "$REPO_DIR/defaults/nfqws2.conf"  "$MODDIR/defaults/nfqws2.conf"
   # -R on the directories: one process per tree instead of one per file, which
@@ -107,7 +108,7 @@ sandbox_init() {
   for f in user exclude ipset ipset_exclude auto probe_hosts; do
     cp "$REPO_DIR/lists/$f.list" "$MODDIR/lists/$f.list"
   done
-  chmod 0755 "$MODDIR/bin/nfqws2-ctl" "$MODDIR/service.sh" "$MODDIR/system/bin/nfqws2-ctl" 2>/dev/null || true
+  chmod 0755 "$MODDIR/bin/nfqws2-ctl" "$MODDIR/service.sh" "$MODDIR/boot-completed.sh" "$MODDIR/system/bin/nfqws2-ctl" 2>/dev/null || true
 
   cp "$TESTS_DIR/lib/mock/iptables"    "$MOCKBIN/iptables"
   cp "$TESTS_DIR/lib/mock/iptables"    "$MOCKBIN/ip6tables"

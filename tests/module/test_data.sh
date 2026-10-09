@@ -11,7 +11,7 @@ REPO_DIR=$(cd "$TESTS_DIR/.." && pwd)
 # ── shell syntax ──────────────────────────────────────────────────────────────
 section "shell syntax"
 
-SCRIPTS="action.sh customize.sh service.sh uninstall.sh bin/nfqws2-ctl system/bin/nfqws2-ctl lib/common.sh lib/dns.sh"
+SCRIPTS="action.sh boot-completed.sh customize.sh service.sh uninstall.sh bin/nfqws2-ctl system/bin/nfqws2-ctl lib/common.sh lib/dns.sh"
 for f in $SCRIPTS; do
   sh -n "$REPO_DIR/$f" 2>/dev/null
   assert_rc 0 $? "$f parses under sh"
@@ -361,7 +361,7 @@ assert_match "$installer_flat" \
 
 section "service entry points the WebUI relies on"
 
-for cmd in start stop restart reload status firewall_apply firewall_stop; do
+for cmd in start stop restart reload status firewall_apply firewall_stop ensure_watchdog; do
   assert_contains "$(cat "$REPO_DIR/service.sh")" "$cmd)" "service.sh handles $cmd"
 done
 

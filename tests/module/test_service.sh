@@ -253,4 +253,41 @@ assert_eq "$wd" "$(cat "$WD_PIDFILE" 2>/dev/null)" "a running watchdog is not sp
 
 kill "$wd" 2>/dev/null
 
+# ── boot-completed.sh lifecycle hook ──────────────────────────────────────────
+section "boot-completed.sh lifecycle hook"
+
+assert_file "$MODDIR/boot-completed.sh" "boot-completed.sh exists in sandbox"
+svc stop >/dev/null 2>&1
+
+# Хук ждёт, пока service.sh закончит загрузочный запуск (метка boot_done)
+: > "$CONFDIR/state/boot_done"
+
+# На паузе в домашней Wi‑Fi хук службу не поднимает
+printf 'AUTOSTART=1\n' >> "$CONFFILE"
+printf 'Home' > "$HOME_PAUSED_FILE"
+sh "$MODDIR/boot-completed.sh" >/dev/null 2>&1
+assert_no_file "$PIDFILE" "boot-completed hook leaves a home pause alone"
+assert_no_file "$HOME_OVERRIDE_FILE" "and does not mark the start as manual"
+rm -f "$HOME_PAUSED_FILE"
+
+# When AUTOSTART=1 and service is down, boot-completed hook revives it
+sh "$MODDIR/boot-completed.sh" >/dev/null 2>&1
+assert_file "$PIDFILE" "boot-completed hook starts service when AUTOSTART=1"
+
+# When already running, running boot-completed hook maintains service state
+sh "$MODDIR/boot-completed.sh" >/dev/null 2>&1
+assert_file "$PIDFILE" "boot-completed hook maintains running service"
+
+svc stop >/dev/null 2>&1
+
+# ── protect_process ───────────────────────────────────────────────────────────
+section "protect_process"
+
+protect_process $$
+assert_rc 0 $? "protect_process succeeds on valid pid"
+protect_process ""
+assert_rc 0 $? "protect_process handles empty pid gracefully"
+protect_process "99999999"
+assert_rc 0 $? "protect_process handles non-existent pid gracefully"
+
 harness_finish

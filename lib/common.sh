@@ -84,6 +84,9 @@ log_msg() {
   local line="[$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)] $*"
   echo "$line"
   echo "$line" >> "$SERVICE_LOG" 2>/dev/null
+  if command -v log >/dev/null 2>&1; then
+    log -t nfqws "$*" 2>/dev/null
+  fi
 }
 
 sync_lists_and_blobs() {
@@ -701,8 +704,19 @@ firewall_ok() {
 # -w first: dash reports a redirect open() error before 2>/dev/null applies.
 protect_process() {   # $1 - PID; default: current process
   local p="${1:-$$}"
-  [ -w "/proc/$p/oom_score_adj" ] 2>/dev/null && echo -1000 > "/proc/$p/oom_score_adj" 2>/dev/null
-  [ -w /sys/fs/cgroup/cgroup.procs ] 2>/dev/null && echo "$p" > /sys/fs/cgroup/cgroup.procs 2>/dev/null
+  [ -z "$p" ] && return 0
+  [ -d "/proc/$p" ] || return 0
+  if [ -w "/proc/$p/oom_score_adj" ] 2>/dev/null; then
+    echo -1000 > "/proc/$p/oom_score_adj" 2>/dev/null
+  elif [ -w "/proc/$p/oom_adj" ] 2>/dev/null; then
+    echo -17 > "/proc/$p/oom_adj" 2>/dev/null
+  fi
+  if [ -w /sys/fs/cgroup/cgroup.procs ] 2>/dev/null; then
+    echo "$p" > /sys/fs/cgroup/cgroup.procs 2>/dev/null
+  fi
+  if [ -w /dev/cpuset/cgroup.procs ] 2>/dev/null; then
+    echo "$p" > /dev/cpuset/cgroup.procs 2>/dev/null
+  fi
   return 0
 }
 

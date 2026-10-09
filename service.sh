@@ -145,7 +145,11 @@ ensure_helper() {
   (
     exec 0</dev/null
     exec >/dev/null 2>&1
-    exec sh "$MODDIR/service.sh" "$sub"
+    if command -v setsid >/dev/null 2>&1; then
+      exec setsid sh "$MODDIR/service.sh" "$sub"
+    else
+      exec sh "$MODDIR/service.sh" "$sub"
+    fi
   ) &
   return 0
 }
@@ -242,7 +246,7 @@ netwatch() {
 watchdog() {
   echo $$ > "$WD_PIDFILE"
   protect_process
-  local fails=0 tick=0
+  local fails=0 tick=0 dpid
   while :; do
     sleep 20
     load_conf >/dev/null 2>&1
@@ -262,12 +266,22 @@ watchdog() {
       log_msg "watchdog: nfqws2 упал, автоперезапуск (#$fails)..."
       firewall_stop
       start
-      sleep 2
+      if [ "$fails" -ge 5 ]; then
+        log_msg "watchdog: частые сбои службы (#$fails), пауза 60s..."
+        sleep 60
+      else
+        sleep 2
+      fi
       continue
     fi
 
     # survived a full cycle: reset the fail counter
     fails=0
+
+    # Защита от LMK: периодически поддерживаем иммунитет демона и вотчдога
+    dpid=$(cat "$PIDFILE" 2>/dev/null)
+    [ -n "$dpid" ] && protect_process "$dpid"
+    protect_process
 
     # fast iptables recovery after a network switch
     if ! firewall_ok; then
@@ -362,16 +376,22 @@ case "$1" in
   restart)            stop; start ;;
   reload)             reload_lists ;;
   status)             status_service ;;
+  ensure_watchdog)    ensure_watchdog ;;
   watchdog)           watchdog ;;
   netwatch)           netwatch ;;
   firewall_apply)     firewall_start ;;
   firewall_stop)      firewall_stop ;;
   dns_apply)          dns_start "настройки изменены" ;;
   dns_stop)           dns_stop ;;
+  # boot-completed.sh: поднять службу, если она должна работать и не на
+  # паузе дома. Не manual_start: тот дома запомнил бы «запущено вручную».
+  boot_recover)       [ -f "$HOME_PAUSED_FILE" ] || start ;;
   *)
+    # Метка «загрузочный запуск закончен» — её ждёт boot-completed.sh
+    rm -f "$STATE_DIR/boot_done"
     until [ "$(getprop sys.boot_completed 2>/dev/null)" = "1" ]; do sleep 3; done
     sleep 4
-    [ -f "$CONFDIR/disable" ] && { log_msg "Найден $CONFDIR/disable — автозапуск пропущен"; exit 0; }
+    [ -f "$CONFDIR/disable" ] && { log_msg "Найден $CONFDIR/disable — автозапуск пропущен"; : > "$STATE_DIR/boot_done"; exit 0; }
     rm -f "$HOME_PAUSED_FILE" "$HOME_OVERRIDE_FILE"
     rmdir "$STATE_DIR/home.lock" 2>/dev/null
     dns_boot_reset
@@ -390,6 +410,7 @@ case "$1" in
     # DNS «без службы» поднимается и когда служба не стартовала
     dns_start "загрузка"
     ensure_watchdog
+    : > "$STATE_DIR/boot_done"
     ;;
 esac
 # Exit with the command status, not always 0: nfqws2-ctl passes it through,
