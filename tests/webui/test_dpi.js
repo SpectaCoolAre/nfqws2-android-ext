@@ -189,7 +189,7 @@ sandbox.navigator.clipboard = {
 };
 sandbox.copyTestReport();
 
-truthy(copiedText.includes('### DPI Detector (nfqws2-android)'), 'report header is present');
+truthy(copiedText.includes('### DPI Detector (nfqws2-android-ext)'), 'report header is present');
 truthy(copiedText.includes('5.18.158.84') && copiedText.includes('Z-Telecom'), 'network info is present in report');
 truthy(copiedText.includes('youtube.com'), 'web test is present in report');
 truthy(copiedText.includes('DETECTED @ 16KB'), 'TCP16 test is present in report');

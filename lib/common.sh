@@ -1028,6 +1028,5 @@ clear_net_strategies() {
   rm -rf "$NET_STRATEGIES_DIR"/* 2>/dev/null
 }
 
-# DNS по профилям. Код есть в обеих сборках, но работает только в extended:
-# без bin/dnsproxy (обычная сборка) dns_enabled всегда ложно, и всё dns_* молчит.
+# DNS по профилям: без bin/dnsproxy dns_enabled всегда ложно, и всё dns_* молчит.
 . "$MODDIR/lib/dns.sh"

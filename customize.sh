@@ -1,12 +1,22 @@
 #!/system/bin/sh
 
 # grab own info (version)
-versionCode=$(grep versionCode "$MODPATH/module.prop" | sed 's/versionCode=//g' )
+version=$(sed -n 's/^version=//p' "$MODPATH/module.prop")
 
 ui_print "*******************************************"
-ui_print "- nfqws2-android"
-ui_print "- v$versionCode "
+ui_print "- nfqws2-android-ext"
+ui_print "- $version"
 ui_print "*******************************************"
+
+# Форк и оригинальный nfqws2-android делят /data/adb/nfqws2 и одни и те же
+# цепочки iptables: вдвоём они мешали бы друг другу. Оригинал отключаем (не
+# удаляем — настройки общие, вернуться можно, включив его обратно).
+ORIG=/data/adb/modules/nfqws2-android
+if [ -f "$ORIG/module.prop" ] && [ ! -f "$ORIG/disable" ]; then
+  touch "$ORIG/disable" 2>/dev/null &&
+    ui_print "- Original nfqws2-android disabled: it can't run together with this fork." &&
+    ui_print "  Settings in /data/adb/nfqws2 are shared; remove it in the manager after reboot."
+fi
 
 case "$ARCH" in
   arm64) BIN=android-arm64 ;;
@@ -23,9 +33,9 @@ case "$BIN" in
 esac
 
 for f in \
-  service.sh action.sh uninstall.sh lib/common.sh bin/nfqws2-ctl \
+  service.sh action.sh uninstall.sh lib/common.sh lib/dns.sh bin/nfqws2-ctl \
   defaults/nfqws2.conf \
-  "binaries/$BIN/nfqws2"
+  "binaries/$BIN/nfqws2" "binaries/$BIN/dnsproxy"
 do
   [ -s "$MODPATH/$f" ] || abort "! Missing or empty module file: $f"
 done
@@ -33,13 +43,10 @@ done
 cp -f "$MODPATH/binaries/$BIN/nfqws2" "$MODPATH/bin/nfqws2" ||
   abort "! Failed to install nfqws2 binary"
 [ -s "$MODPATH/bin/nfqws2" ] || abort "! Installed nfqws2 binary is empty"
-# Extended build only: AdGuard dnsproxy for DNS profiles
-if [ -f "$MODPATH/binaries/$BIN/dnsproxy" ]; then
-  cp -f "$MODPATH/binaries/$BIN/dnsproxy" "$MODPATH/bin/dnsproxy" ||
-    abort "! Failed to install dnsproxy"
-  [ -s "$MODPATH/bin/dnsproxy" ] || abort "! Installed dnsproxy binary is empty"
-  ui_print "- Extended build: DNS profiles available"
-fi
+# AdGuard dnsproxy for DNS profiles
+cp -f "$MODPATH/binaries/$BIN/dnsproxy" "$MODPATH/bin/dnsproxy" ||
+  abort "! Failed to install dnsproxy"
+[ -s "$MODPATH/bin/dnsproxy" ] || abort "! Installed dnsproxy binary is empty"
 rm -rf "$MODPATH/binaries"
 
 CONF=/data/adb/nfqws2
@@ -112,6 +119,6 @@ fi
 # set perms to nfwqws2
 busybox chmod +x "$MODPATH/bin/nfqws2"
 busybox chmod +x "$MODPATH/bin/nfqws2-ctl"
-[ -f "$MODPATH/bin/dnsproxy" ] && busybox chmod +x "$MODPATH/bin/dnsproxy"
+busybox chmod +x "$MODPATH/bin/dnsproxy"
 
 ui_print "- Installation complete! Reboot your device."

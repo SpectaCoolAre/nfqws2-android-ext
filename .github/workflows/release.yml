@@ -2,16 +2,10 @@
 # или вручную: Actions → release → Run workflow, указав версию (тег тогда
 # создаётся на текущем коммите main).
 #
-# Один тег — один релиз с двумя установочными архивами из одних и тех же файлов:
-#   nfqws2-android-vX.Y.Z.zip           обычная сборка;
-#   nfqws2-android-vX.Y.Z-extended.zip  плюс AdGuard dnsproxy (DNS по профилям):
-#     версия и контрольные суммы — в .github/dnsproxy.lock, в module.prop
-#     к имени дописывается «Extended», к версии — «-extended», а updateJson
-#     ведёт на update-extended.json.
-# Обе сборки получают обновления каждая по своему каналу: update.json и
-# update-extended.json в main обновляются здесь же. Отдельный workflow
-# update-json здесь не сработает: релиз, созданный токеном Actions, не
-# запускает другие workflow.
+# Один архив nfqws2-android-ext-vX.Y.Z.zip: модуль, nfqws2 под четыре ABI и
+# AdGuard dnsproxy для DNS по профилям (версия и контрольные суммы — в
+# .github/dnsproxy.lock). update.json в main обновляется здесь же: релиз,
+# созданный токеном Actions, не запускает другие workflow.
 name: release
 
 on:
@@ -62,47 +56,32 @@ jobs:
           done
           rm -rf downloaded-binaries
 
-      - name: Собрать обычный zip
+      - name: Добавить AdGuard dnsproxy
         run: |
           set -eu
-          out="nfqws2-android-$TAG.zip"
-          zip -q -r -9 -X "$out" \
-            module.prop customize.sh service.sh action.sh uninstall.sh README.md LICENSE \
-            bin binaries blobs defaults lib lists lua strategies webroot
-          unzip -l "$out" | tail -n 1
-          echo "ZIP=$out" >> "$GITHUB_ENV"
-
-      - name: Собрать zip extended (с AdGuard dnsproxy)
-        run: |
-          set -eu
-          ext="$RUNNER_TEMP/extended"
-          rm -rf "$ext"; mkdir -p "$ext"
-          cp -R module.prop customize.sh service.sh action.sh uninstall.sh README.md LICENSE \
-            bin binaries blobs defaults lib lists lua strategies webroot "$ext/"
           ver=$(awk '$1 == "VERSION" { print $2 }' .github/dnsproxy.lock)
-          dl="$RUNNER_TEMP/dnsproxy"; mkdir -p "$dl" "$ext/licenses"
+          dl="$RUNNER_TEMP/dnsproxy"; mkdir -p "$dl" licenses
           grep -E '^android-' .github/dnsproxy.lock | while read -r abi asset sum; do
             f="$dl/$asset.tar.gz"
             curl -fsSL -o "$f" "https://github.com/AdguardTeam/dnsproxy/releases/download/$ver/dnsproxy-$asset-$ver.tar.gz"
             echo "$sum  $f" | sha256sum -c -
             tar -xzf "$f" -C "$dl"
-            cp -f "$dl/$asset/dnsproxy" "$ext/binaries/$abi/dnsproxy"
-            chmod 755 "$ext/binaries/$abi/dnsproxy"
-            ls -lh "$ext/binaries/$abi/dnsproxy"
+            cp -f "$dl/$asset/dnsproxy" "binaries/$abi/dnsproxy"
+            chmod 755 "binaries/$abi/dnsproxy"
+            ls -lh "binaries/$abi/dnsproxy"
           done
           # Apache-2.0: лицензия едет вместе с бинарником
-          cp -f "$dl/linux-arm64/LICENSE" "$ext/licenses/dnsproxy-LICENSE"
-          # Свой module.prop: имя, версия и канал обновлений extended
-          sed -i \
-            -e 's/^name=\(.*\)$/name=\1 Extended/' \
-            -e 's/^version=\(.*\)$/version=\1-extended/' \
-            -e 's#/update\.json$#/update-extended.json#' \
-            "$ext/module.prop"
-          cat "$ext/module.prop"
-          out="nfqws2-android-$TAG-extended.zip"
-          (cd "$ext" && zip -q -r -9 -X "$GITHUB_WORKSPACE/$out" .)
+          cp -f "$dl/linux-arm64/LICENSE" licenses/dnsproxy-LICENSE
+
+      - name: Собрать zip
+        run: |
+          set -eu
+          out="nfqws2-android-ext-$TAG.zip"
+          zip -q -r -9 -X "$out" \
+            module.prop customize.sh service.sh action.sh uninstall.sh README.md LICENSE \
+            bin binaries blobs defaults lib licenses lists lua strategies webroot
           unzip -l "$out" | tail -n 1
-          echo "ZIP_EXT=$out" >> "$GITHUB_ENV"
+          echo "ZIP=$out" >> "$GITHUB_ENV"
 
       - name: Опубликовать релиз
         env:
@@ -119,17 +98,14 @@ jobs:
           " "$TAG"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
-            have=$(gh release view "$TAG" --json assets -q '.assets[].name')
-            for z in "$ZIP" "$ZIP_EXT"; do
-              if printf '%s\n' "$have" | grep -qx "$z"; then echo "$z уже приложен"
-              else gh release upload "$TAG" "$z"; fi
-            done
+            if gh release view "$TAG" --json assets -q '.assets[].name' | grep -qx "$ZIP"; then echo "$ZIP уже приложен"
+            else gh release upload "$TAG" "$ZIP"; fi
             gh release edit "$TAG" --notes-file release-notes.md
           else
-            gh release create "$TAG" "$ZIP" "$ZIP_EXT" --title "$TAG" --notes-file release-notes.md --target "$GITHUB_SHA"
+            gh release create "$TAG" "$ZIP" --title "$TAG" --notes-file release-notes.md --target "$GITHUB_SHA"
           fi
 
-      - name: Обновить update.json и update-extended.json в main
+      - name: Обновить update.json в main
         run: |
           set -eu
           git fetch origin main
@@ -139,11 +115,9 @@ jobs:
           log="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/changelog.md"
           jq -n --arg v "$TAG" --argjson c "$code" --arg z "$url/$ZIP" --arg l "$log" \
                 '{version: $v, versionCode: $c, zipUrl: $z, changelog: $l}' > update.json
-          jq -n --arg v "$TAG-extended" --argjson c "$code" --arg z "$url/$ZIP_EXT" --arg l "$log" \
-                '{version: $v, versionCode: $c, zipUrl: $z, changelog: $l}' > update-extended.json
           git config user.name "github-actions[bot]"
           git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
-          git add update.json update-extended.json
+          git add update.json
           git diff --cached --quiet && exit 0
           git commit -m "update.json: $TAG"
           git push origin HEAD:main

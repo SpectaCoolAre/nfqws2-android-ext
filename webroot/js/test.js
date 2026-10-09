@@ -476,7 +476,7 @@ async function applyRecommendedStrategy(name){
 }
 
 function copyTestReport(){
-  let rep = '### DPI Detector (nfqws2-android)\n\n';
+  let rep = '### DPI Detector (nfqws2-android-ext)\n\n';
   if(netInfoData){
     rep += `**Сеть:** IP: ${netInfoData.ip || '—'} (${netInfoData.loc || '—'}), Провайдер: ${netInfoData.isp || '—'} (${netInfoData.asn || '—'})\n`;
     rep += `**Обход:** ${netInfoData.status === 'running' ? 'Активен' : 'Остановлен'}, Стратегия: ${netInfoData.strategy || '—'}, DNS: ${netInfoData.dns || '—'}\n\n`;

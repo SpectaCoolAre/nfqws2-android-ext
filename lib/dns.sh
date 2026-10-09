@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# nfqws2-android · lib/dns.sh — DNS по профилям (работает в сборке extended).
+# nfqws2-android-ext · lib/dns.sh — DNS по профилям.
 #
 # Как в Keenetic: у профиля есть DNS-серверы (обычный, TCP, DoH, DoH3, DoT, DoQ,
 # DNSCrypt) и домены, запросы к этим доменам (и их поддоменам) уходят на его
@@ -8,10 +8,9 @@
 # в таблице nat.
 #
 # Подключается из конца lib/common.sh. Служба зовёт dns_start / dns_stop /
-# dns_check, nfqws2-ctl — команды dns-* (dns_ctl). Обе сборки — из одной
-# ветки: обычная отличается только тем, что в ней нет bin/dnsproxy, и тогда
-# функция считается выключенной, что бы ни лежало в $CONFDIR/dns (например,
-# после перехода с extended на обычную).
+# dns_check, nfqws2-ctl — команды dns-* (dns_ctl). Без bin/dnsproxy (его
+# кладёт в архив release.yml; в тестах и в оригинальном nfqws2-android его нет)
+# функция считается выключенной, что бы ни лежало в $CONFDIR/dns.
 #
 # Почему без зацикливания. Системный резолвер Android (netd) ставит на свои
 # DNS-сокеты fwmark с номером сети в младших 16 битах. dnsproxy — статический

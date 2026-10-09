@@ -36,7 +36,7 @@ function renderSettings(){
       {icon: 'test', title: 'Проверка доступности', sub: t('Открывает адреса из probe_hosts.list через обход'), on: "navigate('test')", chevron: true},
       {icon: 'medical', title: 'Диагностика', sub: t('Ядро, правила iptables и аргументы запуска'), on: "navigate('diag')", chevron: true}
     ].concat(S.dns_available == 1 ? [
-      // только в сборке extended — в обычной нет dnsproxy
+      // только если в модуле есть dnsproxy
       {icon: 'dns', title: 'DNS по профилям', sub: t('Свои DoH, DoT и DNS-серверы для выбранных доменов'), on: "navigate('dns')", chevron: true}
     ] : [])],
     ['Резервная копия', [
@@ -72,7 +72,7 @@ function renderSettings(){
     '<div class="stack"><h2 class="subhead">' + esc(t(title)) + '</h2><div class="list">' + rows.map(settingsRow).join('') + '</div></div>').join('') +
     devHtml, false);
 }
-const GITHUB_URL = 'https://github.com/Dea1hwa1cher/nfqws2-android';
+const GITHUB_URL = 'https://github.com/SpectaCoolAre/nfqws2-android-ext';
 
 let deferredInstallPrompt = null;
 if(typeof window !== 'undefined'){

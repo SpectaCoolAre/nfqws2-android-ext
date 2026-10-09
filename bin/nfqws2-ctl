@@ -3,7 +3,7 @@ umask 077
 SELF="${0%/*}"
 case "$SELF" in /*) ;; *) SELF="$(cd "$SELF" 2>/dev/null && pwd)" ;; esac
 MODDIR="${SELF%/bin}"
-[ -f "$MODDIR/module.prop" ] || MODDIR=/data/adb/modules/nfqws2-android
+[ -f "$MODDIR/module.prop" ] || MODDIR=/data/adb/modules/nfqws2-android-ext
 . "$MODDIR/lib/common.sh"
 load_conf >/dev/null 2>&1
 SERVICE="$MODDIR/service.sh"
@@ -198,7 +198,7 @@ cmd_json_status() {
     eval "case \"\${$v}\" in ''|*[!0-9]*) $v=0 ;; esac"
   done
 
-  # Сборка extended: есть dnsproxy — WebUI показывает «DNS по профилям»
+  # Есть dnsproxy — WebUI показывает «DNS по профилям»
   local dnsav=0 dnson=0 override=""
   [ -f "$DNS_BIN" ] && dnsav=1
   dns_enabled && dnson=1

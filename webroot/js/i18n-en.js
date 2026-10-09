@@ -421,7 +421,7 @@ EN = {
   "KernelSU: в списке модулей удерживайте кнопку WebUI на карточке nfqws2 и выберите «Создать ярлык».\nMMRL и KsuWebUI: «Создать ярлык» в меню модуля.\nИконка ярлыка подставится из модуля сама.": "KernelSU: in the module list, long-press the WebUI button on the nfqws2 card and choose “Create shortcut”.\nMMRL and KsuWebUI: “Create shortcut” in the module menu.\nThe shortcut icon is taken from the module automatically.",
   "Понятно": "Got it",
  "убраны параметры, неизвестные nfqws2 этого модуля: {0}": "removed options unknown to this module's nfqws2: {0}",
- // extended: DNS по профилям
+ // DNS по профилям
  "DNS по профилям": "DNS profiles",
  "Обновить состояние": "Refresh state",
  "Профиль DNS": "DNS profile",
@@ -436,7 +436,7 @@ EN = {
  "по умолчанию": "default",
  "DNS сети": "Network DNS",
  "В Android включён «Частный DNS» ({0}): запросы идут мимо модуля, и профили не применяются, пока он не выключен.": "Android Private DNS is on ({0}): queries bypass the module, and profiles do not apply until it is turned off.",
- "В этой сборке нет dnsproxy. Установите версию модуля extended.": "This build has no dnsproxy. Install the extended version of the module.",
+ "В модуле нет dnsproxy. Переустановите модуль из архива релиза.": "The module has no dnsproxy. Reinstall it from the release archive.",
  "Ошибка: {0}": "Error: {0}",
  "Запросы к IPv6-серверам DNS идут мимо: в ядре нет ip6tables nat, а у сети нет IPv4-серверов.": "Queries to IPv6 DNS servers bypass the module: the kernel has no ip6tables nat and the network has no IPv4 servers.",
  "Работает": "Working",

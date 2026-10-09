@@ -223,7 +223,7 @@ function renderStatus(){
   if(j.strategy) currentStrategy = j.strategy;
   $('hero-status').className = 'hero' + (j.running ? ' running' : (paused ? ' paused' : ''));
   $('st').textContent = j.running ? t('Служба работает') : (paused ? t('Пауза') : t('Служба остановлена'));
-  // В extended вместо лимита (он зависит от ядра и виден в «Диагностике») — состояние DNS
+  // Вместо лимита (он зависит от ядра и виден в «Диагностике») — состояние DNS
   const dns = j.dns_available == 1 ? ' · ' + (j.dns_enabled == 1 ? t('DNS включён') : t('DNS выключен')) : '';
   $('sub').textContent = paused
     ? t('Домашняя Wi‑Fi «{0}». Обход возобновится, когда телефон уйдёт из этой сети.', j.paused)

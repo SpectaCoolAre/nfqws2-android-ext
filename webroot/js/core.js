@@ -6,7 +6,7 @@
    nfqws2 WebUI · Material Design 3
    Данные берутся только из bin/nfqws2-ctl; UI деградирует мягко, если моста нет.
    ══════════════════════════════════════════════════════════════════════════ */
-const MOD = '/data/adb/modules/nfqws2-android', CTL = MOD + '/bin/nfqws2-ctl';
+const MOD = '/data/adb/modules/nfqws2-android-ext', CTL = MOD + '/bin/nfqws2-ctl';
 const $ = id => document.getElementById(id);
 let S = {}, seq = 0, pkgs = [], currentEditorTarget = '';
 const q = s => "'" + String(s).replace(/'/g, "'\\''") + "'";

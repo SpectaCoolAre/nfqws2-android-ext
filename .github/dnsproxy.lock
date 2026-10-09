@@ -1,4 +1,4 @@
-# AdGuard dnsproxy для сборки extended (release.yml): релиз https://github.com/AdguardTeam/dnsproxy
+# AdGuard dnsproxy для DNS по профилям (release.yml): релиз https://github.com/AdguardTeam/dnsproxy
 # Строка: ABI модуля, архив релиза dnsproxy, sha256 архива.
 # Обновление: поменять VERSION и суммы (sha256sum скачанных архивов), проверить
 # на устройстве DNS по профилям, затем выпускать релиз.

@@ -7,7 +7,7 @@ case "$MODDIR" in /*) ;; *) MODDIR="$(cd "$MODDIR" 2>/dev/null && pwd)" ;; esac
 if [ -w /sys/power/wake_unlock ] 2>/dev/null; then
   echo nfqws2-android > /sys/power/wake_unlock 2>/dev/null
 fi
-[ -f "$MODDIR/service.sh" ] || MODDIR=/data/adb/modules/nfqws2-android
+[ -f "$MODDIR/service.sh" ] || MODDIR=/data/adb/modules/nfqws2-android-ext
 # Без проверки на пустой pidfile получается `kill ""` — ошибка подавлена, но поведение неявное.
 wpid=$(cat /data/adb/nfqws2/state/watchdog.pid 2>/dev/null)
 if [ -n "$wpid" ]; then kill "$wpid" 2>/dev/null; fi
@@ -16,7 +16,7 @@ if [ -n "$wnpid" ]; then kill "$wnpid" 2>/dev/null; fi
 sh "$MODDIR/service.sh" stop >/dev/null 2>&1
 sh "$MODDIR/service.sh" firewall_stop >/dev/null 2>&1
 killall -9 nfqws2 2>/dev/null
-# extended: DNS «без службы» stop() не трогает — снимаем перехват отдельно,
+# DNS «без службы» stop() не трогает — снимаем перехват отдельно,
 # иначе после удаления DNS-запросы уходили бы в несуществующий dnsproxy
 sh "$MODDIR/service.sh" dns_stop >/dev/null 2>&1
 killall -9 dnsproxy 2>/dev/null

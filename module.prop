@@ -1,9 +1,9 @@
-id=nfqws2-android
-name=nfqws2 for Android
+id=nfqws2-android-ext
+name=nfqws2-android-ext
 version=v1.9.7
 versionCode=1097
-author=deathwatcher
-description=Обход DPI на базе nfqws2.
-updateJson=https://raw.githubusercontent.com/Dea1hwa1cher/nfqws2-android/main/update.json
+author=SpectaCoolAre (форк nfqws2-android от deathwatcher)
+description=Обход DPI на базе nfqws2 с DNS по профилям. Форк nfqws2-android.
+updateJson=https://raw.githubusercontent.com/SpectaCoolAre/nfqws2-android-ext/main/update.json
 webuiIcon=webroot/icon.png
 actionIcon=webroot/icon.png

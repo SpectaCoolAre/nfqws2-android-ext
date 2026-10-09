@@ -1,4 +1,4 @@
-/* nfqws2 WebUI · dns.js — DNS по профилям (только в версии extended)
+/* nfqws2 WebUI · dns.js — DNS по профилям
    Скрипты подключаются из index.html обычными <script> по порядку и делят одну
    глобальную область: функции и let/const одного файла видны в остальных.
 
@@ -172,7 +172,7 @@ function dnsWarnings(){
       esc(t('В Android включён «Частный DNS» ({0}): запросы идут мимо модуля, и профили не применяются, пока он не выключен.', s.private_host || '—')) +
       '</span><button class="btn tonal sm state" onclick="openPrivateDnsSettings()">' + esc(t('Открыть')) + '</button></div>');
   if(s.proxy === 'missing')
-    w.push(banner('danger', 'error', t('В этой сборке нет dnsproxy. Установите версию модуля extended.')));
+    w.push(banner('danger', 'error', t('В модуле нет dnsproxy. Переустановите модуль из архива релиза.')));
   else if(s.error)
     w.push(banner('danger', 'error', t('Ошибка: {0}', s.error)));
   if(s.service !== 'running' && s.standalone !== '1')

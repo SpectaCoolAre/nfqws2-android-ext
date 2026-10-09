@@ -1,17 +1,16 @@
-# nfqws2 for Android
+# nfqws2-android-ext
 
 [![KernelSU](https://img.shields.io/badge/KernelSU-Supported-brightgreen.svg)](https://github.com/tiann/KernelSU)
 [![Magisk](https://img.shields.io/badge/Magisk-Supported-blue.svg)](https://github.com/topjohnwu/Magisk)
 [![APatch](https://img.shields.io/badge/APatch-Supported-orange.svg)](https://github.com/bmax121/APatch)
-[![Release](https://img.shields.io/github/v/release/Dea1hwa1cher/nfqws2-android?label=Release)](../../releases/latest)
-[![Telegram](https://img.shields.io/badge/Telegram-чат_проекта-26A5E4?logo=telegram&logoColor=white)](https://t.me/nfqws2android)
+[![Release](https://img.shields.io/github/v/release/SpectaCoolAre/nfqws2-android-ext?label=Release)](../../releases/latest)
 [![License](https://img.shields.io/badge/License-MIT-lightgrey.svg)](LICENSE)
 
 Полнофункциональный порт **nfqws2** ([zapret2](https://github.com/bol-van/zapret) от bol-van) с поддержкой синтаксиса стратегий Keenetic для Android.
 
 Модуль предназначен для обхода ТСПУ/DPI **нативно на уровне ядра** через подсистему `netfilter` (NFQUEUE). В отличие от VPN-приложений (V2Ray, ByeDPI и др.), этот метод **не создает виртуального сетевого интерфейса (tun)**, не расходует дополнительный заряд батареи и не режет скорость соединения.
 
-💬 Вопросы, подбор стратегий и новости — в Telegram-чате проекта: **[t.me/nfqws2android](https://t.me/nfqws2android)**
+> **Это форк** [nfqws2-android](https://github.com/Dea1hwa1cher/nfqws2-android) от deathwatcher: всё, что умеет оригинал, плюс **DNS по профилям** на основе [AdGuard dnsproxy](https://github.com/AdguardTeam/dnsproxy) и собственные исправления. Вопросы по форку — в [Issues](../../issues), а не в чат оригинального проекта.
 
 ![WebUI: состояние, выбор стратегии, списки](docs/screenshots/light.jpg)
 
@@ -32,14 +31,7 @@
 
 ![WebUI: журналы, настройки, тема оформления](docs/screenshots/dark.jpg)
 
-## 🧩 Две версии: обычная и Extended
-
-* **Обычная** (`nfqws2-android-vX.Y.Z.zip`) — всё, что описано выше.
-* **Extended** (`nfqws2-android-vX.Y.Z-extended.zip`) — то же самое плюс **DNS по профилям**: как в Keenetic, свои DoH, DoT, DoQ или обычные DNS-серверы для выбранных доменов (например, отдельный DoH только для Instagram), несколько профилей, готовые пресеты. Внутри — [AdGuard dnsproxy](https://github.com/AdguardTeam/dnsproxy), поэтому архив больше примерно на 18 МБ.
-
-Обе лежат в каждом релизе в [Releases](../../releases/latest) и собираются из одного и того же кода: обычная отличается только тем, что в ней нет dnsproxy и пункта «DNS по профилям». Настройки, списки и стратегии общие, перейти можно установкой другого архива поверх. Обновления каждая получает по своему каналу.
-
-## 🌐 DNS по профилям (Extended)
+## 🌐 DNS по профилям
 
 Настройки → Инструменты → **DNS по профилям**. Профиль — это DNS-серверы и домены: запросы к этим доменам и всем их поддоменам идут на серверы профиля, остальные — на «DNS по умолчанию» (DNS текущей сети или любой профиль).
 
@@ -65,14 +57,16 @@
 3. Перезагрузите устройство.
 4. Служба запустится автоматически при загрузке системы.
 
-## 💬 Сообщество
+## 🔀 Переход с nfqws2-android
 
-Telegram-чат: **[t.me/nfqws2android](https://t.me/nfqws2android)** — помощь с настройкой, подбор стратегий под провайдера, новости о релизах.
+У форка свой id модуля (`nfqws2-android-ext`), а настройки, списки и стратегии — те же (`/data/adb/nfqws2`), поэтому переход ничего не сбрасывает. Два модуля сразу работать не могут: при установке форк отключает оригинальный `nfqws2-android`, после перезагрузки его можно удалить в менеджере. Вернуться — включить оригинал и удалить форк.
 
 ---
 
 ## 🤝 Благодарности
 
+* [Dea1hwa1cher](https://github.com/Dea1hwa1cher) — автору [nfqws2-android](https://github.com/Dea1hwa1cher/nfqws2-android), на котором построен этот форк.
+* [AdGuard dnsproxy](https://github.com/AdguardTeam/dnsproxy) — резолвер для DNS по профилям.
 * [bol-van](https://github.com/bol-van) — за оригинальный и непревзойденный проект zapret.
 * [nfqws2-keenetic](https://github.com/nfqws/nfqws2-keenetic) — за идеи адаптации конфигов и логику авто-стратегий.
 * [dpi-detector](https://github.com/Runnin4ik/dpi-detector) — за алгоритмы детекции и классификации блокировок DPI.

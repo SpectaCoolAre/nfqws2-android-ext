@@ -82,7 +82,7 @@ for key in id name version versionCode author description; do
 done
 assert_match "$(sed -n 's/^version=//p' "$PROP")" '^v[0-9]+\.[0-9]+\.[0-9]+$' "version looks like vX.Y.Z"
 assert_match "$(sed -n 's/^versionCode=//p' "$PROP")" '^[0-9]+$' "versionCode is numeric"
-assert_eq "$(sed -n 's/^id=//p' "$PROP")" "nfqws2-android" "id matches the module directory name"
+assert_eq "$(sed -n 's/^id=//p' "$PROP")" "nfqws2-android-ext" "id matches the module directory name"
 
 # ── configs ───────────────────────────────────────────────────────────────────
 section "shipped configs"
@@ -198,13 +198,14 @@ assert_eq "" "$(printf '%s' "$unread" | sed 's/^ *//')" \
   "every config key is read somewhere ($(printf '%s' "$cfg_keys" | wc -w | tr -d ' ') keys checked)"
 
 # ── the wake lock name is pinned to the module id ─────────────────────────────
-section "wake lock name matches the module id"
+section "wake lock name is the original module id"
 
 # WAKELOCK is gone, but stopping and uninstalling still release a lock taken by
 # an older version. A named wake lock in the kernel is not tied to a process: a
 # wrong name would leave the phone awake until reboot. So it is module.prop's id.
-mod_id=$(sed -n 's/^id=//p' "$REPO_DIR/module.prop")
-assert_eq "nfqws2-android" "$mod_id" "module.prop declares the expected id"
+# Older versions were the original module, so the name is its id, not the fork's.
+mod_id=nfqws2-android
+assert_eq "nfqws2-android-ext" "$(sed -n 's/^id=//p' "$REPO_DIR/module.prop")" "module.prop declares the fork's id"
 assert_eq "1" "$(grep -c "\"$mod_id\" > /sys/power/wake_unlock" "$REPO_DIR/lib/common.sh")" \
   "release_wakelock uses the module id"
 assert_eq "0" "$(grep -rc "wake_lock\b" "$REPO_DIR/lib/common.sh" "$REPO_DIR/service.sh" | awk -F: '{ s += $2 } END { print s }')" \

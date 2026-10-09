@@ -5,7 +5,7 @@
 /* ══ ЖУРНАЛЫ ═════════════════════════════════════════════════════════════ */
 const LOG_SOURCES = [['summary', 'Краткая статистика'], ['service', 'Служба'], ['nfqws', 'Процесс'],
   ['auto', 'Автообучение'], ['debug', 'Отладка'], ['dns', 'DNS']];
-/* Журнал DNS есть только в сборке extended */
+/* Журнал DNS — только если в модуле есть dnsproxy */
 const logSources = () => LOG_SOURCES.filter(s => s[0] !== 'dns' || S.dns_available == 1);
 let logSource = store.get('nfq_log_src') || 'service', logLines = '100', logErrors = false;
 if(!LOG_SOURCES.some(s => s[0] === logSource)) logSource = 'service';

@@ -37,17 +37,11 @@ jobs:
           ver=$(git show "$TAG:module.prop" | sed -n 's/^version=//p' | tr -d '\r')
           [ -n "$code" ] || { echo "::error::в module.prop на $TAG нет versionCode"; exit 1; }
           rel=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$TAG")
-          # В релизе два архива: обычный и -extended.zip — у каждого свой update*.json
-          zip=$(printf '%s' "$rel" | jq -r '[.assets[] | select((.name | endswith(".zip")) and (.name | endswith("-extended.zip") | not)) | .browser_download_url][0] // empty')
-          zipx=$(printf '%s' "$rel" | jq -r '[.assets[] | select(.name | endswith("-extended.zip")) | .browser_download_url][0] // empty')
-          [ -n "$zip" ] || zip="https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/nfqws2-android-$TAG.zip"
+          zip=$(printf '%s' "$rel" | jq -r '[.assets[] | select(.name | endswith(".zip")) | .browser_download_url][0] // empty')
+          [ -n "$zip" ] || zip="https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/nfqws2-android-ext-$TAG.zip"
           log="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/changelog.md"
           jq -n --arg v "$ver" --argjson c "$code" --arg z "$zip" --arg l "$log" \
                 '{version: $v, versionCode: $c, zipUrl: $z, changelog: $l}' > update.json
-          if [ -n "$zipx" ]; then
-            jq -n --arg v "$ver-extended" --argjson c "$code" --arg z "$zipx" --arg l "$log" \
-                  '{version: $v, versionCode: $c, zipUrl: $z, changelog: $l}' > update-extended.json
-          fi
           body=$(printf '%s' "$rel" | jq -r '.body // ""')
           if [ -n "$body" ]; then printf '%s\n' "$body" | tr -d '\r' > changelog.md; fi
           cat update.json
@@ -57,7 +51,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
           git add update.json changelog.md
-          [ -f update-extended.json ] && git add update-extended.json
           git diff --cached --quiet && { echo "update.json уже актуален"; exit 0; }
           git commit -m "update.json: ${{ github.event.release.tag_name || inputs.tag }}"
           git push origin HEAD:main

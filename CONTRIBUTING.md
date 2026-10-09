@@ -36,24 +36,22 @@ WebUI разложен по файлам, чтобы правки разных �
 4. Держите PR небольшими и короткоживущими: чем дольше ветка живёт отдельно
    от main, тем больше конфликтов при слиянии.
 
-## Две сборки: обычная и extended
+## DNS по профилям
 
-Ветка одна — `main`, и весь код, включая DNS по профилям (`lib/dns.sh`,
-`webroot/js/dns.js`, пресеты в `defaults/dns-presets/`), лежит в ней. Отдельно
-под extended ничего коммитить не нужно: обе сборки делает `release.yml` из
-одного коммита.
+Код DNS — `lib/dns.sh`, `webroot/js/dns.js` и пресеты в `defaults/dns-presets/`.
+Резолвит AdGuard dnsproxy: в репозитории его нет, `release.yml` скачивает его
+при сборке (версия и контрольные суммы архивов — в `.github/dnsproxy.lock`) и
+кладёт в архив рядом с nfqws2. Без `bin/dnsproxy` (например, при запуске
+тестов) DNS считается выключенным, и вызовы `dns_*` в `service.sh` и
+`nfqws2-ctl` ничего не делают. Тесты DNS (`test_dns.sh`, `test_dns.js`) идут
+вместе со всеми.
 
-* **Обычная** — файлы модуля как есть. В ней нет `bin/dnsproxy`, поэтому DNS
-  считается выключенным (`dns_enabled` в `lib/dns.sh`), а WebUI не показывает
-  пункт «DNS по профилям» (`dns_available` в json-status).
-* **Extended** — те же файлы плюс AdGuard dnsproxy (версия и контрольные суммы
-  архивов — в `.github/dnsproxy.lock`), а в `module.prop` к имени дописывается
-  «Extended», к версии — `-extended`, `updateJson` ведёт на
-  `update-extended.json`.
+## Синхронизация с оригиналом
 
-Правя общие файлы, помните, что DNS встроен в жизненный цикл службы короткими
-вызовами `dns_*` (`service.sh`, `nfqws2-ctl`): их не трогайте, без dnsproxy они
-ничего не делают. Тесты DNS (`test_dns.sh`, `test_dns.js`) идут вместе со всеми.
+Форк подтягивает код из [nfqws2-android](https://github.com/Dea1hwa1cher/nfqws2-android).
+Изменения оригинала переносятся вручную, по одному, с прогоном тестов: id
+модуля, пути `/data/adb/modules/nfqws2-android-ext`, ссылки и сборка с
+dnsproxy здесь свои.
 
 ## Выпуск релиза
 
@@ -64,9 +62,8 @@ WebUI разложен по файлам, чтобы правки разных �
 3. Поставьте тег с той же версией (`git tag v1.6.3 && git push origin v1.6.3`)
    или запустите вручную Actions → **release** → *Run workflow* с этой версией.
 
-Workflow `release` сам соберёт `nfqws2-android-<версия>.zip` и
-`nfqws2-android-<версия>-extended.zip`, опубликует их одним релизом с текстом из
-`changelog.md` и обновит `update.json` и `update-extended.json` — менеджеры
-предложат обновление каждой сборке.
+Workflow `release` сам соберёт `nfqws2-android-ext-<версия>.zip` (модуль,
+nfqws2 и dnsproxy), опубликует его с текстом из `changelog.md` и обновит
+`update.json` — менеджеры предложат обновление.
 Релиз можно выпустить и вручную через сайт: тогда `update-json` обновит
 `update.json` при публикации.
