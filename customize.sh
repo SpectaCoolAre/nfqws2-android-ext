@@ -122,5 +122,7 @@ fi
 busybox chmod +x "$MODPATH/bin/nfqws2"
 busybox chmod +x "$MODPATH/bin/nfqws2-ctl"
 busybox chmod +x "$MODPATH/bin/dnsproxy"
+# Обёртка для терминала: без +x Magisk смонтирует её в /system/bin неисполняемой
+busybox chmod 0755 "$MODPATH/system/bin/nfqws2-ctl"
 
 ui_print "- Installation complete! Reboot your device."

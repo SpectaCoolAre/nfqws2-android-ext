@@ -1,0 +1,27 @@
+#!/system/bin/sh
+# nfqws2-ctl system wrapper for global PATH access (/system/bin)
+
+if [ -z "${NFQWS_SKIP_ROOT_CHECK:-}" ] && [ -z "${MODDIR:-}" ] && [ -z "${SANDBOX:-}" ]; then
+  case "$(id -u 2>/dev/null)" in
+    0|'') ;;
+    *)
+      echo "nfqws2-ctl: требуется root (запустите через 'su' или 'su -c nfqws2-ctl ...')" >&2
+      exit 1
+      ;;
+  esac
+fi
+
+MODDIR="${MODDIR:-/data/adb/modules/nfqws2-android-ext}"
+if [ -f "$MODDIR/bin/nfqws2-ctl" ]; then
+  exec sh "$MODDIR/bin/nfqws2-ctl" "$@"
+fi
+
+SELF="${0%/*}"
+case "$SELF" in /*) ;; *) SELF="$(cd "$SELF" 2>/dev/null && pwd)" ;; esac
+ALTDIR="${SELF%/system/bin}"
+if [ -f "$ALTDIR/bin/nfqws2-ctl" ]; then
+  exec sh "$ALTDIR/bin/nfqws2-ctl" "$@"
+fi
+
+echo "nfqws2-android-ext: nfqws2-ctl не найден в $MODDIR/bin" >&2
+exit 1

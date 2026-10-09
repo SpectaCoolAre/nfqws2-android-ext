@@ -20,6 +20,10 @@ killall -9 nfqws2 2>/dev/null
 # иначе после удаления DNS-запросы уходили бы в несуществующий dnsproxy
 sh "$MODDIR/service.sh" dns_stop >/dev/null 2>&1
 killall -9 dnsproxy 2>/dev/null
+# Ссылки на nfqws2-ctl для su-оболочек — только свои (оригинальный модуль ставит такие же)
+for l in /data/adb/ap/bin/nfqws2-ctl /data/adb/ksu/bin/nfqws2-ctl; do
+  [ "$(readlink "$l" 2>/dev/null)" = "$MODDIR/bin/nfqws2-ctl" ] && rm -f "$l"
+done
 # Настройки и списки в /data/adb/nfqws2 сохраняются. Полное удаление: rm -rf /data/adb/nfqws2
 rm -rf /data/adb/nfqws2/state
 exit 0

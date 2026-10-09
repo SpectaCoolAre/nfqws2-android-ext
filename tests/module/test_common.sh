@@ -367,4 +367,10 @@ MOCK_DEFAULT=cell
 assert_match "$(current_network_key)" "^cell" "per-network strategies follow the traffic too"
 rm -f "$MOCKBIN/cmd" "$MOCKBIN/dumpsys"
 
+# ── setup_cli_symlinks ────────────────────────────────────────────────────────
+section "setup_cli_symlinks"
+
+setup_cli_symlinks
+assert_rc 0 $? "setup_cli_symlinks succeeds silently when APatch/KSU paths are absent"
+
 harness_finish

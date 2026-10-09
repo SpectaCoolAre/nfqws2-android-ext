@@ -438,4 +438,29 @@ assert_contains "$ctl_out" "OK" "and reports OK"
 assert_eq "one" "$(head -n 1 "$LISTS_DIR/user.list")" "the list really is written"
 assert_eq "two" "$(tail -n 1 "$LISTS_DIR/user.list")" "with every line of it"
 
+# ── system wrapper (/system/bin/nfqws2-ctl) ──────────────────────────────────
+section "system wrapper (/system/bin/nfqws2-ctl)"
+
+wrapper="$MODDIR/system/bin/nfqws2-ctl"
+assert_file "$wrapper" "system wrapper exists in sandbox"
+
+# Delegation to ctl
+out=$(MODDIR="$MODDIR" sh "$wrapper" status)
+assert_rc 0 $? "system wrapper executes status successfully"
+assert_contains "$out" "Служба NFQWS2" "system wrapper returns status output"
+
+out=$(MODDIR="$MODDIR" sh "$wrapper" check)
+assert_rc 0 $? "system wrapper executes check command"
+assert_contains "$out" "OK" "check returns OK through wrapper"
+
+# Non-root notification
+non_root_bin="$SANDBOX/non_root_bin"
+mkdir -p "$non_root_bin"
+printf '#!/bin/sh\necho 1000\n' > "$non_root_bin/id"
+chmod 0755 "$non_root_bin/id"
+out=$(MODDIR="" SANDBOX="" PATH="$non_root_bin:$PATH" sh "$wrapper" status 2>&1)
+assert_rc 1 $? "system wrapper rejects non-root user"
+assert_contains "$out" "требуется root" "wrapper prints root reminder"
+rm -rf "$non_root_bin"
+
 harness_finish

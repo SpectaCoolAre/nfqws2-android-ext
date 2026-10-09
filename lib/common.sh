@@ -737,6 +737,17 @@ system_config() {
     log_msg "conntrack: nf_conntrack_max было $cur_max, поднимаем до 16384 (как на эталонном роутере)"
     sysctl -w net.netfilter.nf_conntrack_max=16384 >/dev/null 2>&1
   fi
+  setup_cli_symlinks
+  return 0
+}
+
+setup_cli_symlinks() {
+  local p
+  for p in /data/adb/ap/bin /data/adb/ksu/bin; do
+    if [ -d "$p" ]; then
+      ln -sf "$MODDIR/bin/nfqws2-ctl" "$p/nfqws2-ctl" 2>/dev/null
+    fi
+  done
   return 0
 }
 
