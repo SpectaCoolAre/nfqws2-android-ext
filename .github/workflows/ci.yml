@@ -1,0 +1,69 @@
+# Тестовая сборка на каждый пуш (из оригинала: 39eadcc, 6004f82, efbaab1).
+# Состав — как у release.yml: модуль, nfqws2 под четыре ABI и AdGuard dnsproxy.
+# Артефакт выкладывается распакованным: Actions сам упакует его в zip, и
+# скачанный архив ставится в менеджере как есть.
+name: ci-build
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-binaries:
+    uses: ./.github/workflows/build-binaries.yml
+
+  package:
+    needs: [build-binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Скачать собранные бинарники nfqws2
+        uses: actions/download-artifact@v4
+        with:
+          pattern: nfqws2-*
+          path: downloaded-binaries
+
+      - name: Разместить nfqws2 и dnsproxy
+        run: |
+          set -eu
+          for abi in android-arm android-arm64 android-x86 android-x86_64; do
+            mkdir -p "binaries/$abi"
+            cp "downloaded-binaries/nfqws2-$abi/nfqws2" "binaries/$abi/nfqws2"
+            chmod 755 "binaries/$abi/nfqws2"
+          done
+          ver=$(awk '$1 == "VERSION" { print $2 }' .github/dnsproxy.lock)
+          dl="$RUNNER_TEMP/dnsproxy"; mkdir -p "$dl" licenses
+          grep -E '^android-' .github/dnsproxy.lock | while read -r abi asset sum; do
+            f="$dl/$asset.tar.gz"
+            curl -fsSL -o "$f" "https://github.com/AdguardTeam/dnsproxy/releases/download/$ver/dnsproxy-$asset-$ver.tar.gz"
+            echo "$sum  $f" | sha256sum -c -
+            tar -xzf "$f" -C "$dl"
+            cp -f "$dl/$asset/dnsproxy" "binaries/$abi/dnsproxy"
+            chmod 755 "binaries/$abi/dnsproxy"
+          done
+          cp -f "$dl/linux-arm64/LICENSE" licenses/dnsproxy-LICENSE
+
+      - name: Собрать модуль
+        run: |
+          set -eu
+          # Версия с коротким хэшем: тестовую сборку видно в менеджере
+          sha=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)
+          sed -i "s/^version=\(.*\)$/version=\1-ci.$sha/" module.prop
+          rm -rf ci-module; mkdir ci-module
+          cp -R module.prop customize.sh service.sh action.sh boot-completed.sh uninstall.sh README.md LICENSE \
+            bin binaries blobs defaults lib licenses lists lua strategies system webroot ci-module/
+          grep -Fx 'id=nfqws2-android-ext' ci-module/module.prop
+          grep '^version=' ci-module/module.prop
+
+      - name: Выложить тестовую сборку
+        uses: actions/upload-artifact@v4
+        with:
+          name: nfqws2-android-ext-${{ github.sha }}
+          path: ci-module
+          if-no-files-found: error
+          retention-days: 14

@@ -24,7 +24,7 @@ jobs:
       - name: Синтаксис shell-скриптов (dash, как sh на Android)
         run: |
           rc=0
-          for f in service.sh action.sh customize.sh uninstall.sh lib/common.sh bin/nfqws2-ctl; do
+          for f in service.sh action.sh boot-completed.sh customize.sh uninstall.sh lib/common.sh lib/dns.sh bin/nfqws2-ctl system/bin/nfqws2-ctl; do
             sh -n "$f" || { echo "::error file=$f::синтаксическая ошибка"; rc=1; }
           done
           exit $rc
