@@ -617,6 +617,37 @@ const VIEWPORTS = [
     await ctx.close();
   }
 
+  // ── what's new after an update ──────────────────────────────────────────
+  {
+    sect("what's new after an update");
+    const CL = '### Изменения в v1.3.6:\n\n- **Поиск** в списках\n- Файл `user.list`\n\n### Изменения в v1.3.5:\n\n- старое\n';
+    const run = async seen => {
+      const ctx = await browser.newContext({ viewport: { width: 400, height: 800 } });
+      if (seen != null) await ctx.addInitScript(`try{localStorage.setItem('nfq_seen_ver', ${JSON.stringify(seen)})}catch(e){}`);
+      await ctx.addInitScript(STUB);
+      await ctx.addInitScript(`(function(){ var base = window.ksu.exec; window.ksu.exec = function(cmd, o, cb){
+        if (cmd.indexOf("'changelog'") < 0) return base.apply(this, arguments);
+        var id = typeof cb === 'string' ? cb : o; setTimeout(function(){ window[id](0, ${JSON.stringify(CL)}, ''); }, 0); return 'j'; }; })();`);
+      const page = await ctx.newPage();
+      await page.goto(INDEX, { waitUntil: 'load' });
+      await page.waitForTimeout(900);
+      const r = await page.evaluate(() => ({ open: document.querySelector('#whatsnew-sheet').classList.contains('open'),
+        title: document.querySelector('#whatsnew-title').textContent, body: document.querySelector('#whatsnew-body').innerHTML,
+        seen: localStorage.getItem('nfq_seen_ver') }));
+      await ctx.close();
+      return r;
+    };
+    let r = await run('v1.3.5');
+    eq(true, r.open, 'after an update the sheet opens by itself');
+    truthy(r.title.includes('v1.3.6') && r.body.includes('<b>Поиск</b>') && r.body.includes('<code>user.list</code>') && !r.body.includes('старое'),
+      'with the changes of this version only, formatted');
+    eq('v1.3.6', r.seen, 'and remembers the version');
+    r = await run('v1.3.6');
+    eq(false, r.open, 'the same version does not show it again');
+    r = await run(null);
+    eq(false, r.open, 'a fresh install does not show it');
+  }
+
   // ── reachability: one domain ─────────────────────────────────────────────
   {
     sect('reachability: one domain');

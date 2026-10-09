@@ -270,3 +270,9 @@ html[data-containers="true"] .settings-grid .list > .list-item:active {
   border-end-end-radius: 20px;
 }
 
+
+/* «Что нового»: список изменений версии */
+.whatsnew ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; }
+.whatsnew li, .whatsnew p { margin: 0; font-size: var(--ts-body-medium); line-height: var(--lh-body-medium); color: var(--md-sys-color-on-surface); }
+.whatsnew code { font-family: var(--md-font-code); font-size: .92em; padding: 0 3px; border-radius: 4px;
+  background: var(--md-sys-color-surface-container-highest); }

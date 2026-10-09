@@ -577,5 +577,10 @@ EN = {
  "Нет curl или wget — открыть сайт с устройства нечем": "No curl or wget — nothing to open the site with",
  "Добавить в user.list": "Add to user.list",
  "Открыть {0}": "Open {0}",
- "Добавлено": "Added"
+ "Добавлено": "Added",
+ "Что нового": "What's new",
+ "Изменения в этой версии": "Changes in this version",
+ "Понятно": "Got it",
+ "Что нового в {0}": "What's new in {0}",
+ "Список изменений недоступен": "The changelog is not available"
 };

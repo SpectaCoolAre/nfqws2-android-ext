@@ -18,4 +18,5 @@ renderParams({});
   await detectSpawn();
   await stat();
   initStrategySelector();
+  checkWhatsNew();
 })();

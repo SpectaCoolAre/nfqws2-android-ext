@@ -29,7 +29,7 @@ SANDBOX=$(mktemp -d "${NFQWS_TEST_TMP:-/tmp}/nfqws2-pack.XXXXXX") || exit 1
 SANDBOX=$(cd "$SANDBOX" && pwd)
 WF="$REPO_DIR/.github/workflows/release.yml"
 
-MODULE_TOP="LICENSE README.md action.sh bin binaries blobs boot-completed.sh customize.sh defaults lib licenses lists lua module.prop service.sh strategies system uninstall.sh webroot"
+MODULE_TOP="LICENSE README.md action.sh bin binaries blobs boot-completed.sh changelog.md customize.sh defaults lib licenses lists lua module.prop service.sh strategies system uninstall.sh webroot"
 
 # ── allow-list in the workflow ────────────────────────────────────────────────
 section "release.yml packs an allow-list of module paths"
@@ -84,7 +84,7 @@ names = zipfile.ZipFile(sys.argv[1]).namelist()
 print('TOPS ' + ' '.join(sorted({n.split('/')[0] for n in names})))
 print('FILES ' + str(sum(1 for n in names if not n.endswith('/'))))
 print('DEVS ' + ' '.join(sorted(n for n in names if n.split('/')[0] in
-      ('tests', 'tools', '.github', '.git', 'changelog.md', 'CONTRIBUTING.md', 'update.json'))))
+      ('tests', 'tools', '.github', '.git', 'CONTRIBUTING.md', 'update.json'))))
 need = ('module.prop', 'customize.sh', 'service.sh', 'action.sh', 'boot-completed.sh', 'uninstall.sh',
         'bin/nfqws2-ctl', 'system/bin/nfqws2-ctl', 'lib/common.sh', 'lib/dns.sh', 'defaults/nfqws2.conf',
         'webroot/index.html', 'webroot/config.json',

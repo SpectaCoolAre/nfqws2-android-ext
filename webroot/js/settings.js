@@ -50,7 +50,8 @@ function renderSettings(){
       {icon: 'translate', title: 'Язык', sub: LANG === 'en' ? 'English' : 'Русский', on: 'pickLanguage(this)', menu: true}
     ]],
     ['О модуле', [
-      {icon: 'info', title: 'nfqws2 for Android', sub: t('Версия {0}', S.version || '—'), on: 'openUrl(' + jsArg(GITHUB_URL) + ')', chevron: true}
+      {icon: 'info', title: 'nfqws2-android-ext', sub: t('Версия {0}', S.version || '—'), on: 'openUrl(' + jsArg(GITHUB_URL) + ')', chevron: true},
+      {icon: 'list', title: 'Что нового', sub: t('Изменения в этой версии'), on: 'openWhatsNew()'}
     ]]
   ];
   let devHtml = '';
@@ -312,3 +313,40 @@ async function toggleNetStrategy(checked){
   else { S.net_strategy = on ? 1 : 0; renderSettings(); stat(); }
 }
 
+/* ══ Что нового ══════════════════════════════════════════════════════════
+   После обновления модуля, при первом открытии WebUI, — лист с изменениями
+   этой версии из changelog.md модуля. Версия, для которой лист уже
+   показывали, хранится в nfq_seen_ver; при первой установке не показываем. */
+async function checkWhatsNew(){
+  const v = S.version;
+  if(!v) return;
+  const seen = store.get('nfq_seen_ver');
+  if(seen === v) return;
+  store.set('nfq_seen_ver', v);
+  if(seen && !openSheetId && !editorCtx) await openWhatsNew(true);
+}
+/* Раздел changelog.md для версии: заголовок «### … vX.Y.Z:» — без суффиксов
+   вроде -ci.abc1234; нет такого — первый раздел. */
+function whatsNewSection(md, version){
+  const base = (version || '').replace(/^(v?\d+(?:\.\d+)*).*$/, '$1');
+  const parts = md.split(/^### /m).slice(1).map(p => {
+    const nl = p.indexOf('\n');
+    return {head: p.slice(0, nl < 0 ? p.length : nl).trim(), body: nl < 0 ? '' : p.slice(nl + 1)};
+  });
+  const esc2 = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return parts.find(p => base && new RegExp('\\b' + esc2(base) + '\\b').test(p.head)) || parts[0] || null;
+}
+function mdInline(s){
+  return esc(s).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+async function openWhatsNew(auto){
+  const r = await ctlx(['changelog']);
+  const sec = !r.code && whatsNewSection(r.out || '', S.version);
+  if(!sec){ if(!auto) toast(errText(r, 'Список изменений недоступен')); return; }
+  const items = sec.body.split('\n').map(l => l.trim()).filter(l => /^[-*] /.test(l)).map(l => l.slice(2));
+  $('whatsnew-title').textContent = t('Что нового в {0}', (S.version || '').replace(/-.*$/, ''));
+  setHTML('whatsnew-body', items.length
+    ? '<ul>' + items.map(i => '<li>' + mdInline(i) + '</li>').join('') + '</ul>'
+    : '<p>' + mdInline(sec.body.trim()) + '</p>', false);
+  openSheet('whatsnew-sheet');
+}
