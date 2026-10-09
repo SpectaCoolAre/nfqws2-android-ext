@@ -8,6 +8,20 @@ load_conf
 
 STARTED_FILE="$STATE_DIR/started_at"
 
+wait_for_process() { # <pid> <expected state: up|down> <timeout in 50 ms ticks>
+  local pid="$1" want="$2" ticks="${3:-24}" i=0 alive
+  while [ "$i" -lt "$ticks" ]; do
+    kill -0 "$pid" 2>/dev/null
+    alive=$?
+    if [ "$want" = "up" ] && [ "$alive" -eq 0 ]; then return 0; fi
+    if [ "$want" = "down" ] && [ "$alive" -ne 0 ]; then return 0; fi
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ "$want" = "up" ] && kill -0 "$pid" 2>/dev/null
+  [ "$want" = "down" ] && ! kill -0 "$pid" 2>/dev/null
+}
+
 # both start() failures end with the log tail; keep it in one place
 start_failed() {
   log_msg "$1"
@@ -61,10 +75,17 @@ start() {
     return 1
   fi
 
-  sleep 1.2
-  local pid=""
-  [ -f "$PIDFILE" ] && pid=$(cat "$PIDFILE" 2>/dev/null)
-  [ -n "$pid" ] || pid=$(pidof nfqws2 2>/dev/null | awk '{print $1}')
+  # Демон пишет PID-файл после fork — ждём его опросом (до ~1.2 с), а не
+  # фиксированной паузой; затем ещё 0.2 с: упавший сразу после старта демон
+  # (не тот интерфейс, занятая очередь) — тоже неудачный запуск.
+  local pid="" i=0
+  while [ "$i" -lt 24 ]; do
+    [ -f "$PIDFILE" ] && pid=$(cat "$PIDFILE" 2>/dev/null)
+    [ -n "$pid" ] || pid=$(pidof nfqws2 2>/dev/null | awk '{print $1}')
+    [ -n "$pid" ] && break
+    sleep 0.05; i=$((i + 1))
+  done
+  [ -n "$pid" ] && wait_for_process "$pid" up 4 && sleep 0.2
 
   if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
     start_failed "Ошибка: nfqws2 не запустился."
@@ -107,8 +128,7 @@ stop() {
     pid=$(cat "$PIDFILE" 2>/dev/null)
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
       kill -TERM "$pid" 2>/dev/null
-      sleep 0.8
-      kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null
+      wait_for_process "$pid" down 16 || kill -KILL "$pid" 2>/dev/null
     fi
     rm -f "$PIDFILE"
   fi
