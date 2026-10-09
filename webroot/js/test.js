@@ -621,7 +621,8 @@ function dcRender(q, st, done){
   return out.join('');
 }
 function dcRow(ic, title, sub, status){
-  const st = status ? '<span class="status ' + status + '">' + icon(status === 'ok' ? 'check' : status === 'warn' ? 'warn' : 'error', 's16') + '</span>' : '';
+  const sic = {ok: 'check', warn: 'warn', bad: 'error'}[status];
+  const st = sic ? '<span class="status ' + status + '">' + icon(sic, 's16') + '</span>' : '';
   return '<div class="list-item two-line">' +
     '<span class="li-icon plain">' + icon(ic, 's24') + '</span>' +
     '<span class="li-text"><span class="li-primary">' + esc(title) + '</span>' +
