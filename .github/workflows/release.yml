@@ -1,4 +1,4 @@
-# Выпуск релиза по тегу: git tag v1.9.7 && git push origin v1.9.7
+# Выпуск релиза по тегу: git tag v2.0.1 && git push origin v2.0.1
 # или вручную: Actions → release → Run workflow, указав версию (тег тогда
 # создаётся на текущем коммите main).
 #
@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Версия релиза, как в module.prop (например v1.9.7)
+        description: Версия релиза, как в module.prop (например v2.0.1)
         required: true
 
 env:
