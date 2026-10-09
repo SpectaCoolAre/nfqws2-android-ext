@@ -362,11 +362,12 @@ async function openEditorWith(o){
   $('panel-save-btn').disabled = !!o.load;
   $('panel-save-btn').textContent = o.saveLabel || t('Сохранить');
   $('panel-pending').hidden = !(o.target === 'list' && pendingLists().includes(o.key));
-  $('panel-dedupe-btn').hidden = o.lang !== 'list';
+  $('panel-dedupe-btn').hidden = o.lang !== 'list' || !!o.readonly;
   toggleFind(false);
   ta.placeholder = o.target === 'list' ? '' : t('# Конфигурация…');
   ta.value = o.load ? t('Загрузка…') : o.text;
-  ta.readOnly = !!o.load;
+  ta.readOnly = !!o.load || !!o.readonly;
+  $('panel-save-btn').hidden = !!o.readonly;
   ta.scrollTop = 0; ta.scrollLeft = 0;
   highlightEditor();
   editorReturnFocus = document.activeElement;
@@ -385,7 +386,7 @@ async function openEditorWith(o){
       return;
     }
     ta.value = o.b64 ? unb64(r.out.replace(/\s+/g, '')) : r.out;
-    ta.readOnly = false;
+    ta.readOnly = !!o.readonly;
     $('panel-save-btn').disabled = false;
     highlightEditor();
   }

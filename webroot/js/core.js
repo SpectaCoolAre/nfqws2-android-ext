@@ -480,7 +480,9 @@ const PAGE_META = {
              actions: [{icon: 'refresh', label: 'Проверить снова', fn: () => diagInit()}]},
   dns:      {title: 'DNS по профилям', child: true, parent: 'settings', init: () => dnsInit(),
              actions: [{icon: 'refresh', label: 'Обновить состояние', fn: () => dnsInit()}]},
-  dnsprof:  {title: 'Профиль DNS', child: true, parent: 'dns', init: () => dnsProfInit()}
+  dnsprof:  {title: 'Профиль DNS', child: true, parent: 'dns', init: () => dnsProfInit()},
+  hosts:    {title: 'Редактор hosts', child: true, parent: 'settings', init: () => hostsInit(),
+             actions: [{icon: 'refresh', label: 'Обновить состояние', fn: () => hostsInit()}]}
 };
 let currentPage = 'control', lastTop = 'control', transitionCleanup = null;
 const pageDepth = p => { const m = PAGE_META[p]; return !m.child ? 0 : (m.parent ? pageDepth(m.parent) + 1 : 1); };

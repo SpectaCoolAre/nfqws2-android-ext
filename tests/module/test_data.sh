@@ -11,7 +11,7 @@ REPO_DIR=$(cd "$TESTS_DIR/.." && pwd)
 # ── shell syntax ──────────────────────────────────────────────────────────────
 section "shell syntax"
 
-SCRIPTS="action.sh boot-completed.sh customize.sh service.sh uninstall.sh bin/nfqws2-ctl system/bin/nfqws2-ctl lib/common.sh lib/dns.sh"
+SCRIPTS="action.sh boot-completed.sh customize.sh service.sh uninstall.sh bin/nfqws2-ctl system/bin/nfqws2-ctl lib/common.sh lib/dns.sh lib/hosts.sh"
 for f in $SCRIPTS; do
   sh -n "$REPO_DIR/$f" 2>/dev/null
   assert_rc 0 $? "$f parses under sh"

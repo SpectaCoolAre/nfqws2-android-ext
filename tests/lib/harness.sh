@@ -91,6 +91,14 @@ sandbox_init() {
     mkdir -p "$MODDIR/defaults/dns-presets"
     cp -R "$REPO_DIR"/defaults/dns-presets/. "$MODDIR/defaults/dns-presets/"
   fi
+  # Редактор hosts: файл назначения — в песочнице, mount/umount — заглушки
+  cp "$REPO_DIR/lib/hosts.sh" "$MODDIR/lib/hosts.sh"
+  mkdir -p "$MODDIR/defaults/hosts-presets"
+  cp -R "$REPO_DIR"/defaults/hosts-presets/. "$MODDIR/defaults/hosts-presets/"
+  HOSTS_TARGET="$SANDBOX/system_etc_hosts"
+  printf '127.0.0.1 localhost\n::1 ip6-localhost\n# system\n1.2.3.4 sys.example\n' > "$HOSTS_TARGET"
+  cp "$TESTS_DIR/lib/mock/mount" "$MOCKBIN/mount"
+  cp "$TESTS_DIR/lib/mock/mount" "$MOCKBIN/umount"
   cp "$REPO_DIR/service.sh"            "$MODDIR/service.sh"
   cp "$REPO_DIR/boot-completed.sh"     "$MODDIR/boot-completed.sh" 2>/dev/null || true
   cp "$REPO_DIR/module.prop"           "$MODDIR/module.prop"
@@ -127,7 +135,7 @@ sandbox_init() {
   MOCK_IPT_FEATURES="connbytes multiport owner NFQUEUE"
   unset MOCK_NFQWS_FAIL MOCK_ABI
   export MOCK_IPT_STORE MOCK_NFQWS_ARGS_FILE MOCK_PM_FILE MOCK_IPT_FEATURES MOCK_DIR
-  export MODDIR CONFDIR
+  export MODDIR CONFDIR HOSTS_TARGET
   PATH="$MOCKBIN:$PATH"; export PATH
 }
 

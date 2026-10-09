@@ -39,6 +39,7 @@ function renderSettings(){
       // только если в модуле есть dnsproxy
       {icon: 'dns', title: 'DNS по профилям', sub: t('Свои DoH, DoT и DNS-серверы для выбранных доменов'), on: "navigate('dns')", chevron: true}
     ] : []).concat([
+      {icon: 'edit', title: 'Редактор hosts', sub: t('Свои записи, блокировка рекламы и пресеты — без перезагрузки'), on: "navigate('hosts')", chevron: true},
       {icon: 'file', title: 'Открыть в файловом менеджере', sub: t('Папка модуля или настроек — в MT Manager и других root-проводниках'), on: 'openInFileManager(this)', menu: true}
     ])],
     ['Резервная копия', [
@@ -139,6 +140,7 @@ function rerenderAll(){
   if(currentPage === 'diag') diagInit();
   if(currentPage === 'dns') renderDns();
   if(currentPage === 'dnsprof') renderDnsProfile();
+  if(currentPage === 'hosts') renderHosts();
   if(currentPage === 'logs') loadLog();
   if(currentPage === 'config'){ loadImports(); checkConfModified(); }
 }

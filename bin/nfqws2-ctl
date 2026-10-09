@@ -613,6 +613,7 @@ cmd_backup_create() { # [ui.json в base64]
   cp -f "$USER_STRATEGIES_DIR"/*.conf "$tmp/strategies/" 2>/dev/null
   cp -f "$IMPORTS_DIR"/*.conf "$tmp/imports/" 2>/dev/null
   dns_backup_add "$tmp/dns"
+  hosts_backup_add "$tmp/hosts"
   [ -n "$1" ] && b64d "$1" > "$tmp/ui.json"
   if ! (cd "$tmp" && tar_cmd -cf "$BACKUP_DIR/$name" .) 2>/dev/null; then
     rm -rf "$tmp" "$BACKUP_DIR/$name"
@@ -648,6 +649,7 @@ _apply_restored_backup() { # <tmp dir>
   for f in "$tmp"/strategies/*.conf; do [ -f "$f" ] && validate_conf "$f" >/dev/null 2>&1 && cp -f "$f" "$USER_STRATEGIES_DIR/"; done
   for f in "$tmp"/imports/*.conf; do [ -f "$f" ] && validate_conf "$f" >/dev/null 2>&1 && cp -f "$f" "$IMPORTS_DIR/"; done
   dns_backup_restore "$tmp/dns"
+  hosts_backup_restore "$tmp/hosts"
   [ -s "$tmp/ui.json" ] && b64e < "$tmp/ui.json" | tr -d '\n'
   echo
   rm -rf "$tmp"
@@ -1331,6 +1333,7 @@ EOF
   changelog) cat "$MODDIR/changelog.md" 2>/dev/null || { echo "Нет changelog.md в модуле" >&2; exit 1; } ;;
   probe-cancel) cmd_probe_cancel ;;
   dns-*) dns_ctl "$@" ;;
+  hosts-*) hosts_ctl "$@" ;;
   clear-logs) : > "$SERVICE_LOG"; : > "$NFQWS_LOG"; rm -f "$LOG_DIR/nfqws2-debug.log" "$LOG_DIR/auto.log"; [ -f "$LOG_DIR/dns.log" ] && : > "$LOG_DIR/dns.log"; echo OK ;;
   *)
     echo "Команды: status json-status is-running check dry-run start stop restart reload doctor get-conf save-conf-b64 reset-conf conf-modified" >&2

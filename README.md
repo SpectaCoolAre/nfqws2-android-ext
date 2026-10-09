@@ -58,6 +58,10 @@
 3. Перезагрузите устройство.
 4. Служба запустится автоматически при загрузке системы.
 
+## 📝 Редактор hosts
+
+Настройки → Инструменты → **Редактор hosts**. Свой файл hosts подменяет системный сразу, без перезагрузки и без отдельного модуля (как в [bindhosts](https://github.com/bindhosts/bindhosts)): свои записи, исключения и источники — пресеты для блокировки рекламы (AdAway, AdGuard DNS filter) и для доступа к сервисам (GeoHide, dns.malw.link) или свои ссылки. Для одного домена берётся первая запись: свои записи важнее источников. Выключение возвращает системный hosts. Если hosts уже меняет другой модуль (bindhosts, AdAway systemless), его нужно отключить.
+
 ## 🔀 Переход с nfqws2-android
 
 У форка свой id модуля (`nfqws2-android-ext`), а настройки, списки и стратегии — те же (`/data/adb/nfqws2`), поэтому переход ничего не сбрасывает. Два модуля сразу работать не могут: при установке форк отключает оригинальный `nfqws2-android`, после перезагрузки его можно удалить в менеджере. Вернуться — включить оригинал и удалить форк.
@@ -67,10 +71,11 @@
 ## 🤝 Благодарности
 
 * [Dea1hwa1cher](https://github.com/Dea1hwa1cher) — автору [nfqws2-android](https://github.com/Dea1hwa1cher/nfqws2-android), на котором построен этот форк.
-* [AdGuard dnsproxy](https://github.com/AdguardTeam/dnsproxy) — резолвер для DNS по профилям.
+* [AdGuard dnsproxy](https://github.com/AdguardTeam/dnsproxy) — резолвер, на котором работает DNS по профилям.
 * [bol-van](https://github.com/bol-van) — за оригинальный и непревзойденный проект zapret.
 * [nfqws2-keenetic](https://github.com/nfqws/nfqws2-keenetic) — за идеи адаптации конфигов и логику авто-стратегий.
 * [dpi-detector](https://github.com/Runnin4ik/dpi-detector) — за алгоритмы детекции и классификации блокировок DPI.
 * [nfqws-menu](https://github.com/rndnaame/nfqws-menu) — за стратегии, блобы и списки адресов хостингов.
-* [bindhosts](https://github.com/bindhosts/bindhosts) — за множество референсов и идей.
+* [bindhosts](https://github.com/bindhosts/bindhosts) — за логику редактора hosts без перезагрузки, источники для блокировки рекламы, а также множество референсов и идей.
+* [AdAway](https://adaway.org), [r-a-y/mobile-hosts](https://github.com/r-a-y/mobile-hosts), [GeoHide](https://geohide.ru) и [dns.malw.link](https://github.com/ImMALWARE/dns.malw.link) — за списки hosts, доступные пресетами.
 * Разработчикам [KernelSU](https://github.com/tiann/kernelSU), [Magisk](https://github.com/topjohnwu/magisk) и [APatch](https://github.com/bmax121/APatch).

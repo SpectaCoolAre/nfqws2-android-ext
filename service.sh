@@ -403,6 +403,7 @@ case "$1" in
   firewall_stop)      firewall_stop ;;
   dns_apply)          dns_start "настройки изменены" ;;
   dns_stop)           dns_stop ;;
+  hosts_off)          hosts_umount ;;
   # boot-completed.sh: поднять службу, если она должна работать и не на
   # паузе дома. Не manual_start: тот дома запомнил бы «запущено вручную».
   boot_recover)       [ -f "$HOME_PAUSED_FILE" ] || start ;;
@@ -429,6 +430,7 @@ case "$1" in
     fi
     # DNS «без службы» поднимается и когда служба не стартовала
     dns_start "загрузка"
+    hosts_boot
     ensure_watchdog
     : > "$STATE_DIR/boot_done"
     ;;

@@ -648,6 +648,72 @@ const VIEWPORTS = [
     eq(false, r.open, 'a fresh install does not show it');
   }
 
+  // ── hosts editor ─────────────────────────────────────────────────────────
+  {
+    sect('hosts editor');
+    const ctx = await browser.newContext({ viewport: { width: 360, height: 800 }, isMobile: true, hasTouch: true });
+    await ctx.addInitScript(STUB);
+    await ctx.addInitScript(`(function(){
+      var base = window.ksu.exec;
+      window.__h = { enabled: 0, adaway: 0, calls: [] };
+      function state(){ var h = window.__h; return ['#status', 'enabled=' + h.enabled, 'mounted=' + h.enabled, 'conflicts=',
+        'blocked=1200', 'redirects=3', 'built=2026.10.10 12:00:00', 'custom=3',
+        '#preset adaway', 'NAME=AdAway', 'DESC=Реклама', 'URL=https://adaway.org/hosts.txt', 'KIND=block', 'ENABLED=' + h.adaway, h.adaway ? 'COUNT=1200' : '',
+        '#preset malw', 'NAME=dns.malw.link', 'DESC=Доступ', 'URL=https://x/hosts', 'KIND=redirect', 'ENABLED=0',
+        '#url', 'URL=https://example.org/my.txt'].join('\\n'); }
+      window.ksu.exec = function(cmd, opts, cb){
+        if (cmd.indexOf("'hosts-") < 0) return base.apply(this, arguments);
+        var id = typeof cb === 'string' ? cb : opts, h = window.__h, out = 'OK';
+        h.calls.push(cmd);
+        if (cmd.indexOf("'hosts-state'") >= 0) out = state();
+        else if (cmd.indexOf("'hosts-set-enabled' '1'") >= 0) h.enabled = 1;
+        else if (cmd.indexOf("'hosts-set-enabled' '0'") >= 0) h.enabled = 0;
+        else if (cmd.indexOf("'hosts-preset' 'adaway' '1'") >= 0) h.adaway = 1;
+        else if (cmd.indexOf("'hosts-get' 'custom'") >= 0) out = '1.2.3.4 a.example';
+        else if (cmd.indexOf("'hosts-get' 'current'") >= 0) out = '127.0.0.1 localhost';
+        else if (cmd.indexOf("'hosts-update'") >= 0) out = 'S\\tpreset:adaway\\tok 1200';
+        setTimeout(function(){ if (window[id]) window[id](0, out, ''); }, 0);
+        return 'job';
+      };
+    })();`);
+    const page = await ctx.newPage();
+    const pageErrors = [];
+    page.on('pageerror', e => pageErrors.push(e.message));
+    await page.goto(INDEX, { waitUntil: 'load' });
+    await page.waitForTimeout(500);
+    await page.evaluate(() => navigate('settings')); await page.waitForTimeout(700);
+    truthy((await page.textContent('#settings-body')).includes('Редактор hosts'), 'settings list the hosts editor');
+    await page.evaluate(() => navigate('hosts')); await page.waitForTimeout(900);
+    eq(false, await page.isChecked('#hosts-toggle'), 'it starts off');
+    truthy((await page.textContent('#hosts-sources')).includes('AdAway') && (await page.textContent('#hosts-sources')).includes('example.org/my.txt'),
+      'presets and own links are listed');
+    await page.click('#hosts-main'); await page.waitForTimeout(500);
+    eq(1, await page.evaluate(() => window.__h.enabled), 'the switch turns the own hosts on');
+    truthy((await page.textContent('#hosts-general')).includes('Блокировок'), 'and the state shows what is applied');
+    await page.click('#hosts-sources label:has-text("AdAway")'); await page.waitForTimeout(500);
+    eq(1, await page.evaluate(() => window.__h.adaway), 'a preset is switched on');
+    truthy((await page.textContent('#hosts-sources')).includes('1'), 'and shows its size');
+    await page.click('#hosts-general .list-item:has-text("Мои записи")'); await page.waitForTimeout(700);
+    eq('1.2.3.4 a.example', await page.inputValue('#panel-editor-text'), 'own entries open in the editor');
+    await page.fill('#panel-editor-text', '1.2.3.4 a.example\n5.6.7.8 b.example');
+    await page.click('#panel-save-btn'); await page.waitForTimeout(500);
+    truthy(await page.evaluate(() => window.__h.calls.some(c => c.indexOf("'hosts-save-b64' 'custom'") >= 0)), 'saving sends them to the module');
+    eq(false, await page.evaluate(() => document.querySelector('#editor-panel').classList.contains('open')), 'and closes the editor');
+    await page.click('#hosts-general .list-item:has-text("Текущий hosts")'); await page.waitForTimeout(700);
+    eq(true, await page.evaluate(() => document.querySelector('#panel-editor-text').readOnly), 'the current hosts opens read-only');
+    eq(true, await page.isHidden('#panel-save-btn'), 'without a save button');
+    await page.evaluate(() => closeSlideEditor(true)); await page.waitForTimeout(500);
+    await page.click('#hosts-update'); await page.waitForTimeout(500);
+    truthy((await page.textContent('#prompt-msg')).includes('1 из 1'), 'updating sources reports how many worked');
+    await page.evaluate(() => setLanguage('en')); await page.waitForTimeout(300);
+    const en = await page.textContent('[data-page="hosts"]');
+    const ru = (en.replace(/Реклама|Доступ/g, '').match(/[А-Яа-яЁё]{4,}[^\n]{0,30}/g) || []);
+    eq('', ru.join(' | '), 'the screen is translated');
+    await page.evaluate(() => setLanguage('ru'));
+    eq('', pageErrors.join(' | '), 'no script errors');
+    await ctx.close();
+  }
+
   // ── reachability: one domain ─────────────────────────────────────────────
   {
     sect('reachability: one domain');

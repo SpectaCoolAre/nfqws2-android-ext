@@ -1,0 +1,17 @@
+#!/bin/sh
+# Mock mount/umount для hosts: bind-монтирование файла изображаем символьной
+# ссылкой (stat -L видит тот же inode, как у настоящего bind), прежний файл
+# сохраняем рядом и возвращаем при umount. Только для пути из HOSTS_TARGET —
+# настоящая система тестами не трогается.
+[ -n "${MOCK_MOUNT_FAIL:-}" ] && exit 1
+case "${0##*/}" in
+  umount)
+    t="$1"; [ "$t" = -l ] && t="$2"
+    [ "$t" = "$HOSTS_TARGET" ] && [ -L "$t" ] || exit 1
+    rm -f "$t"; [ -f "$t.orig" ] && mv -f "$t.orig" "$t"
+    exit 0 ;;
+esac
+[ "$1" = --bind ] || exit 1
+[ "$3" = "$HOSTS_TARGET" ] || exit 1
+[ -L "$3" ] || { [ -f "$3" ] && mv -f "$3" "$3.orig"; }
+ln -sf "$2" "$3"

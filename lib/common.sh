@@ -427,7 +427,8 @@ _ipt_cap_cache_get() { # <command> <probe key>
   [ -n "$MOCK_IPT_FEATURES" ] && return 1
   local kernel value
   kernel=$(uname -r 2>/dev/null) || return 1
-  [ -n "$kernel" ] && [ -f "$IPT_CAP_CACHE" ] || return 1
+  [ -n "$kernel" ] || return 1
+  [ -f "$IPT_CAP_CACHE" ] || return 1
   value=$(while IFS='|' read -r k c p v; do
     [ "$k" = "$kernel" ] && [ "$c" = "$1" ] && [ "$p" = "$2" ] && {
       printf '%s' "$v"
@@ -1260,3 +1261,5 @@ clear_net_strategies() {
 
 # DNS по профилям: без bin/dnsproxy dns_enabled всегда ложно, и всё dns_* молчит.
 . "$MODDIR/lib/dns.sh"
+# Редактор hosts без перезагрузки (логика bindhosts)
+. "$MODDIR/lib/hosts.sh"

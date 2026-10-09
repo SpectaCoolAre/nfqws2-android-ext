@@ -156,11 +156,12 @@ sect('commands the WebUI sends');
 const ctlCommands = new Set(
   [...ctlSrc.matchAll(/^\s{2}([a-z][a-z0-9-]*)\)/gm)].map(m => m[1])
 );
-// extended: команды dns-* ctl передаёт в dns_ctl из lib/dns.sh
-const dnsLib = path.join(REPO, 'lib', 'dns.sh');
-if (/^\s{2}dns-\*\) dns_ctl/m.test(ctlSrc) && fs.existsSync(dnsLib)) {
-  const dnsSrc = fs.readFileSync(dnsLib, 'utf8');
-  for (const m of dnsSrc.matchAll(/^\s{4}(dns-[a-z0-9-]+)\)/gm)) ctlCommands.add(m[1]);
+// Команды dns-* и hosts-* ctl передаёт в dns_ctl / hosts_ctl из lib/
+for (const [prefix, fn, file] of [['dns', 'dns_ctl', 'dns.sh'], ['hosts', 'hosts_ctl', 'hosts.sh']]) {
+  const lib = path.join(REPO, 'lib', file);
+  if (!new RegExp('^\\s{2}' + prefix + '-\\*\\) ' + fn, 'm').test(ctlSrc) || !fs.existsSync(lib)) continue;
+  const src = fs.readFileSync(lib, 'utf8');
+  for (const m of src.matchAll(new RegExp('^\\s{4}(' + prefix + '-[a-z0-9-]+)\\)', 'gm'))) ctlCommands.add(m[1]);
 }
 truthy(ctlCommands.size > 20, `the ctl dispatches ${ctlCommands.size} commands`);
 

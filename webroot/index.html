@@ -317,6 +317,32 @@
     </div>
   </section>
 
+  <!-- ═══ РЕДАКТОР HOSTS (дочерний экран настроек; логика bindhosts) ═════ -->
+  <section class="page" data-page="hosts" aria-label="Редактор hosts" data-ta="aria-label">
+    <label class="main-switch state" id="hosts-main">
+      <span class="grow" data-t>Свой hosts</span>
+      <input type="checkbox" class="switch" role="switch" id="hosts-toggle" aria-label="Свой hosts" data-ta="aria-label"
+             onchange="setHostsEnabled(this.checked, this)">
+    </label>
+    <div class="helper" data-t>Файл hosts подменяется сразу, без перезагрузки и отдельного модуля: свои записи плюс выбранные источники. Выключение возвращает системный hosts.</div>
+    <div id="hosts-warn" class="stack"></div>
+    <div class="list" id="hosts-general"></div>
+    <div class="subhead-row">
+      <h2 class="subhead" data-t>Источники</h2>
+      <span class="helper" id="hosts-built"></span>
+    </div>
+    <div class="helper" data-t>Списки для блокировки рекламы и наборы адресов для доступа к сервисам. Для одного домена берётся первая запись: свои записи важнее источников.</div>
+    <div class="list" id="hosts-sources"></div>
+    <div class="row">
+      <button class="btn tonal with-icon state" id="hosts-update" onclick="updateHostsSources()">
+        <svg aria-hidden="true" class="icon s18"><use href="#i-refresh"/></svg><span data-t>Обновить источники</span>
+      </button>
+      <button class="btn text with-icon state" onclick="editHostsFile('sources')">
+        <svg aria-hidden="true" class="icon s18"><use href="#i-add"/></svg><span data-t>Свои ссылки</span>
+      </button>
+    </div>
+  </section>
+
   <!-- ═══ ПРОФИЛЬ DNS (дочерний экран «DNS по профилям») ═════════════════ -->
   <section class="page" data-page="dnsprof" aria-label="Профиль DNS" data-ta="aria-label">
     <div class="list" id="dnsp-head"></div>
@@ -732,6 +758,7 @@
 <script src="js/diag.js"></script>
 <script src="js/settings.js"></script>
 <script src="js/dns.js"></script>
+<script src="js/hosts.js"></script>
 <script src="js/theme.js"></script>
 <script src="js/i18n-en.js"></script>
 <script src="js/init.js"></script>
