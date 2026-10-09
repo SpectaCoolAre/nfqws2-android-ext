@@ -556,6 +556,67 @@ const VIEWPORTS = [
     await ctx.close();
   }
 
+  // ── list editor: find and remove duplicates ─────────────────────────────
+  {
+    sect('list editor: find and duplicates');
+    const ctx = await browser.newContext({ viewport: { width: 400, height: 800 }, isMobile: true, hasTouch: true });
+    await ctx.addInitScript(STUB);
+    const page = await ctx.newPage();
+    const pageErrors = [];
+    page.on('pageerror', e => pageErrors.push(e.message));
+    await page.goto(INDEX, { waitUntil: 'load' });
+    await page.waitForTimeout(600);
+    await page.evaluate(() => openSlideEditor('list', 'user'));
+    await page.waitForTimeout(700);
+    const text = ['# мои домены', 'youtube.com', 'example.com', 'googlevideo.com', 'Example.com', 'ytimg.com',
+      '', 'youtube.com # дубль', 'example.com.', 'other.org'].concat(Array.from({ length: 200 }, (_, i) => 'host' + i + '.net'), ['last-youtube.com']).join('\n');
+    await page.evaluate(t => { const ta = document.querySelector('#panel-editor-text'); ta.value = t; ta.dispatchEvent(new Event('input')); }, text);
+    eq(false, await page.isHidden('#panel-dedupe-btn'), 'a list editor offers duplicate removal');
+    await page.click('#panel-find-btn');
+    eq(true, await page.isVisible('#find-bar'), 'the search button opens the find bar');
+    await page.fill('#find-q', 'youtube');
+    await page.waitForTimeout(200);
+    eq('', await page.textContent('#find-count'), 'typing alone does not search');
+    await page.click('#find-go');
+    eq('1 / 3', await page.textContent('#find-count'), 'Find counts the matches, case-insensitively');
+    const mark1 = await page.evaluate(() => ({ hidden: document.querySelector('#find-mark').hidden, sel: (t => t.value.slice(t.selectionStart, t.selectionEnd))(document.querySelector('#panel-editor-text')) }));
+    eq(JSON.stringify({ hidden: false, sel: 'youtube' }), JSON.stringify(mark1), 'the first match is selected and marked');
+    await page.click('#find-next'); await page.click('#find-next');
+    eq('3 / 3', await page.textContent('#find-count'), 'the down arrow goes to the next match');
+    const far = await page.evaluate(() => {
+      const ta = document.querySelector('#panel-editor-text'), mk = document.querySelector('#find-mark').getBoundingClientRect(), box = ta.getBoundingClientRect();
+      return { scrolled: ta.scrollTop > 0, inView: mk.top >= box.top && mk.bottom <= box.bottom };
+    });
+    eq(JSON.stringify({ scrolled: true, inView: true }), JSON.stringify(far), 'a match far down is scrolled into view');
+    await page.click('#find-next');
+    eq('1 / 3', await page.textContent('#find-count'), 'and wraps around');
+    await page.click('#find-prev');
+    eq('3 / 3', await page.textContent('#find-count'), 'the up arrow goes back');
+    await page.fill('#find-q', 'nothing-here');
+    await page.press('#find-q', 'Enter');
+    eq('Нет совпадений', await page.textContent('#find-count'), 'Enter searches too; no match is reported');
+    await page.evaluate(() => handleBack(true));
+    eq(true, await page.isHidden('#find-bar'), 'back closes the find bar first');
+    eq(true, await page.evaluate(() => document.querySelector('#editor-panel').classList.contains('open')), 'and keeps the editor open');
+
+    await page.click('#panel-dedupe-btn');
+    const after = await page.evaluate(() => document.querySelector('#panel-editor-text').value.split('\n'));
+    eq(JSON.stringify(['# мои домены', 'youtube.com', 'example.com', 'googlevideo.com', 'ytimg.com', '', 'other.org']), JSON.stringify(after.slice(0, 7)),
+      'later duplicates are removed (case, trailing dot and comment ignored), the first one stays');
+    eq(208, after.length, 'unique lines are kept');
+    truthy((await page.textContent('#prompt-msg')).includes('3'), 'the snackbar says how many were removed');
+    await page.click('#prompt-action');
+    eq(text, await page.evaluate(() => document.querySelector('#panel-editor-text').value), 'undo brings the text back');
+    await page.evaluate(() => closeSlideEditor(true));
+    await page.waitForTimeout(500);
+
+    // Жест системы: касание у нижнего края не начинает долгое нажатие
+    eq(true, await page.evaluate(() => inGestureZone(200, innerHeight - 5) && inGestureZone(5, 300) && !inGestureZone(200, 300)),
+      'touches at the bottom bar and the side edges are system gestures');
+    eq('', pageErrors.join(' | '), 'no script errors');
+    await ctx.close();
+  }
+
   // ── repeated reachability check ─────────────────────────────────────────
   // The second run must start from an empty screen: rows of the first run used
   // to stay, the new ones were appended below them with the same ids, and the

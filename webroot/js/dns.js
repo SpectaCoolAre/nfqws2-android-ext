@@ -312,18 +312,26 @@ let dnsLongFired = false, dnsLongCancel = () => {};
     const row = e.target.closest('.list-item[data-id]');
     cancel(); dnsLongFired = false;
     if(!row || dnsSel || e.target.closest('.switch')) return;
+    // Касание у края экрана — начало системного жеста Android («домой» снизу,
+    // «назад» сбоку): WebView получает его pointerdown, но pointerup уже не
+    // приходит, и таймер включал выбор профиля. Такие касания не считаем.
+    if(e.pointerType !== 'mouse' && inGestureZone(e.clientX, e.clientY)) return;
     x0 = e.clientX; y0 = e.clientY;
     // Жест «назад» системы мог увести с экрана, не прислав pointerup: тогда
     // таймер срабатывал уже на другом экране и вешал туда панель выбора
     tm = setTimeout(() => {
       tm = 0;
-      if(currentPage !== 'dns' || !row.isConnected || openSheetId) return;
+      if(currentPage !== 'dns' || !row.isConnected || openSheetId || document.hidden || !document.hasFocus()) return;
       dnsLongFired = true; dnsSelEnter(row.dataset.id);
     }, 500);
   });
   box.addEventListener('pointermove', e => { if(tm && Math.hypot(e.clientX - x0, e.clientY - y0) > 10) cancel(); });
   ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => box.addEventListener(ev, cancel));
   dnsLongCancel = cancel;
+  // Жест увёл WebView в фон (свернули, открыли список приложений) — отмена
+  addEventListener('blur', cancel);
+  addEventListener('pagehide', cancel);
+  document.addEventListener('visibilitychange', cancel);
   box.addEventListener('contextmenu', e => { if(e.target.closest('.list-item[data-id]')) e.preventDefault(); });
 })();
 

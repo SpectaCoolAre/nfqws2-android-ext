@@ -70,6 +70,20 @@ pre.appear > * { animation: none; }
 .code-edit > textarea::placeholder { -webkit-text-fill-color: var(--md-sys-color-on-surface-variant); color: var(--md-sys-color-on-surface-variant); }
 .code-edit > textarea::selection { background: color-mix(in srgb, var(--md-sys-color-primary) 32%, transparent); }
 .code-edit.plain > pre { display: none; }
+/* Поиск в редакторе: строка над текстом и рамка текущего совпадения — между
+   подсветкой и прозрачным textarea, поэтому текст поверх неё виден */
+.find-bar { display: flex; align-items: center; gap: 8px; }
+.find-bar[hidden] { display: none; }
+.find-bar .search-bar { flex: 1; min-width: 0; height: 48px; gap: 4px; padding: 0 4px 0 16px; }
+.find-bar .search-bar input { font-size: var(--ts-body-medium); }
+.find-bar .search-bar input::-webkit-search-cancel-button { display: none; }
+.find-count { flex: none; font-size: var(--ts-label-medium); line-height: var(--lh-label-medium);
+  color: var(--md-sys-color-on-surface-variant); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.find-bar .btn { flex: none; }
+.find-mark { position: absolute; pointer-events: none; border-radius: 3px;
+  background: color-mix(in srgb, var(--md-sys-color-tertiary) 38%, transparent);
+  outline: 1.5px solid var(--md-sys-color-tertiary); }
+.find-mark[hidden] { display: none; }
 .code-edit.plain > textarea { color: var(--md-sys-color-on-surface); -webkit-text-fill-color: currentColor; }
 
 /* Цвета токенов — VS Code Light / Dark, как в nfqws-keenetic-web */

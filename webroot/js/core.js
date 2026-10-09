@@ -608,6 +608,21 @@ let devMode = store.get('nfq_dev') === '1';
   b.addEventListener('click', () => { if(fired){ fired = false; return; } navigate('settings'); });
 })();
 
+/* Зоны системных жестов Android: полоска внизу (домой, недавние) и края
+   слева/справа («назад»). Касание оттуда — жест системы, а не нажатие на
+   то, что под пальцем. Нижняя зона — не меньше системного отступа снизу. */
+let insetProbe = null;
+function inGestureZone(x, y){
+  // var(--bottom-inset) — цепочка var()/env(): значение даёт только вычисленный размер
+  if(!insetProbe){
+    insetProbe = document.createElement('div');
+    insetProbe.style.cssText = 'position:fixed;left:0;bottom:0;width:0;visibility:hidden;pointer-events:none;height:var(--bottom-inset)';
+    document.body.append(insetProbe);
+  }
+  const inset = insetProbe.offsetHeight || 0;
+  return y > innerHeight - Math.max(32, inset + 8) || x < 24 || x > innerWidth - 24;
+}
+
 /* elevation on scroll: surface → surface-container */
 addEventListener('scroll', () => $('app-bar').classList.toggle('scrolled', scrollY > 8), {passive: true});
 
@@ -653,7 +668,10 @@ function openMonetModal(){ drawThemeUI(); openSheet('monet-modal'); }
 function handleBack(allowExit){
   if(openMenuEntry){ closeMenu(); return true; }
   if($('dialog-wrap').classList.contains('open')){ dialogResolve(false); return true; }
-  if($('editor-panel').classList.contains('open')){ closeSlideEditor(); return true; }
+  if($('editor-panel').classList.contains('open')){
+    if(!$('find-bar').hidden){ toggleFind(false); return true; }
+    closeSlideEditor(); return true;
+  }
   if(openSheetId){ closeSheet(); return true; }
   if(dnsSel && currentPage === 'dns'){ dnsSelExit(); return true; }
   if(PAGE_META[currentPage].child){ goBack(); return true; }

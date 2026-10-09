@@ -544,5 +544,15 @@ EN = {
  "Удалить выбранные": "Delete selected",
  "Удалить профили: {0}?": "Delete {0} profiles?",
  "Будут удалены со всеми серверами и доменами: {0}.": "These will be deleted with all their servers and domains: {0}.",
- "Удалено профилей: {0}": "Profiles deleted: {0}"
+ "Удалено профилей: {0}": "Profiles deleted: {0}",
+ "Поиск по тексту": "Find in text",
+ "Удалить дубликаты": "Remove duplicates",
+ "Найти": "Find",
+ "Что искать": "Find what",
+ "Предыдущее совпадение": "Previous match",
+ "Следующее совпадение": "Next match",
+ "Нет совпадений": "No matches",
+ "Дубликатов нет": "No duplicates",
+ "Удалено дубликатов: {0}. Изменения попадут в файл после «Сохранить»": "Duplicates removed: {0}. Tap Save to write the file",
+ "Отменить": "Undo"
 };

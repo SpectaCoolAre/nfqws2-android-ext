@@ -220,11 +220,129 @@ function highlightEditor(){
   pre.innerHTML = highlight(ta.value, lang) + ' ';
   pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft;
 }
-$('panel-editor-text').addEventListener('input', () => { if(!hlFrame) hlFrame = requestAnimationFrame(highlightEditor); });
+$('panel-editor-text').addEventListener('input', () => {
+  if(!hlFrame) hlFrame = requestAnimationFrame(highlightEditor);
+  // текст изменился — найденные позиции больше не верны
+  if(findRes) findReset(true);
+});
 $('panel-editor-text').addEventListener('scroll', () => {
   const ta = $('panel-editor-text'), pre = $('ce-hl');
   pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft;
+  if(findRes) findPlaceMark();
 }, {passive: true});
+
+/* ── Поиск по тексту, как в браузере ─────────────────────────────────────
+   Ищет по кнопке «Найти» (или Enter), а не по каждой букве: списки бывают
+   на десятки тысяч строк. Без учёта регистра; счётчик «3 / 17», стрелки —
+   к соседнему совпадению по кругу. Текущее совпадение обведено рамкой; поле
+   ввода в фокус не берём — на больших файлах клавиатура уронила бы WebView. */
+let findRes = null;   // {q, at: [позиции], cur, starts: [начала строк]}
+function toggleFind(force){
+  const bar = $('find-bar'), on = force != null ? force : bar.hidden;
+  bar.hidden = !on;
+  $('panel-find-btn').setAttribute('aria-pressed', String(on));
+  $('panel-find-btn').classList.toggle('selected', on);
+  if(on) setTimeout(() => $('find-q').focus(), 50);
+  else findReset();
+}
+function findReset(keepQuery){
+  findRes = null;
+  $('find-mark').hidden = true;
+  $('find-count').textContent = keepQuery && $('find-q').value ? '—' : '';
+  $('find-prev').disabled = $('find-next').disabled = true;
+  if(!keepQuery) $('find-q').value = '';
+}
+function findRun(){
+  const q = $('find-q').value, ta = $('panel-editor-text');
+  if(!q){ findReset(); return; }
+  const text = ta.value.toLowerCase(), needle = q.toLowerCase(), at = [];
+  for(let i = text.indexOf(needle); i >= 0; i = text.indexOf(needle, i + needle.length)) at.push(i);
+  if(!at.length){
+    findReset(true);
+    $('find-count').textContent = t('Нет совпадений');
+    return;
+  }
+  const starts = [0];
+  for(let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) starts.push(i + 1);
+  // Первое совпадение — с первой видимой строки, как в браузере
+  const m = findMetrics(), top = Math.min(starts.length - 1, Math.max(0, Math.floor((ta.scrollTop - m.pt) / m.lh) + 1));
+  let cur = ta.scrollTop > 0 ? at.findIndex(i => i >= starts[top]) : 0;
+  findRes = {q: needle, at, cur: cur < 0 ? 0 : cur, starts};
+  $('find-prev').disabled = $('find-next').disabled = at.length < 2;
+  findShow();
+}
+function findStep(d){
+  if(!findRes){ findRun(); return; }
+  const n = findRes.at.length;
+  findRes.cur = (findRes.cur + d + n) % n;
+  findShow();
+}
+function findLineOf(starts, pos){
+  let lo = 0, hi = starts.length - 1;
+  while(lo < hi){ const m = (lo + hi + 1) >> 1; if(starts[m] <= pos) lo = m; else hi = m - 1; }
+  return lo;
+}
+function findMetrics(){
+  const ta = $('panel-editor-text'), cs = getComputedStyle(ta);
+  const c = findMetrics.c || (findMetrics.c = document.createElement('canvas').getContext('2d'));
+  c.font = cs.fontSize + ' ' + cs.fontFamily;
+  return {lh: parseFloat(cs.lineHeight) || 20, cw: c.measureText('0000000000').width / 10,
+          pt: parseFloat(cs.paddingTop) || 0, pl: parseFloat(cs.paddingLeft) || 0};
+}
+function findShow(){
+  const ta = $('panel-editor-text'), r = findRes, pos = r.at[r.cur];
+  const line = findLineOf(r.starts, pos), col = pos - r.starts[line], m = findMetrics();
+  ta.setSelectionRange(pos, pos + r.q.length);
+  ta.scrollTop = Math.max(0, m.pt + line * m.lh - ta.clientHeight / 2 + m.lh / 2);
+  const x = m.pl + col * m.cw, w = r.q.length * m.cw;
+  if(x < ta.scrollLeft + m.pl || x + w > ta.scrollLeft + ta.clientWidth - m.pl)
+    ta.scrollLeft = Math.max(0, x - ta.clientWidth / 3);
+  $('find-count').textContent = (r.cur + 1) + ' / ' + r.at.length;
+  findPlaceMark();
+}
+function findPlaceMark(){
+  const ta = $('panel-editor-text'), r = findRes, mk = $('find-mark');
+  if(!r){ mk.hidden = true; return; }
+  const pos = r.at[r.cur], line = findLineOf(r.starts, pos), col = pos - r.starts[line], m = findMetrics();
+  mk.style.top = (m.pt + line * m.lh - ta.scrollTop) + 'px';
+  mk.style.left = (m.pl + col * m.cw - ta.scrollLeft) + 'px';
+  mk.style.width = (r.q.length * m.cw) + 'px';
+  mk.style.height = m.lh + 'px';
+  mk.hidden = false;
+}
+$('find-q').addEventListener('keydown', e => {
+  if(e.key === 'Enter'){ e.preventDefault(); if(findRes && findRes.q === $('find-q').value.toLowerCase()) findStep(e.shiftKey ? -1 : 1); else findRun(); }
+  else if(e.key === 'Escape'){ e.stopPropagation(); toggleFind(false); }
+});
+// Новый запрос — старый счётчик уже не про него; ищем только по кнопке
+$('find-q').addEventListener('input', () => { if(findRes || $('find-count').textContent) findReset(true); });
+
+/* ── Удаление дубликатов в списке ────────────────────────────────────────
+   Одинаковые записи (без учёта регистра, пробелов по краям, комментария в
+   конце строки и точки в конце домена): остаётся первая, следующие
+   удаляются. Комментарии и пустые строки не трогаем. Правка — как ручная:
+   её можно отменить из уведомления, а в файл она попадёт по «Сохранить». */
+function dedupeList(){
+  const ta = $('panel-editor-text');
+  if(ta.readOnly) return;
+  const prev = ta.value, seen = new Set(), out = [];
+  let removed = 0;
+  for(const line of prev.split('\n')){
+    const k = line.replace(/\s+#.*$/, '').trim().toLowerCase().replace(/\.$/, '');
+    if(k && k[0] !== '#'){
+      if(seen.has(k)){ removed++; continue; }
+      seen.add(k);
+    }
+    out.push(line);
+  }
+  if(!removed){ toast(t('Дубликатов нет')); return; }
+  ta.value = out.join('\n');
+  ta.dispatchEvent(new Event('input'));
+  toast(t('Удалено дубликатов: {0}. Изменения попадут в файл после «Сохранить»', fmtCount(removed)), {
+    label: t('Отменить'),
+    fn: () => { ta.value = prev; ta.dispatchEvent(new Event('input')); }
+  });
+}
 
 function openSlideEditor(type, key){
   if(type === 'conf') openEditorWith({target: 'conf', title: 'nfqws2.conf', lang: 'conf',
@@ -244,6 +362,8 @@ async function openEditorWith(o){
   $('panel-save-btn').disabled = !!o.load;
   $('panel-save-btn').textContent = o.saveLabel || t('Сохранить');
   $('panel-pending').hidden = !(o.target === 'list' && pendingLists().includes(o.key));
+  $('panel-dedupe-btn').hidden = o.lang !== 'list';
+  toggleFind(false);
   ta.placeholder = o.target === 'list' ? '' : t('# Конфигурация…');
   ta.value = o.load ? t('Загрузка…') : o.text;
   ta.readOnly = !!o.load;
@@ -282,6 +402,7 @@ const LARGE_FILE = 50000;
 function teardownEditor(large){
   const panel = $('editor-panel'), box = $('code-edit'), ta = $('panel-editor-text'), pre = $('ce-hl');
   if(document.activeElement === ta) ta.blur();
+  toggleFind(false);
   if(large) panel.style.transition = 'none';
   box.style.display = 'none';
   ta.value = '';

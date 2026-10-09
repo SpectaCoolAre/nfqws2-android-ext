@@ -51,6 +51,9 @@
 <symbol id="i-download" viewBox="0 -960 960 960"><path d="M480-320 280-520l56-58 104 104v-326h80v326l104-104 56 58-200 200ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z"/></symbol>
 <symbol id="i-upload" viewBox="0 -960 960 960"><path d="M440-320v-326L336-542l-56-58 200-200 200 200-56 58-104-104v326h-80ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z"/></symbol>
 <symbol id="i-trash" viewBox="0 -960 960 960"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></symbol>
+<symbol id="i-dedupe" viewBox="0 -960 960 960"><path d="m576-160-56-56 104-104-104-104 56-56 104 104 104-104 56 56-104 104 104 104-56 56-104-104-104 104Zm-456-160v-80h320v80H120Zm0-160v-80h480v80H120Zm0-160v-80h480v80H120Z"/></symbol>
+<symbol id="i-up" viewBox="0 -960 960 960"><path d="M480-528 296-344l-56-56 240-240 240 240-56 56-184-184Z"/></symbol>
+<symbol id="i-down" viewBox="0 -960 960 960"><path d="M480-344 240-584l56-56 184 184 184-184 56 56-240 240Z"/></symbol>
 <symbol id="i-select-all" viewBox="0 -960 960 960"><path d="M280-280v-400h400v400H280Zm80-80h240v-240H360v240ZM200-200v80q-33 0-56.5-23.5T120-200h80Zm-80-160v-80h80v80h-80Zm0-160v-80h80v80h-80Zm80-240h-80q0-33 23.5-56.5T200-840v80Zm160 640v-80h80v80h-80Zm0-640v-80h80v80h-80Zm160 640v-80h80v80h-80Zm0-640v-80h80v80h-80Zm240 640v-80h80q0 33-23.5 56.5T760-120Zm0-160v-80h80v80h-80Zm0-160v-80h80v80h-80Zm0-240v-80q33 0 56.5 23.5T840-760h-80Z"/></symbol>
 <symbol id="i-edit" viewBox="0 -960 960 960"><path d="M200-200h57l391-391-57-57-391 391v57Zm-80 80v-170l528-527q12-11 26.5-17t30.5-6q16 0 31 6t26 18l55 56q12 11 17.5 26t5.5 30q0 16-5.5 30.5T817-647L290-120H120Zm640-584-56-56 56 56Zm-141 85-28-29 57 57-29-28Z"/></symbol>
 <symbol id="i-caret" viewBox="0 -960 960 960"><path d="M480-345 240-585l56-56 184 184 184-184 56 56-240 240Z"/></symbol>
@@ -502,6 +505,14 @@
       <svg aria-hidden="true" class="icon"><use href="#i-close"/></svg>
     </button>
     <span class="fs-title truncate" id="panel-title-text">—</span>
+    <button class="icon-btn state" id="panel-find-btn" onclick="toggleFind()" aria-pressed="false"
+            aria-label="Поиск по тексту" title="Поиск по тексту" data-ta="aria-label,title">
+      <svg aria-hidden="true" class="icon"><use href="#i-search"/></svg>
+    </button>
+    <button class="icon-btn state" id="panel-dedupe-btn" onclick="dedupeList()" hidden
+            aria-label="Удалить дубликаты" title="Удалить дубликаты" data-ta="aria-label,title">
+      <svg aria-hidden="true" class="icon"><use href="#i-dedupe"/></svg>
+    </button>
     <button class="icon-btn state pending-btn" id="panel-pending" hidden onclick="offerListUpdate(editorCtx && editorCtx.key)"
             aria-label="Доступна новая версия списка" title="Доступна новая версия списка" data-ta="aria-label,title">
       <svg aria-hidden="true" class="icon"><use href="#i-warn"/></svg>
@@ -509,8 +520,25 @@
     <button class="btn text state" id="panel-save-btn">Сохранить</button>
   </div>
   <div class="fs-body">
+    <div class="find-bar" id="find-bar" hidden>
+      <div class="search-bar">
+        <input type="search" id="find-q" placeholder="Найти" aria-label="Что искать" data-ta="placeholder,aria-label"
+               autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="search">
+        <span class="find-count" id="find-count" aria-live="polite"></span>
+        <button class="icon-btn sm state" id="find-prev" onclick="findStep(-1)" disabled
+                aria-label="Предыдущее совпадение" title="Предыдущее совпадение" data-ta="aria-label,title">
+          <svg aria-hidden="true" class="icon"><use href="#i-up"/></svg>
+        </button>
+        <button class="icon-btn sm state" id="find-next" onclick="findStep(1)" disabled
+                aria-label="Следующее совпадение" title="Следующее совпадение" data-ta="aria-label,title">
+          <svg aria-hidden="true" class="icon"><use href="#i-down"/></svg>
+        </button>
+      </div>
+      <button class="btn tonal state" id="find-go" onclick="findRun()"><span data-t>Найти</span></button>
+    </div>
     <div class="code-edit" id="code-edit">
       <pre class="ce-hl" id="ce-hl" aria-hidden="true"></pre>
+      <span class="find-mark" id="find-mark" hidden></span>
       <textarea id="panel-editor-text" spellcheck="false" autocapitalize="off" autocorrect="off" wrap="off"
                 aria-label="Текст файла" data-ta="aria-label"></textarea>
     </div>
