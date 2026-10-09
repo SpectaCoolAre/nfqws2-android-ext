@@ -273,6 +273,21 @@ cmd_doctor() {
   else
     row warn conntrack "$(M 'нет nf_conntrack sysctl' 'no nf_conntrack sysctl')"
   fi
+  if [ "$ENABLE_HOTSPOT" = "1" ]; then
+    if command -v settings >/dev/null 2>&1; then
+      local to_val
+      to_val=$(settings get global tether_offload_disabled 2>/dev/null)
+      if [ "$to_val" = "1" ]; then
+        row ok hotspot "$(M 'точка доступа: аппаратный оффлоад отключен' 'hotspot: hardware offload disabled')"
+      else
+        row warn hotspot "$(M 'точка доступа: оффлоад включен' 'hotspot: hardware offload enabled')"
+      fi
+    else
+      row info hotspot "$(M 'обход для точки доступа включен' 'hotspot bypass enabled')"
+    fi
+  else
+    row info hotspot "$(M 'обход для точки доступа выключен' 'hotspot bypass disabled')"
+  fi
   if is_running; then
     local _pid _cg _rss _hwm _ram_text
     _pid=$(cat "$PIDFILE" 2>/dev/null)

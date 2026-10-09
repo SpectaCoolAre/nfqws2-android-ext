@@ -27,10 +27,12 @@ case "$ARCH" in
 esac
 ui_print "- Architecture: $ARCH -> $BIN"
 
-case "$BIN" in
-  android-arm64|android-arm|android-x86_64|android-x86) ;;
-  *) abort "! Invalid binary target: $BIN" ;;
-esac
+# Архив, собранный вручную из всего репозитория (zip -r .), — без файлов разработки
+rm -rf "$MODPATH/tests" "$MODPATH/tools" "$MODPATH/.workbuddy-ai" \
+       "$MODPATH/.git" "$MODPATH/.github" "$MODPATH/.gitattributes" \
+       "$MODPATH/CONTRIBUTING.md" \
+       "$MODPATH/docs" "$MODPATH/update.json" "$MODPATH/changelog.md"
+rm -f "$MODPATH"/*.zip
 
 for f in \
   service.sh action.sh uninstall.sh lib/common.sh lib/dns.sh bin/nfqws2-ctl \

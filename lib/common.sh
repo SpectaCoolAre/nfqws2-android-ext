@@ -598,11 +598,40 @@ _firewall_stop() {
 firewall_iptables()  { _firewall_start iptables; }
 firewall_ip6tables() { [ "$IPV6_ENABLED" = "0" ] && return 0; _firewall_start ip6tables; }
 
+# Аппаратное ускорение раздачи (tether offload): на многих телефонах трафик
+# раздачи обрабатывает модем в обход iptables, и nfqws2 его не видит. Пока
+# включён обход для точки доступа, ускорение выключаем. Прежнее значение
+# запоминаем и возвращаем его же — пользователь мог выключить ускорение сам.
+# settings — это запуск Java, поэтому трогаем его, только если значение не то.
+TETHER_SAVED_FILE="$STATE_DIR/tether_offload.saved"
+apply_tether_offload() {
+  command -v settings >/dev/null 2>&1 || return 0
+  [ "$ENABLE_HOTSPOT" = "1" ] || { restore_tether_offload; return 0; }
+  local cur
+  cur=$(settings get global tether_offload_disabled 2>/dev/null | tr -d '\r')
+  [ "$cur" = "1" ] && return 0
+  [ -f "$TETHER_SAVED_FILE" ] || printf '%s\n' "${cur:-null}" > "$TETHER_SAVED_FILE"
+  settings put global tether_offload_disabled 1 2>/dev/null || true
+}
+
+restore_tether_offload() {
+  [ -f "$TETHER_SAVED_FILE" ] || return 0
+  command -v settings >/dev/null 2>&1 || return 0
+  local was
+  IFS= read -r was < "$TETHER_SAVED_FILE"
+  case "$was" in
+    ''|null) settings delete global tether_offload_disabled >/dev/null 2>&1 || true ;;
+    *) settings put global tether_offload_disabled "$was" 2>/dev/null || true ;;
+  esac
+  rm -f "$TETHER_SAVED_FILE"
+}
+
 # check both rc: firewall_ip6tables returns 0 when IPv6 is off, masking an iptables failure
 firewall_start() {
   local rc=0
   firewall_iptables || rc=1
   firewall_ip6tables || rc=1
+  apply_tether_offload
   return $rc
 }
 
@@ -610,6 +639,7 @@ firewall_stop() {
   local rc=0
   _firewall_stop iptables || rc=1
   _firewall_stop ip6tables || rc=1
+  restore_tether_offload
   return $rc
 }
 

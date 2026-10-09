@@ -34,6 +34,16 @@ case "$NAME" in
       *) printf '\n' ;;
     esac
     exit 0 ;;
+  settings)
+    case "$1" in
+      get)
+        case "$3" in
+          tether_offload_disabled) printf '%s\n' "${MOCK_TETHER_OFFLOAD:-1}" ;;
+          *) printf '\n' ;;
+        esac ;;
+      *) exit 0 ;;
+    esac
+    exit 0 ;;
   sysctl|modprobe|ip|iptables-save|killall)
     exit 0 ;;
   *)
