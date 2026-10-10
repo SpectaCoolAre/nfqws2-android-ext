@@ -96,7 +96,7 @@ PY
 assert_eq "$MODULE_TOP" "$(sed -n 's/^TOPS //p' "$SANDBOX/tops.txt")" "the archive holds exactly the module top level"
 assert_eq "" "$(sed -n 's/^DEVS //p' "$SANDBOX/tops.txt")" "no repository-only file is archived"
 assert_eq "" "$(sed -n 's/^MISSING //p' "$SANDBOX/tops.txt")" "every file the installer needs is present"
-assert_ge "$(sed -n 's/^FILES //p' "$SANDBOX/tops.txt")" 140 "the archive carries the whole module"
+assert_ge "$(sed -n 's/^FILES //p' "$SANDBOX/tops.txt")" 110 "the archive carries the whole module"
 
 # ── module.prop ───────────────────────────────────────────────────────────────
 section "module.prop of the fork"

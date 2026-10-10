@@ -359,6 +359,7 @@ body.nav-hidden .content { padding-bottom: calc(var(--bottom-inset) + 24px); }
   transition: border-radius var(--dur-long) var(--spring-strong),
               background-color var(--dur-medium) var(--standard), color var(--dur-medium) var(--standard);
 }
+.hero-icon svg { width: 36px; height: 36px; }
 .hero.running .hero-icon { border-radius: 28px; background: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary); }
 .hero.offline .hero-icon { background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); }
 .hero-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }

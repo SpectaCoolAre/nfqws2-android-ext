@@ -31,7 +31,7 @@ Quad9|149.112.112.112|https://dns.quad9.net/dns-query
 Quad9_UN|9.9.9.10|https://dns10.quad9.net/dns-query
 Quad9_S|9.9.9.11|https://dns11.quad9.net/dns-query
 Quad9_UN2|9.9.9.12|https://dns12.quad9.net/dns-query
-XboxDNS_RU|111.88.96.55|https://xbox-dns.ru/dns-query
+DNS_AI_RU|192.144.59.14|https://dns.dns-ai.ru/dns-query
 Yandex|77.88.8.1|https://common.dot.dns.yandex.net/dns-query
 Yandex|77.88.8.8|https://common.dot.dns.yandex.net/dns-query
 Geohide|45.155.204.190|https://dns.geohide.ru:444/dns-query
