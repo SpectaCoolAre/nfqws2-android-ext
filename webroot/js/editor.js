@@ -255,11 +255,16 @@ function findReset(keepQuery){
 function findRun(){
   const q = $('find-q').value, ta = $('panel-editor-text');
   if(!q){ findReset(); return; }
-  const text = ta.value.toLowerCase(), needle = q.toLowerCase(), at = [];
-  for(let i = text.indexOf(needle); i >= 0; i = text.indexOf(needle, i + needle.length)) at.push(i);
+  // В кавычках — точное совпадение: запись целиком, а не часть другой
+  // ("cdninstagram.com" не найдёт scontent.cdninstagram.com)
+  const quoted = q.match(/^\s*["«“](.+)["»”]\s*$/);
+  const text = ta.value.toLowerCase(), needle = (quoted ? quoted[1] : q).toLowerCase(), at = [];
+  const word = c => !!c && /[a-z0-9_.\-\u0400-\u04ff]/.test(c);
+  for(let i = text.indexOf(needle); i >= 0; i = text.indexOf(needle, i + needle.length))
+    if(!quoted || (!word(text[i - 1]) && !word(text[i + needle.length]))) at.push(i);
   if(!at.length){
     findReset(true);
-    $('find-count').textContent = t('Нет совпадений');
+    $('find-count').textContent = '0';
     return;
   }
   const starts = [0];
@@ -267,7 +272,7 @@ function findRun(){
   // Первое совпадение — с первой видимой строки, как в браузере
   const m = findMetrics(), top = Math.min(starts.length - 1, Math.max(0, Math.floor((ta.scrollTop - m.pt) / m.lh) + 1));
   let cur = ta.scrollTop > 0 ? at.findIndex(i => i >= starts[top]) : 0;
-  findRes = {q: needle, at, cur: cur < 0 ? 0 : cur, starts};
+  findRes = {q: needle, raw: q, at, cur: cur < 0 ? 0 : cur, starts};
   $('find-prev').disabled = $('find-next').disabled = at.length < 2;
   findShow();
 }
@@ -311,7 +316,7 @@ function findPlaceMark(){
   mk.hidden = false;
 }
 $('find-q').addEventListener('keydown', e => {
-  if(e.key === 'Enter'){ e.preventDefault(); if(findRes && findRes.q === $('find-q').value.toLowerCase()) findStep(e.shiftKey ? -1 : 1); else findRun(); }
+  if(e.key === 'Enter'){ e.preventDefault(); if(findRes && findRes.raw === $('find-q').value) findStep(e.shiftKey ? -1 : 1); else findRun(); }
   else if(e.key === 'Escape'){ e.stopPropagation(); toggleFind(false); }
 });
 // Новый запрос — старый счётчик уже не про него; ищем только по кнопке

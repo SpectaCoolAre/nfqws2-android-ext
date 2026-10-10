@@ -611,11 +611,11 @@ function dcRender(q, st, done){
   if(rows.length) out.push('<div class="list">' + rows.join('') + '</div>');
   if(done && st.mode){
     const acts = [];
-    const host = st.lists.find(l => l.role === 'host' || l.role === 'auto' || l.role === 'exclude' || l.role === 'idle');
     if(!st.lists.some(l => l.role === 'host'))
       acts.push('<button class="btn tonal with-icon state" onclick="dcAddUser(' + jsArg(q) + ')">' + icon('add', 's18') + '<span>' + esc(t('Добавить в user.list')) + '</span></button>');
-    if(host && /^[a-z0-9_]+\.list$/.test(host.file))
-      acts.push('<button class="btn text state" onclick="dcOpenList(' + jsArg(host.file.replace(/\.list$/, '')) + ', ' + jsArg(host.entry) + ')">' + esc(t('Открыть {0}', host.file)) + '</button>');
+    if(st.lists.length)
+      acts.push('<button class="btn text state" aria-haspopup="menu" onclick="dcPickList(this)">' + esc(t('Открыть список')) + '</button>');
+    dcLast = st;
     if(acts.length) out.push('<div class="row">' + acts.join('') + '</div>');
   }
   return out.join('');
@@ -634,12 +634,22 @@ async function dcAddUser(q){
   toast((r.out || '').trim() || t('Добавлено'));
   runDomainCheck();
 }
-/* Открыть список в редакторе сразу на найденной записи */
-async function dcOpenList(key, entry){
-  openSlideEditor('list', key);
-  for(let i = 0; i < 100 && (!editorCtx || $('panel-editor-text').readOnly); i++) await new Promise(r => setTimeout(r, 100));
-  if(!editorCtx) return;
+/* Открыть список, где нашёлся домен, сразу с поиском этой записи. Списков
+   несколько — выбор из меню. Ждём именно тот редактор, который открыли: если
+   открыть не удалось и пользователь открыл другой список, поиск туда не лезет. */
+let dcLast = null;
+function dcPickList(anchor){
+  const lists = dcLast ? dcLast.lists : [];
+  if(lists.length === 1) return dcOpenList(lists[0].file, lists[0].entry);
+  openMenu(anchor, lists.map(l => ({label: l.file, sub: l.entry, icon: 'list', onClick: () => dcOpenList(l.file, l.entry)})));
+}
+async function dcOpenList(file, entry){
+  openSlideEditor('list', file.replace(/\.list$/, ''));
+  const o = editorCtx;
+  if(!o) return;
+  for(let i = 0; i < 300 && editorCtx === o && o.original === undefined; i++) await new Promise(r => setTimeout(r, 100));
+  if(editorCtx !== o || o.original === undefined) return;
   toggleFind(true, true);
-  $('find-q').value = entry;
+  $('find-q').value = '"' + entry + '"';
   findRun();
 }

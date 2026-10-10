@@ -384,6 +384,16 @@ fi
 ctl export-logs
 assert_rc 0 "$ctl_rc" "export-logs works"
 
+# ── любой существующий список читается по имени ───────────────────────────────
+section "get-list: other lists by name"
+printf 'blocked.example\n' > "$LISTS_DIR/rkn.list"
+ctl get-list rkn
+assert_contains "$ctl_out" "blocked.example" "a list outside the fixed set opens by its name"
+ctl get-list '../../etc/passwd'
+assert_rc 1 "$ctl_rc" "a path is refused"
+ctl get-list nosuchlist
+assert_rc 1 "$ctl_rc" "a missing list is refused"
+
 # ── проверка одного домена ────────────────────────────────────────────────────
 section "domain-check"
 

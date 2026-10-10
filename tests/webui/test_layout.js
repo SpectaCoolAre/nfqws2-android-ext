@@ -594,7 +594,13 @@ const VIEWPORTS = [
     eq('3 / 3', await page.textContent('#find-count'), 'the up arrow goes back');
     await page.fill('#find-q', 'nothing-here');
     await page.press('#find-q', 'Enter');
-    eq('Нет совпадений', await page.textContent('#find-count'), 'Enter searches too; no match is reported');
+    eq('0', await page.textContent('#find-count'), 'Enter searches too; no match is shown as 0');
+    await page.fill('#find-q', '"youtube.com"');
+    await page.press('#find-q', 'Enter');
+    eq('1 / 2', await page.textContent('#find-count'), 'in quotes only whole entries match (not last-youtube.com)');
+    await page.fill('#find-q', '"youtube"');
+    await page.press('#find-q', 'Enter');
+    eq('0', await page.textContent('#find-count'), 'and a part of a domain in quotes finds nothing');
     await page.evaluate(() => handleBack(true));
     eq(true, await page.isHidden('#find-bar'), 'back closes the find bar first');
     eq(true, await page.evaluate(() => document.querySelector('#editor-panel').classList.contains('open')), 'and keeps the editor open');
@@ -749,7 +755,19 @@ const VIEWPORTS = [
     await page.click('#dc-go'); await page.waitForTimeout(400);
     res = await page.textContent('#dc-res');
     truthy(res.includes('В исключениях'), 'an excluded domain is reported as excluded');
-    eq(true, await page.isVisible('#dc-res button:has-text("Открыть exclude.list")'), 'with a shortcut to the list it is in');
+    eq(true, await page.isVisible('#dc-res button:has-text("Открыть список")'), 'with a shortcut to the list it is in');
+    // Несколько списков — выбор; редактор открывается сразу с точным поиском записи
+    await page.evaluate(() => { window.__dc = 'MODE\tauto\nLIST\tuser.list\thost\tblocked.example\nLIST\trkn.list\tidle\tblocked.example\ndone'; });
+    await page.click('#dc-go'); await page.waitForTimeout(400);
+    await page.click('#dc-res button:has-text("Открыть список")'); await page.waitForTimeout(200);
+    eq(2, await page.$$eval('.menu .mi', m => m.length), 'several lists are offered to choose from');
+    await page.click('.menu .mi:has-text("user.list")'); await page.waitForTimeout(900);
+    eq(true, await page.isVisible('#find-bar'), 'the list opens with the find bar');
+    eq('"blocked.example"', await page.inputValue('#find-q'), 'searching for the exact entry');
+    await page.evaluate(() => closeSlideEditor(true)); await page.waitForTimeout(500);
+    await page.evaluate(() => openSlideEditor('list', 'exclude')); await page.waitForTimeout(700);
+    eq(true, await page.isHidden('#find-bar'), 'another list opened later has no leftover search');
+    await page.evaluate(() => closeSlideEditor(true)); await page.waitForTimeout(500);
     await page.click('#test-tabs .seg[data-tab="all"]');
     eq(true, await page.isVisible('#tb'), 'back on All the batch run button returns');
     eq(false, await page.isVisible('#test-sec-domain'), 'and the domain form hides');

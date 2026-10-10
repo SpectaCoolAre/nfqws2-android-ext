@@ -54,7 +54,11 @@ list_file() {
     whitelist_sni|whitelist_sni.list) echo "$LISTS_DIR/whitelist_sni.list" ;;
     apps|apps.list) echo "$CONFDIR/apps.list" ;;
     home|home_wifi.list) echo "$HOME_FILE" ;;
-    *) return 1 ;;
+    # Любой другой существующий список (rkn, youtube…): только простое имя
+    *)
+      case "${1%.list}" in ''|*[!a-z0-9_]*) return 1 ;; esac
+      [ -f "$LISTS_DIR/${1%.list}.list" ] || return 1
+      echo "$LISTS_DIR/${1%.list}.list" ;;
   esac
 }
 
