@@ -23,6 +23,7 @@ APP_UIDS_FILE="$STATE_DIR/app_uids"
 SERVICE_LOG="$LOG_DIR/service.log"
 NFQWS_LOG="$LOG_DIR/nfqws2.log"
 ACTIVE_FILE="$STATE_DIR/active_strategy"
+FIRST_STRATEGY=hardcorp74      # стратегия при первой установке
 
 # Release-shipped lists; .pending = newer version kept aside due to user edits
 LISTS_PENDING_DIR="$LISTS_DIR/.pending"
@@ -143,7 +144,12 @@ validate_conf() {
 load_conf() {
   sync_lists_and_blobs
   if [ ! -f "$CONFFILE" ]; then
-    cp -f "$MODDIR/defaults/nfqws2.conf" "$CONFFILE" 2>/dev/null
+    # без конфига — та же стратегия, что ставит первая установка (customize.sh)
+    if [ -f "$STRATEGIES_DIR/$FIRST_STRATEGY.conf" ] && cp -f "$STRATEGIES_DIR/$FIRST_STRATEGY.conf" "$CONFFILE" 2>/dev/null; then
+      echo "$FIRST_STRATEGY" > "$ACTIVE_FILE" 2>/dev/null
+    else
+      cp -f "$MODDIR/defaults/nfqws2.conf" "$CONFFILE" 2>/dev/null
+    fi
   fi
   local err
   err=$(validate_conf "$CONFFILE" 2>&1) || {

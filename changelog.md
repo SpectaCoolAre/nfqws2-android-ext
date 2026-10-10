@@ -1,9 +1,10 @@
-### Изменения в следующей версии:
+### Изменения в v2.0.3:
 
 - **Обход блокировки DoT/DoH** (DNS по профилям → «Блокировка DNS»): если провайдер режет DoH и DoT, соединения с публичными DNS (Cloudflare, Google, AdGuard, Comss, XBox DNS, GeoHide, dns.malw.link и др.) идут через обход. Работает и без профилей — например, для «Частного DNS» Android. Стратегия из [nfqws-menu](https://github.com/rndnaame/nfqws-menu)
 - DNS-пресеты с доменами: GeoHide (352 домена сервисов с геоблокировкой), Instagram через CleanBrowsing, Twitch через XBox DNS, Supercell через NullsProxy, ntc.party через dns.malw.link, Rutor через sw.ext.io; новые серверы DNS-AI, dns.malw.link и AstraCat
 - Hosts: если raw.githubusercontent.com недоступен, списки скачиваются с зеркал jsDelivr
-- Стратегии из nfqws-menu: Discord и игры в alt-, fake- и simple-стратегиях и Uvvi2 — с новыми блобами (quic_initial_steamcommunity_com, quic_initial_4pda_to); в alt11 вернулся обход discord.media и Google; новый hardcorp74 со списками user_extra и хостингов (ipset_as*). **Чтобы получить исправления, выберите стратегию заново**
+- Стратегии из nfqws-menu: Discord и игры в alt-, fake- и simple-стратегиях и Uvvi2 — с новыми блобами (quic_initial_steamcommunity_com, quic_initial_4pda_to); в alt11 вернулся обход discord.media и Google. **Чтобы получить исправления, выберите стратегию заново**
+- hardcorp74 — проверенная версия: четыре варианта перебора для TCP, перебор фейков для UDP (Discord, STUN, WireGuard), IP-списки хостингов (ipset_as*). При первой установке она выбрана сразу
 
 ### Изменения в v2.0.2:
 

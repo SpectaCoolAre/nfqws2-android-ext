@@ -509,4 +509,13 @@ assert_rc 1 $? "system wrapper rejects non-root user"
 assert_contains "$out" "требуется root" "wrapper prints root reminder"
 rm -rf "$non_root_bin"
 
+section "first install starts with hardcorp74"
+rm -f "$CONFFILE" "$CONFDIR/state/active_strategy"
+load_conf >/dev/null 2>&1
+assert_eq "hardcorp74" "$(cat "$CONFDIR/state/active_strategy" 2>/dev/null)" "the first strategy is hardcorp74"
+assert_eq "$(cat "$MODDIR/strategies/hardcorp74.conf")" "$(cat "$CONFFILE")" "and the config is that strategy"
+ctl conf-modified
+assert_eq "0" "$ctl_out" "which reads as unmodified"
+conf_reset; rm -f "$CONFDIR/state/active_strategy"
+
 harness_finish
