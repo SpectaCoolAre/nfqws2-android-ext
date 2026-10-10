@@ -39,8 +39,7 @@ function renderSettings(){
       // только если в модуле есть dnsproxy
       {icon: 'dns', title: 'DNS по профилям', sub: t('Свои DoH, DoT и DNS-серверы для выбранных доменов'), on: "navigate('dns')", chevron: true}
     ] : []).concat([
-      {icon: 'edit', title: 'Редактор hosts', sub: t('Свои записи, блокировка рекламы и пресеты — без перезагрузки'), on: "navigate('hosts')", chevron: true},
-      {icon: 'file', title: 'Открыть в файловом менеджере', sub: t('Папка модуля или настроек — в MT Manager и других root-проводниках'), on: 'openInFileManager(this)', menu: true}
+      {icon: 'edit', title: 'Редактор hosts', sub: t('Свои записи, блокировка рекламы и пресеты — без перезагрузки'), on: "navigate('hosts')", chevron: true}
     ])],
     ['Резервная копия', [
       {icon: 'download', title: 'Создать копию', sub: t('Конфиг, списки, стратегии и оформление — в архив .tar'), on: 'createBackup()'},
@@ -355,45 +354,3 @@ async function openWhatsNew(auto){
   openSheet('whatsnew-sheet');
 }
 
-/* ══ Открыть папку в файловом менеджере ═════════════════════════════════
-   Папка модуля (скрипты, WebUI) или настроек (/data/adb/nfqws2: конфиг,
-   списки, стратегии). Приложения — те, что система называет для папки, и
-   установленные root-проводники; если приложение не открылось сразу на
-   пути, путь копируется в буфер. */
-const FM_DIRS = [
-  ['/data/adb/nfqws2', 'Настройки и списки'],
-  [MOD, 'Папка модуля']
-];
-const FM_NAMES = {
-  'bin.mt.plus': 'MT Manager', 'bin.mt.plus.canary': 'MT Manager (canary)', 'com.mixplorer': 'MiXplorer',
-  'com.mixplorer.silver': 'MiXplorer Silver', 'pl.solidexplorer2': 'Solid Explorer', 'com.speedsoftware.rootexplorer': 'Root Explorer',
-  'nextapp.fx': 'FX File Explorer', 'me.zhanghai.android.files': 'Material Files', 'com.amaze.filemanager': 'Amaze',
-  'com.cxinventor.file.explorer': 'CX File Explorer', 'com.lonelycatgames.Xplore': 'X-plore', 'com.ghisler.android.TotalCommander': 'Total Commander',
-  'com.alphainventor.filemanager': 'File Manager+', 'com.rhmsoft.fm': 'File Manager'
-};
-function openInFileManager(anchor){
-  openMenu(anchor, FM_DIRS.map(([dir, label]) => ({
-    label: t(label), sub: dir, icon: 'file', onClick: () => pickFileManager(anchor, dir)
-  })));
-}
-async function pickFileManager(anchor, dir){
-  const r = await withBusy(['fm-list', dir]);
-  const apps = (r.code ? '' : r.out).split('\n').map(l => l.split('\t')).filter(p => p[0] === 'APP')
-    // системный «Файлы» до /data/adb не дойдёт — не предлагаем
-    .filter(p => !/documentsui$/.test(p[1]));
-  const items = apps.map(([, pkg, comp]) => ({
-    label: FM_NAMES[pkg] || pkg, icon: 'file', onClick: () => openFolderWith(dir, pkg, comp)
-  }));
-  if(items.length) items.push('-');
-  items.push({label: t('Копировать путь'), icon: 'copy', onClick: async () => toast(await copyText(dir) ? t('Путь скопирован: {0}', dir) : dir)});
-  if(!apps.length) toast(t('Не нашлось проводника с root-доступом — путь можно скопировать'));
-  setTimeout(() => openMenu(anchor, items), 0);
-}
-async function openFolderWith(dir, pkg, comp){
-  const r = await withBusy(['fm-open', dir, pkg, comp || '-']);
-  if(r.code){ toast(errText(r, 'Не удалось открыть приложение')); return; }
-  if(r.out.trim() === 'launched'){
-    const ok = await copyText(dir);
-    toast(ok ? t('Приложение не открывает папки по ссылке: путь скопирован, вставьте его в адресную строку') : t('Откройте вручную: {0}', dir));
-  }
-}

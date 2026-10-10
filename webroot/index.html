@@ -51,6 +51,7 @@
 <symbol id="i-download" viewBox="0 -960 960 960"><path d="M480-320 280-520l56-58 104 104v-326h80v326l104-104 56 58-200 200ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z"/></symbol>
 <symbol id="i-upload" viewBox="0 -960 960 960"><path d="M440-320v-326L336-542l-56-58 200-200 200 200-56 58-104-104v326h-80ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z"/></symbol>
 <symbol id="i-trash" viewBox="0 -960 960 960"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></symbol>
+<symbol id="i-share" viewBox="0 -960 960 960"><path d="M680-80q-50 0-85-35t-35-85q0-6 3-28L282-392q-16 15-37 23.5t-45 8.5q-50 0-85-35t-35-85q0-50 35-85t85-35q24 0 45 8.5t37 23.5l281-164q-2-7-2.5-13.5T560-760q0-50 35-85t85-35q50 0 85 35t35 85q0 50-35 85t-85 35q-24 0-45-8.5T598-672L317-508q2 7 2.5 13.5t.5 14.5q0 8-.5 14.5T317-452l281 164q16-15 37-23.5t45-8.5q50 0 85 35t35 85q0 50-35 85t-85 35Z"/></symbol>
 <symbol id="i-dedupe" viewBox="0 -960 960 960"><path d="m576-160-56-56 104-104-104-104 56-56 104 104 104-104 56 56-104 104 104 104-56 56-104-104-104 104Zm-456-160v-80h320v80H120Zm0-160v-80h480v80H120Zm0-160v-80h480v80H120Z"/></symbol>
 <symbol id="i-up" viewBox="0 -960 960 960"><path d="M480-528 296-344l-56-56 240-240 240 240-56 56-184-184Z"/></symbol>
 <symbol id="i-down" viewBox="0 -960 960 960"><path d="M480-344 240-584l56-56 184 184 184-184 56 56-240 240Z"/></symbol>
@@ -236,6 +237,13 @@
             <span class="li-secondary" data-t>Открыть редактор</span>
           </span>
           <span class="li-trail"><svg aria-hidden="true" class="icon s24"><use href="#i-chevron-right"/></svg></span>
+        </div>
+        <div class="list-item two-line clickable state" role="button" tabindex="0" aria-haspopup="menu" onclick="shareFileMenu(this, CONFFILE_PATH)">
+          <span class="li-icon"><svg aria-hidden="true" class="icon s24"><use href="#i-share"/></svg></span>
+          <span class="li-text">
+            <span class="li-primary" data-t>Поделиться</span>
+            <span class="li-secondary" data-t>Открыть в MT Manager или отправить стратегию в чат</span>
+          </span>
         </div>
         <div class="list-item two-line clickable state danger appear-item" role="button" tabindex="0" id="conf-reset" hidden onclick="resetConf()">
           <span class="li-icon"><svg aria-hidden="true" class="icon s24"><use href="#i-restart"/></svg></span>

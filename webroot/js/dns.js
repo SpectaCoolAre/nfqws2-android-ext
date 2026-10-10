@@ -224,7 +224,6 @@ function renderDns(){
       sub: t('DNS работает, даже когда служба остановлена или на паузе. Выключить его тогда можно только переключателем выше.'),
       on: 'setDnsStandalone(this.checked, this)'}) +
     (dnsLoaded && on ? dnsStateRow() : '') +
-    settingsRow({icon: 'search', title: 'Проверить домен', sub: t('Через какой профиль он резолвится и в какой адрес'), on: 'testDnsDomain()'}) +
     settingsRow({icon: 'logs', title: 'Журнал DNS', sub: t('Запуски, перезапуски и ошибки dnsproxy'), on: 'openDnsLog()'}),
     false);
   const max = dnsMax('profiles', 32);
@@ -437,20 +436,6 @@ async function saveDnsProfile(p, isNew){
   return true;
 }
 
-async function testDnsDomain(){
-  const v = await mdPrompt(t('Проверить домен'), t('Запрос пойдёт через системный резолвер — так же, как у приложений.'), 'instagram.com', t('Домен'),
-    {ok: t('Проверить')});
-  if(!v) return;
-  const {ok} = dnsParseDomains(v);
-  if(!ok.length){ toast(t('Некорректный домен')); return; }
-  const r = await withBusy(['dns-test', ok[0]], 20000);
-  if(r.code){ toast(errText(r, 'Не удалось проверить')); return; }
-  const [ip, prof] = (r.out.trim().split('\n').pop() || '').split('\t');
-  const p = prof && dnsProfile(prof);
-  mdDialog({title: ok[0], iconName: 'dns', cancel: false, ok: t('Понятно'),
-    text: t('Адрес: {0}', ip && ip !== '—' ? ip : t('не получен')) + '\n' +
-      t('Через: {0}', p ? t('профиль «{0}»', p.name) : t('DNS по умолчанию — {0}', dnsDefaultLabel()))});
-}
 
 /* «Частный DNS» в Android: отдельного экрана для него нет, ближайший —
    «Сеть и интернет», он там внизу. */

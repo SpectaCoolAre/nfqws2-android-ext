@@ -332,6 +332,20 @@ async function ctlx(a, ms, onLine){
 }
 const errText = (r, fallback) => ((r.err || '').trim() || (r.out || '').trim().split('\n').pop() || t(fallback));
 
+/* «Поделиться» файлом модуля: файлом (file:// на настоящий путь — root-
+   проводник вроде MT Manager откроет его на месте) или текстом (в чат). */
+const CONFFILE_PATH = '/data/adb/nfqws2/nfqws2.conf';
+function shareFileMenu(anchor, path){
+  openMenu(anchor, [
+    {label: t('Файлом'), sub: t('MT Manager и другие root-проводники'), icon: 'file', onClick: () => shareFile('file', path)},
+    {label: t('Текстом'), sub: t('В чат, заметки, почту'), icon: 'copy', onClick: () => shareFile('text', path)}
+  ]);
+}
+async function shareFile(how, path){
+  const r = await withBusy(['share', how, path]);
+  if(r.code) toast(errText(r, 'Не удалось поделиться'));
+}
+
 /* Буфер обмена: Clipboard API, а где WebView его не даёт — старый execCommand */
 async function copyText(text){
   try { await navigator.clipboard.writeText(text); return true; }
