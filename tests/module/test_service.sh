@@ -239,6 +239,27 @@ done
 unset MOCK_IPT_FEATURES
 firewall_stop >/dev/null 2>&1
 
+section "QUIC to Meta is rejected at once"
+conf_reset
+load_conf >/dev/null 2>&1
+ipt_reset
+firewall_start >/dev/null 2>&1
+snap=$(ipt_snapshot)
+assert_contains "$snap" "-p udp --dport 443 -d 157.240.0.0/16 -j REJECT --reject-with icmp-port-unreachable" "on by default: QUIC to Meta gets an ICMP reject"
+assert_contains "$snap" "2a03:2880::/32 -j REJECT --reject-with icmp6-port-unreachable" "and over IPv6"
+assert_eq "1" "$(grep -c nfqws_mquic "$MOCK_IPT_STORE/iptables/filter/OUTPUT" 2>/dev/null)" "for the phone's own traffic"
+assert_eq "1" "$(grep -c nfqws_mquic "$MOCK_IPT_STORE/iptables/filter/FORWARD" 2>/dev/null)" "and for hotspot clients"
+firewall_stop >/dev/null 2>&1
+assert_not_contains "$(ipt_snapshot)" "nfqws_mquic" "stopping removes the rules"
+printf 'META_QUIC_REJECT=0\n' >> "$CONFFILE"
+load_conf >/dev/null 2>&1
+ipt_reset
+firewall_start >/dev/null 2>&1
+assert_not_contains "$(ipt_snapshot)" "nfqws_mquic" "off: no reject rules"
+firewall_stop >/dev/null 2>&1
+conf_reset
+load_conf >/dev/null 2>&1
+
 section "DoT/DoH blocking bypass queues port 853"
 ipt_reset
 firewall_start >/dev/null 2>&1

@@ -163,7 +163,8 @@ const SW = [
   ['ENABLE_HOTSPOT', 'Точка доступа с nfqws2', 'enable_hotspot']
 ];
 const DEV_SW = [
-  ['WATCHDOG', 'Watchdog', 'watchdog']
+  ['WATCHDOG', 'Watchdog', 'watchdog'],
+  ['META_QUIC_REJECT', 'Отказ QUIC для Instagram', 'meta_quic']
 ];
 const LIMITS = [
   ['PKT_LIMIT_OUT', 'Исходящие пакеты', 'Сколько первых пакетов соединения обрабатывать', 'pkt_limit_out'],

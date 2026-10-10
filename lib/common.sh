@@ -44,6 +44,10 @@ IPT_GROUP_QOUT="nfqws_qout"
 IPT_GROUP_QIN="nfqws_qin" # like QOUT, for incoming when connbytes is missing
 IPT_GROUP_APP="nfqws_app"
 IPT_GROUP_FWD="nfqws_fwd"
+IPT_GROUP_MQ="nfqws_mquic"     # filter: мгновенный отказ QUIC к Meta (META_QUIC_REJECT)
+# Сети Meta (Instagram, Facebook, WhatsApp): AS32934
+META_NET4="157.240.0.0/16 31.13.24.0/21 31.13.64.0/18 57.144.0.0/14 163.70.128.0/17 129.134.0.0/16 69.171.224.0/19 173.252.64.0/18 179.60.192.0/22 185.60.216.0/22 66.220.144.0/20 69.63.176.0/20 102.132.96.0/20 204.15.20.0/22 45.64.40.0/22"
+META_NET6="2a03:2880::/32"
 NET_STRATEGIES_DIR="$CONFDIR/net_strategies"
 IPT_CAP_CACHE="$STATE_DIR/iptables-capabilities"
 
@@ -81,6 +85,7 @@ set_defaults() {
   : "${ENABLE_HOTSPOT:=1}"
   : "${NET_STRATEGY:=0}"
   : "${DOH_BYPASS:=0}"
+  : "${META_QUIC_REJECT:=1}"
 }
 
 log_msg() {
@@ -775,6 +780,44 @@ _firewall_stop() {
   fi
 }
 
+# QUIC к Meta — сразу отказ (ICMP «порт недоступен»), а не молчаливая потеря.
+# На мобильных сетях QUIC Instagram проходит обход, но потом встаёт посреди
+# ролика, а к cdn.fbsbx.com (картинки и GIF) не проходит вовсе; на молчаливую
+# потерю приложение ждёт таймаута. Получив отказ, оно сразу идёт по TCP — как
+# за роутером, где провайдер QUIC к Meta не пропускает. Правила в таблице
+# filter (REJECT в mangle нельзя), снимаются вместе с остальными.
+_meta_quic_chain() { # <iptables|ip6tables> <сети> <reject-with>
+  local C="$1" n
+  command -v "$C" >/dev/null 2>&1 || return 0
+  $C -w -t filter -N $IPT_GROUP_MQ 2>/dev/null || return 0
+  for n in $2; do
+    $C -w -t filter -A $IPT_GROUP_MQ -p udp --dport 443 -d "$n" -j REJECT --reject-with "$3" 2>/dev/null || {
+      log_msg "$C: нет REJECT — отказ QUIC к Meta недоступен"
+      $C -w -t filter -F $IPT_GROUP_MQ 2>/dev/null; $C -w -t filter -X $IPT_GROUP_MQ 2>/dev/null
+      return 0
+    }
+  done
+  $C -w -t filter -I OUTPUT 1 -j $IPT_GROUP_MQ
+  $C -w -t filter -I FORWARD 1 -j $IPT_GROUP_MQ 2>/dev/null
+  return 0
+}
+meta_quic_stop() {
+  local C
+  for C in iptables ip6tables; do
+    command -v "$C" >/dev/null 2>&1 || continue
+    while $C -w -t filter -D OUTPUT -j $IPT_GROUP_MQ 2>/dev/null; do :; done
+    while $C -w -t filter -D FORWARD -j $IPT_GROUP_MQ 2>/dev/null; do :; done
+    $C -w -t filter -F $IPT_GROUP_MQ 2>/dev/null; $C -w -t filter -X $IPT_GROUP_MQ 2>/dev/null
+  done
+  return 0
+}
+meta_quic_start() {
+  meta_quic_stop
+  [ "$META_QUIC_REJECT" = "1" ] || return 0
+  _meta_quic_chain iptables "$META_NET4" icmp-port-unreachable
+  _meta_quic_chain ip6tables "$META_NET6" icmp6-port-unreachable
+}
+
 firewall_iptables()  { _firewall_start iptables; }
 firewall_ip6tables() { [ "$IPV6_ENABLED" = "0" ] && return 0; _firewall_start ip6tables; }
 
@@ -826,6 +869,7 @@ firewall_start() {
   else
     firewall_ip6tables || rc=1
   fi
+  meta_quic_start
   apply_tether_offload
   return $rc
 }
@@ -834,6 +878,7 @@ firewall_stop() {
   local rc=0
   _firewall_stop iptables || rc=1
   _firewall_stop ip6tables || rc=1
+  meta_quic_stop
   restore_tether_offload
   return $rc
 }
@@ -1116,7 +1161,7 @@ render_strategy() {
 
 # Module settings (same across strategies) are carried over whole from the live
 # config on strategy change/reset. NFQWS_EXTRA_ARGS only for standard $MODE_* refs.
-USER_KEYS="DOH_BYPASS IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI ENABLE_HOTSPOT NET_STRATEGY NFQWS_EXTRA_ARGS"
+USER_KEYS="DOH_BYPASS META_QUIC_REJECT IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI ENABLE_HOTSPOT NET_STRATEGY NFQWS_EXTRA_ARGS"
 merge_user_keys() { # <generated config> <settings source config>  -> stdout
   awk -v keys=" $USER_KEYS " -v src="$2" '
     function quotes(str,   t) { t = str; return gsub(/"/, "", t) }

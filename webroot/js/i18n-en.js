@@ -276,6 +276,7 @@ EN = {
  "Стратегия обхода": "Bypass strategy",
  "Параметры": "Options",
  "Для разработчиков": "For developers",
+ "Отказ QUIC для Instagram": "Reject QUIC for Instagram",
  "Watchdog": "Watchdog",
  "Режим обработки": "Processing mode",
  "Добавить домен": "Add domain",
