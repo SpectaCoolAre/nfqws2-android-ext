@@ -239,6 +239,17 @@ done
 unset MOCK_IPT_FEATURES
 firewall_stop >/dev/null 2>&1
 
+section "DoT/DoH blocking bypass queues port 853"
+ipt_reset
+firewall_start >/dev/null 2>&1
+assert_not_contains "$(ipt_snapshot)" "853" "off: port 853 is not queued"
+firewall_stop >/dev/null 2>&1
+printf 'DOH_BYPASS=1\n' >> "$CONFFILE"
+load_conf >/dev/null 2>&1
+ipt_reset
+firewall_start >/dev/null 2>&1
+assert_contains "$(ipt_snapshot)" "853" "on: DoT traffic goes to the queue"
+
 section "watchdog and netwatch helpers"
 
 # Both are started through one shared helper now, and the helper's return value

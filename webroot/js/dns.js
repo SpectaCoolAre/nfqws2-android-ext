@@ -153,6 +153,26 @@ async function dnsInit(){
   if(dnsSel) dnsSelExit(true);
   if(!dnsLoaded) renderDns();
   if(await loadDnsState()) renderDns();
+  await stat(true);
+  renderDnsDoh();
+}
+
+/* Обход блокировки DoT/DoH — настройка службы обхода, а не dnsproxy: работает
+   и без профилей, например для «Частного DNS» Android */
+function renderDnsDoh(){
+  setHTML('dns-doh', settingsRow({icon: 'shield', title: 'Обход блокировки DoT/DoH', sw: true, checked: S.doh_bypass == 1,
+    sub: t('Если провайдер блокирует DoH и DoT: соединения с публичными DNS (Cloudflare, Google, AdGuard, Comss, XBox DNS, GeoHide и др.) идут через обход'),
+    on: 'setDohBypass(this.checked, this)'}), false);
+}
+async function setDohBypass(on, el){
+  const r = await withBusy(['set', 'DOH_BYPASS', on ? '1' : '0'], 40000);
+  if(r.code){ toast(errText(r, 'Не удалось сохранить')); el.checked = !on; return; }
+  if(S.running){
+    const rr = await withBusy(['restart'], 60000);
+    toast(rr.code ? errText(rr, 'Не удалось перезапустить службу') : t('Сохранено, служба перезапущена'));
+  } else toast(t('Сохранено'));
+  await stat(true);
+  renderDnsDoh();
 }
 
 function dnsDefaultLabel(){
@@ -245,6 +265,7 @@ function renderDns(){
     : '<div class="empty"><span class="empty-icon">' + icon('dns', 's24') + '</span><span>' +
       esc(t('Профилей пока нет. Добавьте свой или возьмите готовый из пресетов.')) + '</span></div>', false);
   $('dns-add').disabled = dnsSt.profiles.length >= max;
+  renderDnsDoh();
 }
 
 /* ── Выбор нескольких профилей ─────────────────────────────────────────

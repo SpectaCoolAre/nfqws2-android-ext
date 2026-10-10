@@ -30,6 +30,7 @@
 | Проверка доступности сайтов, TCP 16K и DNS | ✅ | ✅ |
 | Проверка одного домена: в каких он списках, под обходом ли, открывается ли | ❌ | ✅ |
 | **DNS по профилям**: свои DoH / DoT / DoQ / обычные DNS для выбранных доменов | ❌ | ✅ |
+| Обход блокировки DoT/DoH | ❌ | ✅ |
 | **Редактор hosts** без перезагрузки: обход ограничений и блокировка рекламы | ❌ | ✅ |
 | «Поделиться» конфигом — файлом в MT Manager или текстом в чат | ❌ | ✅ |
 | «Что нового» после обновления | ❌ | ✅ |
@@ -56,7 +57,8 @@
 
 * DoH, DoH3, DoT, DoQ, обычный DNS и DNS-штампы `sdns://`; до 8 серверов в профиле.
 * До 1000 доменов в профиле, по одному или списком; ссылки и `*.site.com` приводятся к домену.
-* Пресеты XBox DNS, Comss.one и GeoHide.
+* Пресеты с доменами (GeoHide, Instagram, Twitch, Supercell, ntc.party, Rutor) и серверы XBox DNS, Comss.one, DNS-AI, dns.malw.link, AstraCat.
+* **Обход блокировки DoT/DoH**: если провайдер режет DoH и DoT, соединения с публичными DNS идут через обход — работает и для «Частного DNS» Android.
 * Режим «Без службы обхода»: DNS работает, даже когда обход остановлен или на паузе.
 
 ## 📝 Редактор hosts
@@ -93,7 +95,7 @@
 * [bol-van](https://github.com/bol-van) — за оригинальный и непревзойденный проект zapret.
 * [nfqws2-keenetic](https://github.com/nfqws/nfqws2-keenetic) — за идеи адаптации конфигов и логику авто-стратегий.
 * [dpi-detector](https://github.com/Runnin4ik/dpi-detector) — за алгоритмы детекции и классификации блокировок DPI.
-* [nfqws-menu](https://github.com/rndnaame/nfqws-menu) — за стратегии, блобы и списки адресов хостингов.
+* [nfqws-menu](https://github.com/rndnaame/nfqws-menu) — за стратегии, блобы, списки адресов хостингов, обход блокировки DoT/DoH и домены DNS-пресетов.
 * [bindhosts](https://github.com/bindhosts/bindhosts) — за логику редактора hosts без перезагрузки, источники для блокировки рекламы, а также множество референсов и идей.
 * [AdAway](https://adaway.org), [r-a-y/mobile-hosts](https://github.com/r-a-y/mobile-hosts), [GeoHide](https://geohide.ru) и [dns.malw.link](https://github.com/ImMALWARE/dns.malw.link) — за списки hosts, доступные пресетами.
 * Разработчикам [KernelSU](https://github.com/tiann/kernelSU), [Magisk](https://github.com/topjohnwu/magisk) и [APatch](https://github.com/bmax121/APatch).

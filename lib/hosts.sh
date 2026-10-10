@@ -203,7 +203,19 @@ hosts_cache_name() {
 hosts_source_url() { case "$1" in preset:*) hosts_preset_get "${1#preset:}" URL ;; local:*) ;; *) printf '%s' "$1" ;; esac; }
 hosts_sources() { sed 's/#.*//; s/[[:space:]]*$//; s/^[[:space:]]*//' "$HOSTS_SOURCES" 2>/dev/null | grep -E '^(preset:[a-z0-9_-]+|local:imported|https?://[^[:space:]]+)$'; }
 
-hosts_download() { # <url> <файл>
+# Зеркала для raw.githubusercontent.com (у части провайдеров он недоступен):
+# jsDelivr и его Fastly-узел отдают те же файлы репозитория — как в nfqws-menu
+hosts_mirrors() { # <url> -> адреса по очереди: исходный, затем зеркала
+  printf '%s\n' "$1"
+  case "$1" in
+    https://raw.githubusercontent.com/*/*/*/*)
+      # sed без \n в замене — toybox его не понимает
+      local p
+      p=$(printf '%s' "$1" | sed 's#^https://raw.githubusercontent.com/\([^/]*\)/\([^/]*\)/\([^/]*\)/#\1/\2@\3/#')
+      printf 'https://cdn.jsdelivr.net/gh/%s\nhttps://fastly.jsdelivr.net/gh/%s\n' "$p" "$p" ;;
+  esac
+}
+_hosts_get() { # <url> <файл>
   local to=""
   command -v timeout >/dev/null 2>&1 && to="timeout 90"
   if command -v curl >/dev/null 2>&1; then
@@ -212,6 +224,15 @@ hosts_download() { # <url> <файл>
     $to busybox wget -T 15 --no-check-certificate -qO "$2" "$1"
   fi
 }
+hosts_download() { # <url> <файл>
+  local u
+  for u in $(hosts_mirrors "$1"); do
+    _hosts_get "$u" "$2" && [ -s "$2" ] && return 0
+  done
+  rm -f "$2"
+  return 1
+}
+
 # Источник блокировки в кэш: только записи блокировки (у dns.malw.link в том
 # же файле сначала идёт обход — его отсюда не берём)
 hosts_fetch_block() { # <источник>

@@ -2,15 +2,15 @@
 /*
  * Скриншоты для README: WebUI в Chromium с заглушкой ksu.exec (как в
  * tests/webui), по три экрана в светлой и тёмной теме. Кадры складываются в
- * docs/screenshots/<тема>-<n>.png, склейка — tools/screenshots.py.
- *   NODE_PATH=$(npm root -g) node tools/screenshots.js
+ * docs/screenshots/<тема>-<n>.png, склейка — docs/screenshots/compose.py.
+ *   NODE_PATH=$(npm root -g) node docs/screenshots/make.js
  */
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
 
-const REPO = path.resolve(__dirname, '..');
+const REPO = path.resolve(__dirname, '..', '..');
 const INDEX = 'file:///' + path.join(REPO, 'webroot', 'index.html');
 const OUT = process.env.SHOTS_DIR || path.join(REPO, 'docs', 'screenshots', 'raw');
 fs.mkdirSync(OUT, { recursive: true });

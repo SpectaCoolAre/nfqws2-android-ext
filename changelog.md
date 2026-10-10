@@ -1,3 +1,10 @@
+### Изменения в следующей версии:
+
+- **Обход блокировки DoT/DoH** (DNS по профилям → «Блокировка DNS»): если провайдер режет DoH и DoT, соединения с публичными DNS (Cloudflare, Google, AdGuard, Comss, XBox DNS, GeoHide, dns.malw.link и др.) идут через обход. Работает и без профилей — например, для «Частного DNS» Android. Стратегия из [nfqws-menu](https://github.com/rndnaame/nfqws-menu)
+- DNS-пресеты с доменами: GeoHide (352 домена сервисов с геоблокировкой), Instagram через CleanBrowsing, Twitch через XBox DNS, Supercell через NullsProxy, ntc.party через dns.malw.link, Rutor через sw.ext.io; новые серверы DNS-AI, dns.malw.link и AstraCat
+- Hosts: если raw.githubusercontent.com недоступен, списки скачиваются с зеркал jsDelivr
+- Стратегии из nfqws-menu: Discord и игры в alt-, fake- и simple-стратегиях и Uvvi2 — с новыми блобами (quic_initial_steamcommunity_com, quic_initial_4pda_to); в alt11 вернулся обход discord.media и Google; новый hardcorp74 со списками user_extra и хостингов (ipset_as*). **Чтобы получить исправления, выберите стратегию заново**
+
 ### Изменения в v2.0.2:
 
 - **Редактор hosts** (Настройки → Инструменты): свой hosts подменяет системный сразу, без перезагрузки и отдельного модуля — логика [bindhosts](https://github.com/bindhosts/bindhosts). Две части со своими файлами: обход ограничений (`bypass.txt`, пресет GeoHide или dns.malw.link) и блокировка рекламы (`block.txt` из AdAway, AdGuard DNS filter, рекламной части dns.malw.link, своих ссылок и доменов, кроме исключений). Файлы можно отправить в MT Manager; правки вне WebUI замечаются. Входит в резервную копию

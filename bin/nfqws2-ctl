@@ -213,7 +213,7 @@ cmd_json_status() {
 {"running":$run,"pid":"$pid","uptime":$uptime,"strategy":"$(json_str "$cur_strat")","version":"$(json_str "$ver")","mode":"$(json_str "$(current_mode)")",
 "pkt_limit_out":$PKT_LIMIT_OUT,"pkt_limit_in":$PKT_LIMIT_IN,"block_quic":$BLOCK_QUIC,"app_mode":"$(json_str "$APP_MODE")","autostart":$AUTOSTART,"watchdog":$WATCHDOG,
 "ipv6":$IPV6_ENABLED,"log_level":$LOG_LEVEL,"qdrop":$qdrop,"queue":$NFQUEUE_NUM,"app_uids":$appn,
-"home_wifi":$HOME_WIFI,"enable_hotspot":$ENABLE_HOTSPOT,"net_strategy":$NET_STRATEGY,"dns_available":$dnsav,"dns_enabled":$dnson,"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")","pending":"$(json_str "$pending")",
+"home_wifi":$HOME_WIFI,"enable_hotspot":$ENABLE_HOTSPOT,"net_strategy":$NET_STRATEGY,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":${DOH_BYPASS:-0},"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")","pending":"$(json_str "$pending")",
 "counts":{"user":$cnt_user,"auto":$cnt_auto,"exclude":$cnt_excl,"ipset":$cnt_ipset,"ipset_exclude":$cnt_ipset_excl,"apps":$cnt_apps}}
 JSON
 }
@@ -1262,7 +1262,7 @@ case "$1" in
 
   set)
     case "$2" in
-      BLOCK_QUIC|AUTOSTART|WATCHDOG|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|ENABLE_HOTSPOT|NET_STRATEGY) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
+      BLOCK_QUIC|AUTOSTART|WATCHDOG|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|ENABLE_HOTSPOT|NET_STRATEGY|DOH_BYPASS) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
       PKT_LIMIT_OUT|PKT_LIMIT_IN) case "$3" in [1-9]|1[0-5]) ;; *) echo "Допустимо 1..15" >&2; exit 1 ;; esac ;;
       APP_MODE) case "$3" in off|include|exclude) ;; *) echo "off|include|exclude" >&2; exit 1 ;; esac ;;
       *) echo "Параметр $2 нельзя менять этой командой" >&2; exit 1 ;;

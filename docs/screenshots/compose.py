@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Склейка кадров tools/screenshots.js в docs/screenshots/{light,dark}.jpg:
+"""Склейка кадров docs/screenshots/make.js в docs/screenshots/{light,dark}.jpg:
 три экрана в скруглённых карточках с тенью на фоне в цвет темы."""
 import os, sys
 from PIL import Image, ImageDraw, ImageFilter

@@ -94,6 +94,14 @@ ctl hosts-state
 assert_contains "$ctl_out" "bypass_preset=" "editing the bypass by hand forgets the preset"
 assert_not_contains "$ctl_out" "bypass_preset=geohide" "for good"
 
+# raw.githubusercontent.com недоступен — пресет берётся с зеркала jsDelivr
+mv "$WEB/raw.githubusercontent.com_ImMALWARE_dns.malw.link_master_hosts" "$WEB/cdn.jsdelivr.net_gh_ImMALWARE_dns.malw.link@master_hosts"
+ctl hosts-bypass-preset malw
+assert_rc 0 "$ctl_rc" "a preset on raw.githubusercontent.com comes from the jsDelivr mirror"
+assert_contains "$(cat "$H/bypass.txt")" "1.1.1.2 api.chatgpt.com" "with the same entries"
+mv "$WEB/cdn.jsdelivr.net_gh_ImMALWARE_dns.malw.link@master_hosts" "$WEB/raw.githubusercontent.com_ImMALWARE_dns.malw.link_master_hosts"
+ctl hosts-save-b64 bypass "$(b64 '9.9.9.9 new.example')"
+
 section "ad blocking sources"
 printf '# AdAway\n127.0.0.1 ads.example\n127.0.0.1 tracker.ads.example\n0.0.0.0 new.example\n127.0.0.1 keep.example\r\n' > "$WEB/adaway.org_hosts.txt"
 ctl hosts-preset adaway 1

@@ -1,2 +1,4 @@
 # built by CI
 binaries/
+# кадры для docs/screenshots/compose.py
+docs/screenshots/raw/

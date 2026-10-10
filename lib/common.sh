@@ -79,6 +79,7 @@ set_defaults() {
   : "${HOME_WIFI:=0}"
   : "${ENABLE_HOTSPOT:=1}"
   : "${NET_STRATEGY:=0}"
+  : "${DOH_BYPASS:=0}"
 }
 
 log_msg() {
@@ -350,6 +351,10 @@ _startup_args() {
   fi
 
   args="$args $base"
+  # Обход блокировки DoT/DoH — первым профилем, чтобы его не перехватила стратегия
+  if [ "$DOH_BYPASS" = "1" ] && [ -f "$MODDIR/defaults/doh-bypass.conf" ]; then
+    args="$args --blob=doh_tls:@$BLOBS_DIR/tls_clienthello.bin $(norm_args "$(cat "$MODDIR/defaults/doh-bypass.conf")") --new"
+  fi
   [ -n "$custom" ] && args="$args $custom --new"
   [ -n "$udp" ] && args="$args $udp --new"
 
@@ -655,6 +660,11 @@ _firewall_start() {
   IPT_TCP_PORTS=$(printf '%s' "$TCP_PORTS" | tr '-' ':')
   IPT_UDP_EFF=$(printf '%s' "$UDP_PORTS" | tr '-' ':')
   [ "$BLOCK_QUIC" = "1" ] && IPT_UDP_EFF=$(port_list_without "$IPT_UDP_EFF" 443)
+  # DoT (853) нужен в очереди, только когда включён обход блокировки DoT/DoH
+  if [ "$DOH_BYPASS" = "1" ]; then
+    case ",$IPT_TCP_PORTS," in *,853,*) ;; *) IPT_TCP_PORTS="$IPT_TCP_PORTS,853" ;; esac
+    case ",$IPT_UDP_EFF," in *,853,*) ;; *) IPT_UDP_EFF="$IPT_UDP_EFF,853" ;; esac
+  fi
 
   LIMITER=$(detect_limiter "$CMD")
   [ "$FAM" = "iptables" ] && echo "$LIMITER" > "$STATE_DIR/limiter" 2>/dev/null
@@ -1100,7 +1110,7 @@ render_strategy() {
 
 # Module settings (same across strategies) are carried over whole from the live
 # config on strategy change/reset. NFQWS_EXTRA_ARGS only for standard $MODE_* refs.
-USER_KEYS="IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI ENABLE_HOTSPOT NET_STRATEGY NFQWS_EXTRA_ARGS"
+USER_KEYS="DOH_BYPASS IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI ENABLE_HOTSPOT NET_STRATEGY NFQWS_EXTRA_ARGS"
 merge_user_keys() { # <generated config> <settings source config>  -> stdout
   awk -v keys=" $USER_KEYS " -v src="$2" '
     function quotes(str,   t) { t = str; return gsub(/"/, "", t) }

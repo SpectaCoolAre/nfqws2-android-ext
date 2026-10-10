@@ -90,7 +90,9 @@ window.__presets = ${JSON.stringify(PRESETS)};
   window.ksu = { exec: function(cmd, opts, cb){
     var id = typeof cb === 'string' ? cb : opts;
     var rc = 0, out = 'OK', err = '';
-    if (cmd.indexOf('json-status') >= 0) out = ${JSON.stringify(STATUS)};
+    (window.__cmds = window.__cmds || []).push(cmd);
+    if (cmd.indexOf("'DOH_BYPASS'") >= 0) window.__doh = cmd.indexOf("'1'") >= 0 ? 1 : 0;
+    if (cmd.indexOf('json-status') >= 0) out = ${JSON.stringify(STATUS)}.replace('"dns_available"', '"doh_bypass":' + (window.__doh || 0) + ',"dns_available"');
     else if (cmd.indexOf('list-strategies') >= 0) out = 'default\\talt13';
     else if (cmd.indexOf('get-strategy') >= 0) out = 'default';
     else if (cmd.indexOf("'dns-") >= 0) { const a = args(cmd); const r = dns(a.slice(a.findIndex(x => x.startsWith('dns-'))));
@@ -153,6 +155,15 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     eq('dns', await page.evaluate(() => currentPage), 'it opens the DNS screen');
     eq(true, await page.evaluate(() => $('dns-body').classList.contains('is-disabled')), 'the body is greyed out while the feature is off');
 
+    sect(`${mode}: DoT/DoH blocking bypass`);
+    eq(false, await page.isChecked('#dns-doh input'), 'the DoT/DoH bypass is off by default');
+    eq(false, await page.evaluate(() => !!$('dns-doh').closest('[inert]')), 'and can be switched while DNS profiles are off');
+    await page.click('#dns-doh label'); await page.waitForTimeout(700);
+    truthy(await page.evaluate(() => window.__cmds.some(c => c.indexOf("'set' 'DOH_BYPASS' '1'") >= 0)), 'the switch saves DOH_BYPASS=1');
+    truthy(await page.evaluate(() => window.__cmds.some(c => /'restart'/.test(c))), 'and restarts the running service');
+    eq(true, await page.isChecked('#dns-doh input'), 'the switch stays on');
+    await page.click('#dns-doh label'); await page.waitForTimeout(700);
+
     sect(`${mode}: switching on`);
     // Пресеты в профили кладёт модуль при первом запуске (test_dns.sh); у заглушки их нет
     truthy(await page.isVisible('#dns-profiles .empty'), 'an empty state is shown without profiles');
@@ -164,10 +175,14 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     sect(`${mode}: a preset`);
     await page.click('#dns-add'); await menuPick('Из пресетов');
     await page.waitForSelector('#dns-preset-sheet.open');
-    eq(['Comss.one DNS', 'GeoHide DNS', 'XBox DNS'],
-      await page.$$eval('#dns-preset-list .li-primary', l => l.map(e => e.textContent)), 'exactly the three presets');
+    const presetNames = PRESETS.map(p => (/^NAME=(.*)$/m.exec(p.text) || [])[1]).sort();
+    eq(presetNames, (await page.$$eval('#dns-preset-list .li-primary', l => l.map(e => e.textContent))).slice().sort(), 'every preset is offered');
+    const withDomains = PRESETS.filter(p => /^DOMAIN=/m.test(p.text)).length;
+    truthy(withDomains >= 5, 'several presets come with domains');
+    eq(Array(withDomains).fill('dns').join(','), (await page.$$eval('#dns-preset-list .li-icon use', l => l.map(e => e.getAttribute('href').slice(3)))).slice(0, withDomains).join(','),
+      'presets with domains come first');
     await shot('presets');
-    await page.click('#dns-preset-list .list-item:has-text("XBox DNS")'); await idle();
+    await page.click('#dns-preset-list .list-item:has(.li-primary:text-is("XBox DNS"))'); await idle();
     const xbox = await page.evaluate(() => window.__dns.profiles.xbox || '');
     eq(['https://xbox-dns.ru/dns-query', 'tls://xbox-dns.ru', '111.88.96.54', '111.88.96.55'],
       xbox.split('\n').filter(l => l.startsWith('SERVER=')).map(l => l.slice(7)), 'the preset is saved with DoH, DoT and both IPs');

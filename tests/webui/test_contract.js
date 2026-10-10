@@ -154,7 +154,8 @@ truthy(/STRATEGY_GROUPS/.test(webrootSrc), 'the WebUI categorises strategies int
 sect('commands the WebUI sends');
 
 const ctlCommands = new Set(
-  [...ctlSrc.matchAll(/^\s{2}([a-z][a-z0-9-]*)\)/gm)].map(m => m[1])
+  // и вида «start|stop|restart|reload)»
+  [...ctlSrc.matchAll(/^\s{2}([a-z][a-z0-9|-]*)\)/gm)].flatMap(m => m[1].split('|'))
 );
 // Команды dns-* и hosts-* ctl передаёт в dns_ctl / hosts_ctl из lib/
 for (const [prefix, fn, file] of [['dns', 'dns_ctl', 'dns.sh'], ['hosts', 'hosts_ctl', 'hosts.sh']]) {

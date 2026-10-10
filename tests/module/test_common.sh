@@ -244,6 +244,20 @@ args=$(_startup_args)
 assert_contains "$args" "--bind-fix4" "bind-fix4 still applies"
 assert_not_contains "$args" "--bind-fix6" "bind-fix6 is skipped with IPv6 disabled"
 
+section "_startup_args: DoT/DoH blocking bypass"
+conf_reset
+reload_conf
+args=$(_startup_args)
+assert_not_contains "$args" "doh_tls" "off by default"
+printf 'DOH_BYPASS=1\n' >> "$CONFFILE"
+reload_conf
+args=$(_startup_args)
+assert_contains "$args" "--blob=doh_tls:@$BLOBS_DIR/tls_clienthello.bin" "on: its blob is loaded"
+assert_contains "$args" "--filter-tcp=443,853" "and the DoT/DoH profile is added"
+assert_not_contains "$args" "#" "without the comments of its file"
+pre=${args%%--filter-tcp=443,853*}
+assert_not_contains "$pre" "--new" "before every strategy profile"
+
 # ── render_import_merged ──────────────────────────────────────────────────────
 section "render_import_merged"
 
@@ -295,11 +309,11 @@ section "sync_lists_and_blobs: restoring a missing list"
 # A list deleted from the config directory comes back from the module's copy;
 # an existing one, edited by the user, is never overwritten.
 rm -f "$LISTS_DIR/google.list"
-printf 'mine\n' > "$LISTS_DIR/youtube.list"
+printf 'mine\n' > "$LISTS_DIR/ipset_as.list"
 sync_lists_and_blobs >/dev/null 2>&1
 assert_eq "$(cat "$MODDIR/lists/google.list")" "$(cat "$LISTS_DIR/google.list" 2>/dev/null)" \
   "a missing list is copied from the module"
-assert_eq "mine" "$(cat "$LISTS_DIR/youtube.list")" "an existing list is left alone"
+assert_eq "mine" "$(cat "$LISTS_DIR/ipset_as.list")" "an existing list is left alone"
 
 rm -rf "$LISTS_DIR"
 sync_lists_and_blobs >/dev/null 2>&1
