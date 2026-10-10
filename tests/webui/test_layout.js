@@ -661,22 +661,25 @@ const VIEWPORTS = [
     await ctx.addInitScript(STUB);
     await ctx.addInitScript(`(function(){
       var base = window.ksu.exec;
-      window.__h = { enabled: 0, adaway: 0, calls: [] };
-      function state(){ var h = window.__h; return ['#status', 'enabled=' + h.enabled, 'mounted=' + h.enabled, 'conflicts=',
-        'blocked=1200', 'redirects=3', 'built=2026.10.10 12:00:00', 'custom=3',
-        '#preset adaway', 'NAME=AdAway', 'DESC=Реклама', 'URL=https://adaway.org/hosts.txt', 'KIND=block', 'ENABLED=' + h.adaway, h.adaway ? 'COUNT=1200' : '',
-        '#preset malw', 'NAME=dns.malw.link', 'DESC=Доступ', 'URL=https://x/hosts', 'KIND=redirect', 'ENABLED=0',
+      window.__h = { enabled: 0, adaway: 0, differs: 0, preset: '', calls: [] };
+      function state(){ var h = window.__h; return ['#status', 'enabled=' + h.enabled, 'mounted=' + h.enabled, 'differs=' + h.differs, 'conflicts=',
+        'bypass=3', 'bypass_preset=' + h.preset, 'blocked=1200', 'block_custom=2', 'imported=', 'dir=/data/adb/nfqws2/hosts',
+        '#preset adaway', 'NAME=AdAway', 'DESC=Реклама', 'URL=https://adaway.org/hosts.txt', 'BLOCK=1', 'ENABLED=' + h.adaway, h.adaway ? 'COUNT=1200' : '',
+        '#preset geohide', 'NAME=GeoHide', 'DESC=Доступ', 'URL=https://geohide.ru/eu/hosts', 'BYPASS=1', 'ENABLED=0',
+        '#preset malw', 'NAME=dns.malw.link', 'DESC=Доступ', 'BLOCK_DESC=Реклама', 'URL=https://x/hosts', 'BYPASS=1', 'BLOCK=1', 'ENABLED=0',
         '#url', 'URL=https://example.org/my.txt'].join('\\n'); }
       window.ksu.exec = function(cmd, opts, cb){
-        if (cmd.indexOf("'hosts-") < 0) return base.apply(this, arguments);
+        if (cmd.indexOf("'hosts-") < 0 && cmd.indexOf("'share'") < 0) return base.apply(this, arguments);
         var id = typeof cb === 'string' ? cb : opts, h = window.__h, out = 'OK';
         h.calls.push(cmd);
         if (cmd.indexOf("'hosts-state'") >= 0) out = state();
         else if (cmd.indexOf("'hosts-set-enabled' '1'") >= 0) h.enabled = 1;
         else if (cmd.indexOf("'hosts-set-enabled' '0'") >= 0) h.enabled = 0;
         else if (cmd.indexOf("'hosts-preset' 'adaway' '1'") >= 0) h.adaway = 1;
-        else if (cmd.indexOf("'hosts-get' 'custom'") >= 0) out = '1.2.3.4 a.example';
-        else if (cmd.indexOf("'hosts-get' 'current'") >= 0) out = '127.0.0.1 localhost';
+        else if (cmd.indexOf("'hosts-bypass-preset' 'geohide'") >= 0) h.preset = 'geohide';
+        else if (cmd.indexOf("'hosts-sync' 'apply'") >= 0) h.differs = 0;
+        else if (cmd.indexOf("'hosts-block-add'") >= 0) out = '2';
+        else if (cmd.indexOf("'hosts-get' 'bypass'") >= 0) out = '1.2.3.4 a.example';
         else if (cmd.indexOf("'hosts-update'") >= 0) out = 'S\\tpreset:adaway\\tok 1200';
         setTimeout(function(){ if (window[id]) window[id](0, out, ''); }, 0);
         return 'job';
@@ -691,29 +694,44 @@ const VIEWPORTS = [
     truthy((await page.textContent('#settings-body')).includes('Редактор hosts'), 'settings list the hosts editor');
     await page.evaluate(() => navigate('hosts')); await page.waitForTimeout(900);
     eq(false, await page.isChecked('#hosts-toggle'), 'it starts off');
-    truthy((await page.textContent('#hosts-sources')).includes('AdAway') && (await page.textContent('#hosts-sources')).includes('example.org/my.txt'),
-      'presets and own links are listed');
+    const src = await page.textContent('#hosts-sources');
+    truthy(src.includes('AdAway') && src.includes('dns.malw.link') && src.includes('example.org/my.txt'), 'block sources and own links are listed');
+    truthy(!src.includes('GeoHide'), 'a bypass-only preset is not a block source');
+    truthy(!/\d{4}\.\d\d\.\d\d/.test(await page.textContent('[data-page="hosts"]')), 'no build date is shown');
     await page.click('#hosts-main'); await page.waitForTimeout(500);
     eq(1, await page.evaluate(() => window.__h.enabled), 'the switch turns the own hosts on');
-    truthy((await page.textContent('#hosts-general')).includes('Блокировок'), 'and the state shows what is applied');
+    truthy(/1\D?200/.test(await page.textContent('#hosts-block')), 'the block part shows its size');
+    truthy((await page.textContent('#hosts-bypass')).includes('/data/adb/nfqws2/hosts/bypass.txt'), 'the bypass file path is shown');
+    truthy((await page.textContent('#hosts-block')).includes('/data/adb/nfqws2/hosts/block.txt'), 'and the block file path');
+    await page.click('#hosts-block .list-item:has-text("block.txt")'); await page.waitForTimeout(400);
+    truthy(await page.evaluate(() => window.__h.calls.some(c => c.indexOf("'share' 'file' '/data/adb/nfqws2/hosts/block.txt'") >= 0)), 'block.txt is shared as a file');
     await page.click('#hosts-sources label:has-text("AdAway")'); await page.waitForTimeout(500);
-    eq(1, await page.evaluate(() => window.__h.adaway), 'a preset is switched on');
-    truthy((await page.textContent('#hosts-sources')).includes('1'), 'and shows its size');
-    await page.click('#hosts-general .list-item:has-text("Мои записи")'); await page.waitForTimeout(700);
-    eq('1.2.3.4 a.example', await page.inputValue('#panel-editor-text'), 'own entries open in the editor');
+    eq(1, await page.evaluate(() => window.__h.adaway), 'a block preset is switched on');
+    await page.click('#hosts-bypass .list-item:has-text("Загрузить пресет")'); await page.waitForTimeout(400);
+    await page.click('[role="menu"] [role="menuitem"]:has-text("GeoHide")'); await page.waitForTimeout(400);
+    eq(true, await page.evaluate(() => $('dialog-wrap').classList.contains('open')), 'loading a bypass preset asks first');
+    await page.click('#d-ok'); await page.waitForTimeout(500);
+    eq('geohide', await page.evaluate(() => window.__h.preset), 'and loads it');
+    truthy((await page.textContent('#hosts-bypass')).includes('GeoHide'), 'the bypass names the loaded preset');
+    await page.click('#hosts-block .list-item:has-text("Добавить домены")'); await page.waitForTimeout(400);
+    await page.fill('#d-input', 'a.ads.example, b.ads.example'); await page.click('#d-ok'); await page.waitForTimeout(500);
+    truthy(await page.evaluate(() => window.__h.calls.some(c => c.indexOf("'hosts-block-add' 'a.ads.example, b.ads.example'") >= 0)), 'block domains are added from the dialog');
+    await page.click('#hosts-bypass .list-item:has-text("Записи обхода")'); await page.waitForTimeout(700);
+    eq('1.2.3.4 a.example', await page.inputValue('#panel-editor-text'), 'bypass entries open in the editor');
     await page.fill('#panel-editor-text', '1.2.3.4 a.example\n5.6.7.8 b.example');
     await page.click('#panel-save-btn'); await page.waitForTimeout(500);
-    truthy(await page.evaluate(() => window.__h.calls.some(c => c.indexOf("'hosts-save-b64' 'custom'") >= 0)), 'saving sends them to the module');
+    truthy(await page.evaluate(() => window.__h.calls.some(c => c.indexOf("'hosts-save-b64' 'bypass'") >= 0)), 'saving sends them to the module');
     eq(false, await page.evaluate(() => document.querySelector('#editor-panel').classList.contains('open')), 'and closes the editor');
-    await page.click('#hosts-general .list-item:has-text("Текущий hosts")'); await page.waitForTimeout(700);
-    eq(true, await page.evaluate(() => document.querySelector('#panel-editor-text').readOnly), 'the current hosts opens read-only');
-    eq(true, await page.isHidden('#panel-save-btn'), 'without a save button');
-    await page.evaluate(() => closeSlideEditor(true)); await page.waitForTimeout(500);
+    await page.evaluate(() => { window.__h.differs = 1; return hostsInit(); }); await page.waitForTimeout(400);
+    truthy((await page.textContent('#hosts-warn')).includes('различаются'), 'edited part files are reported');
+    await page.click('#hosts-warn button:has-text("Применить")'); await page.waitForTimeout(500);
+    truthy(await page.evaluate(() => window.__h.calls.some(c => c.indexOf("'hosts-sync' 'apply'") >= 0)), 'and can be applied');
+    eq('', (await page.textContent('#hosts-warn')).trim(), 'after which the notice is gone');
     await page.click('#hosts-update'); await page.waitForTimeout(500);
     truthy((await page.textContent('#prompt-msg')).includes('1 из 1'), 'updating sources reports how many worked');
     await page.evaluate(() => setLanguage('en')); await page.waitForTimeout(300);
     const en = await page.textContent('[data-page="hosts"]');
-    const ru = (en.replace(/Реклама|Доступ/g, '').match(/[А-Яа-яЁё]{4,}[^\n]{0,30}/g) || []);
+    const ru = (en.replace(/Реклама|Доступ|\/data\/adb\S*/g, '').match(/[А-Яа-яЁё]{4,}[^\n]{0,30}/g) || []);
     eq('', ru.join(' | '), 'the screen is translated');
     await page.evaluate(() => setLanguage('ru'));
     eq('', pageErrors.join(' | '), 'no script errors');

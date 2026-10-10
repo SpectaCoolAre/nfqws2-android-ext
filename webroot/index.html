@@ -332,14 +332,15 @@
       <input type="checkbox" class="switch" role="switch" id="hosts-toggle" aria-label="Свой hosts" data-ta="aria-label"
              onchange="setHostsEnabled(this.checked, this)">
     </label>
-    <div class="helper" data-t>Файл hosts подменяется сразу, без перезагрузки и отдельного модуля: свои записи плюс выбранные источники. Выключение возвращает системный hosts.</div>
+    <div class="helper" data-t>Файл hosts подменяется сразу, без перезагрузки и отдельного модуля. Он собирается из двух частей: обход ограничений и блокировка рекламы. Выключение возвращает системный hosts.</div>
     <div id="hosts-warn" class="stack"></div>
-    <div class="list" id="hosts-general"></div>
-    <div class="subhead-row">
-      <h2 class="subhead" data-t>Источники</h2>
-      <span class="helper" id="hosts-built"></span>
-    </div>
-    <div class="helper" data-t>Списки для блокировки рекламы и наборы адресов для доступа к сервисам. Для одного домена берётся первая запись: свои записи важнее источников.</div>
+    <h2 class="subhead" data-t>Обход ограничений</h2>
+    <div class="helper" data-t>Записи «IP домен» для доступа к сервисам. Пресет загружается целиком и заменяет записи: для одного домена работает только одна запись.</div>
+    <div class="list" id="hosts-bypass"></div>
+    <h2 class="subhead" data-t>Блокировка рекламы</h2>
+    <div class="helper" data-t>Собирается из выбранных источников и своих доменов, кроме исключений. Список большой, поэтому открывается только файлом.</div>
+    <div class="list" id="hosts-block"></div>
+    <h2 class="subhead" data-t>Источники</h2>
     <div class="list" id="hosts-sources"></div>
     <div class="row">
       <button class="btn tonal with-icon state" id="hosts-update" onclick="updateHostsSources()">

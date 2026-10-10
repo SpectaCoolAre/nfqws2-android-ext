@@ -39,7 +39,7 @@ function renderSettings(){
       // только если в модуле есть dnsproxy
       {icon: 'dns', title: 'DNS по профилям', sub: t('Свои DoH, DoT и DNS-серверы для выбранных доменов'), on: "navigate('dns')", chevron: true}
     ] : []).concat([
-      {icon: 'edit', title: 'Редактор hosts', sub: t('Свои записи, блокировка рекламы и пресеты — без перезагрузки'), on: "navigate('hosts')", chevron: true}
+      {icon: 'edit', title: 'Редактор hosts', sub: t('Обход ограничений и блокировка рекламы — без перезагрузки'), on: "navigate('hosts')", chevron: true}
     ])],
     ['Резервная копия', [
       {icon: 'download', title: 'Создать копию', sub: t('Конфиг, списки, стратегии и оформление — в архив .tar'), on: 'createBackup()'},
