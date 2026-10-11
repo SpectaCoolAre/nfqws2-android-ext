@@ -138,9 +138,6 @@ set_strategy() {
   mv -f "$tmp" "$CONFFILE"
   chmod 0644 "$CONFFILE"
   echo "$name" > "$ACTIVE_FILE"
-  if [ "$NET_STRATEGY" = "1" ]; then
-    save_net_strategy "$name" >/dev/null 2>&1
-  fi
   echo "Применена стратегия: ${name#imp:}"
 }
 
@@ -199,7 +196,7 @@ cmd_json_status() {
   cnt_user="$1" cnt_auto="$2" cnt_excl="$3" cnt_ipset="$4" cnt_ipset_excl="$5" cnt_apps="$6"
   # нечисловое значение обваливает весь JSON и убивает WebUI, поэтому проверяем каждое поле
   for v in appn cnt_user cnt_auto cnt_excl cnt_ipset cnt_ipset_excl cnt_apps uptime qdrop \
-           PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC AUTOSTART WATCHDOG IPV6_ENABLED LOG_LEVEL NFQUEUE_NUM HOME_WIFI ENABLE_HOTSPOT NET_STRATEGY; do
+           PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC AUTOSTART WATCHDOG IPV6_ENABLED LOG_LEVEL NFQUEUE_NUM HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT; do
     eval "case \"\${$v}\" in ''|*[!0-9]*) $v=0 ;; esac"
   done
 
@@ -213,7 +210,7 @@ cmd_json_status() {
 {"running":$run,"pid":"$pid","uptime":$uptime,"strategy":"$(json_str "$cur_strat")","version":"$(json_str "$ver")","mode":"$(json_str "$(current_mode)")",
 "pkt_limit_out":$PKT_LIMIT_OUT,"pkt_limit_in":$PKT_LIMIT_IN,"block_quic":$BLOCK_QUIC,"app_mode":"$(json_str "$APP_MODE")","autostart":$AUTOSTART,"watchdog":$WATCHDOG,
 "ipv6":$IPV6_ENABLED,"log_level":$LOG_LEVEL,"qdrop":$qdrop,"queue":$NFQUEUE_NUM,"app_uids":$appn,
-"home_wifi":$HOME_WIFI,"enable_hotspot":$ENABLE_HOTSPOT,"net_strategy":$NET_STRATEGY,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":${DOH_BYPASS:-0},"meta_quic":${META_QUIC_REJECT:-1},"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")","pending":"$(json_str "$pending")",
+"home_wifi":$HOME_WIFI,"vpn_pause":${VPN_PAUSE:-0},"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":${DOH_BYPASS:-0},"meta_quic":${META_QUIC_REJECT:-1},"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")","pending":"$(json_str "$pending")",
 "counts":{"user":$cnt_user,"auto":$cnt_auto,"exclude":$cnt_excl,"ipset":$cnt_ipset,"ipset_exclude":$cnt_ipset_excl,"apps":$cnt_apps}}
 JSON
 }
@@ -327,6 +324,9 @@ cmd_doctor() {
     fi
     _cg=$(cat "/proc/$_pid/cgroup" 2>/dev/null | tr '\n' ' ')
     row info cgroup "${_cg:-$(M недоступно unavailable)}"
+  elif [ "$(cat "$HOME_PAUSED_FILE" 2>/dev/null)" = "@vpn" ]; then
+    row info process "$(M 'пауза: включён VPN' 'paused: VPN is on')"
+    row info "$(M 'ОЗУ' 'RAM')" "$(M 'пауза' 'paused')"
   elif [ -f "$HOME_PAUSED_FILE" ]; then
     row info process "$(M "пауза: домашняя Wi-Fi «$(cat "$HOME_PAUSED_FILE")»" "paused: home Wi-Fi “$(cat "$HOME_PAUSED_FILE")”")"
     row info "$(M 'ОЗУ' 'RAM')" "$(M 'пауза' 'paused')"
@@ -336,7 +336,7 @@ cmd_doctor() {
   fi
   if [ -f "$WN_PIDFILE" ] && kill -0 "$(cat "$WN_PIDFILE" 2>/dev/null)" 2>/dev/null; then
     row ok netwatch "$(M 'работает: мгновенная реакция на смену сети' 'running: instant reaction to network changes')"
-  elif [ "$WATCHDOG" != "1" ] && [ "$HOME_WIFI" != "1" ]; then
+  elif [ "$WATCHDOG" != "1" ] && [ "$HOME_WIFI" != "1" ] && [ "$VPN_PAUSE" != "1" ]; then
     row info netwatch "$(M 'выключен вместе с контролем работы' 'off together with the watchdog')"
   elif command -v ip >/dev/null 2>&1; then
     row warn netwatch "$(M 'не запущен — правила обновятся только по watchdog (раз в 20 сек)' 'not running — rules are refreshed by the watchdog only (every 20 s)')"
@@ -1262,7 +1262,7 @@ case "$1" in
 
   set)
     case "$2" in
-      BLOCK_QUIC|AUTOSTART|WATCHDOG|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|ENABLE_HOTSPOT|NET_STRATEGY|DOH_BYPASS|META_QUIC_REJECT) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
+      BLOCK_QUIC|AUTOSTART|WATCHDOG|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|VPN_PAUSE|ENABLE_HOTSPOT|DOH_BYPASS|META_QUIC_REJECT) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
       PKT_LIMIT_OUT|PKT_LIMIT_IN) case "$3" in [1-9]|1[0-5]) ;; *) echo "Допустимо 1..15" >&2; exit 1 ;; esac ;;
       APP_MODE) case "$3" in off|include|exclude) ;; *) echo "off|include|exclude" >&2; exit 1 ;; esac ;;
       *) echo "Параметр $2 нельзя менять этой командой" >&2; exit 1 ;;
@@ -1271,11 +1271,11 @@ case "$1" in
     case "$2" in
       APP_MODE) load_conf >/dev/null 2>&1; cmd_apply_apps ;;
       # Пауза в домашней сети и наблюдатели не требуют перезапуска службы
-      HOME_WIFI|WATCHDOG) sh "$SERVICE" home_check >/dev/null 2>&1 ;;
+      HOME_WIFI|VPN_PAUSE|WATCHDOG) sh "$SERVICE" home_check >/dev/null 2>&1 ;;
       ENABLE_HOTSPOT) load_conf >/dev/null 2>&1; sh "$SERVICE" firewall_apply >/dev/null 2>&1 ;;
       # отдельная цепочка — меняется без перезапуска службы
       META_QUIC_REJECT) load_conf >/dev/null 2>&1; if is_running; then meta_quic_start; fi ;;
-      NET_STRATEGY|AUTOSTART) ;;
+      AUTOSTART) ;;
       *) need_restart_note ;;
     esac ;;
   set-mode)
@@ -1290,10 +1290,7 @@ case "$1" in
   home-pause)
     rm -f "$HOME_OVERRIDE_FILE"
     sh "$SERVICE" home_check >/dev/null 2>&1
-    [ -f "$HOME_PAUSED_FILE" ] && echo OK || { echo "$(M 'Телефон уже не в домашней сети' 'The phone is no longer on home Wi‑Fi')" >&2; exit 1; } ;;
-  current-network) current_network_title 2>/dev/null || echo "unknown" ;;
-  list-net-strategies) list_net_strategies ;;
-  clear-net-strategies) clear_net_strategies; echo OK ;;
+    [ -f "$HOME_PAUSED_FILE" ] && echo OK || { echo "$(M 'Причины для паузы больше нет: телефон не в домашней сети и VPN выключен' 'Nothing to pause for: not on home Wi‑Fi and VPN is off')" >&2; exit 1; } ;;
   backup-create) cmd_backup_create "$2" ;;
   backup-list) cmd_backup_list ;;
   backup-restore) cmd_backup_restore "$2" ;;
@@ -1323,6 +1320,5 @@ EOF
     echo "         import-add-b64 list-imports get-import-merged-b64 rename-import delete-import" >&2
     echo "         get-list save-list-b64 list-update add-domain clear-auto reset-lists set set-mode list-apps" >&2
     echo "         get-logs export-logs clear-logs wifi-ssid backup-create backup-list backup-restore backup-restore-b64 probe-dpi probe-cancel net-info" >&2
-    echo "         current-network list-net-strategies clear-net-strategies" >&2
     exit 1 ;;
 esac

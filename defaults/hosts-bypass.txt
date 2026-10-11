@@ -1,0 +1,8 @@
+# Instagram на мобильной сети: узлы Meta, к которым часть операторов не пускает
+# TCP (157.240.205.x), — на рабочие узлы того же назначения
+57.144.112.34 scontent-hel3-1.cdninstagram.com
+57.144.112.34 scontent-hel3-2.cdninstagram.com
+57.144.244.128 cdn.fbsbx.com
+57.144.110.1 lookaside.facebook.com
+57.144.110.1 graph.facebook.com
+57.144.110.1 edge-mqtt.facebook.com

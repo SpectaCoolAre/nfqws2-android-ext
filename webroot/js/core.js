@@ -125,7 +125,6 @@ const fmtCount = n => Number(n).toLocaleString(LANG === 'en' ? 'en-US' : 'ru-RU'
 
 /* ── Ripple: pointerdown на любой .state, делегирование переживает innerHTML ── */
 document.addEventListener('pointerdown', e => {
-  if(typeof isAnimationsDisabled === 'function' && isAnimationsDisabled()) return;
   let el = e.target.closest && e.target.closest('.state, .nav-dest');
   if(el && el.classList.contains('nav-dest')) el = el.querySelector('.nav-ind');
   if(!el || el.classList.contains('is-disabled') || el.disabled) return;
@@ -487,7 +486,7 @@ const PAGE_META = {
              actions: [{icon: 'refresh', label: 'Обновить журнал', fn: () => loadLog()}]},
   config:   {title: 'Конфиг', init: () => confInit()},
   settings: {title: 'Настройки', child: true, init: () => renderSettings()},
-  wifi:     {title: 'Домашняя Wi‑Fi', child: true, parent: 'settings', init: () => wifiInit()},
+  wifi:     {title: 'Отключать на Wi‑Fi', child: true, parent: 'settings', init: () => wifiInit()},
   apps:     {title: 'Фильтр приложений', child: true, parent: 'settings', init: () => appsInit(),
              actions: [{icon: 'refresh', label: 'Обновить список приложений', fn: () => loadPk()}]},
   test:     {title: 'Проверка доступности', child: true, parent: 'settings', init: () => testInit()},
@@ -508,7 +507,7 @@ function renderAppBar(page, animate){
   $('settings-btn').hidden = !!m.child;
   const tEl = $('app-title');
   tEl.textContent = t(m.title);
-  if(animate !== false && !isAnimationsDisabled()){ tEl.classList.remove('swap'); void tEl.offsetWidth; tEl.classList.add('swap'); }
+  if(animate !== false){ tEl.classList.remove('swap'); void tEl.offsetWidth; tEl.classList.add('swap'); }
   fillBarActions(m.actions);
 }
 /* Кнопки справа в верхней панели; экран может подменить их на время (выбор профилей DNS) */
@@ -546,7 +545,7 @@ function showPage(page, mode){
   const from = document.querySelector('.page.active');
   const to = document.querySelector('.page[data-page="' + page + '"]');
   if(!to || from === to) return;
-  const animate = !matchMedia('(prefers-reduced-motion: reduce)').matches && !isAnimationsDisabled();
+  const animate = !matchMedia('(prefers-reduced-motion: reduce)').matches;
   if(from){
     if(animate){
       const r = from.getBoundingClientRect();
@@ -577,12 +576,11 @@ function showPage(page, mode){
    стиль нового экрана точно ушёл в композитор. Без spawn первый вызов ещё и
    ждёт конца анимации — синхронный exec иначе заморозил бы её первый кадр. */
 function afterTransition(fn){
-  if(typeof isAnimationsDisabled === 'function' && isAnimationsDisabled()){ fn(); return; }
   requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(fn, spawnOK ? 0 : 320)));
 }
 function navigate(page){
   if(page === currentPage){
-    if(!PAGE_META[page].child) scrollTo({top: 0, behavior: (typeof isAnimationsDisabled === 'function' && isAnimationsDisabled()) ? 'auto' : 'smooth'});
+    if(!PAGE_META[page].child) scrollTo({top: 0, behavior: 'smooth'});
     return;
   }
   closeMenu();
@@ -863,6 +861,8 @@ function initSheetSwipe(sheet){
   sheet.addEventListener('touchstart', e => {
     state = '';
     if(e.touches.length !== 1 || e.target.closest('.sheet-drag')) return;
+    // Круг цвета и ползунки — выбор значения, а не прокрутка и не смахивание
+    if(e.target.closest('.wheel, input[type=range]')) return;
     y0 = lastY = e.touches[0].clientY; lastT = e.timeStamp; v = 0;
     // Заголовок и пояснение над списком тянут лист всегда; сам список —
     // только когда он прокручен в начало

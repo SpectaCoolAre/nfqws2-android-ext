@@ -31,7 +31,7 @@ start_failed() {
 }
 
 # watchdog/netwatch: auto-restart, home Wi-Fi pause, per-network strategies
-watchers_wanted() { [ "$WATCHDOG" = "1" ] || [ "$HOME_WIFI" = "1" ] || [ "$NET_STRATEGY" = "1" ] || dns_enabled; }
+watchers_wanted() { [ "$WATCHDOG" = "1" ] || [ "$HOME_WIFI" = "1" ] || [ "$VPN_PAUSE" = "1" ] || dns_enabled; }
 
 start() {
   if is_running; then
@@ -230,7 +230,6 @@ netwatch() {
         if [ "$up" -ge "$recheck" ]; then
           recheck=0
           home_check
-          network_strategy_check
         fi
       fi
       sz=$(wc -c < "$EVFILE" 2>/dev/null)
@@ -248,7 +247,6 @@ netwatch() {
           firewall_start
         fi
         home_check
-        network_strategy_check
         # DNS сети сменился вместе с сетью; работает и без службы
         dns_enabled && dns_start "смена сети"
         acted="$sz"
@@ -273,8 +271,7 @@ watchdog() {
     watchers_wanted || break
     tick=$((tick + 1))
     # once a minute: cmd wifi is the expensive part
-    [ "$HOME_WIFI" = "1" ] && [ $((tick % 3)) -eq 0 ] && home_check
-    [ "$NET_STRATEGY" = "1" ] && [ $((tick % 3)) -eq 0 ] && network_strategy_check
+    { [ "$HOME_WIFI" = "1" ] || [ "$VPN_PAUSE" = "1" ]; } && [ $((tick % 3)) -eq 0 ] && home_check
     # DNS — до проверки WATCHDOG: упавший dnsproxy с правилами перехвата
     # оставил бы телефон совсем без DNS
     dns_enabled && dns_check
@@ -320,52 +317,41 @@ home_check() {
   # than two minutes is residue from a killed process
   [ -n "$(find "$STATE_DIR/home.lock" -maxdepth 0 -mmin +2 2>/dev/null)" ] && rmdir "$STATE_DIR/home.lock" 2>/dev/null
   mkdir "$STATE_DIR/home.lock" 2>/dev/null || return 0
-  local ssid=""
-  if [ "$HOME_WIFI" = "1" ]; then
-    ssid=$(active_ssid)
-    if [ -f "$HOME_OVERRIDE_FILE" ] && [ "$(cat "$HOME_OVERRIDE_FILE" 2>/dev/null)" != "$ssid" ]; then
-      rm -f "$HOME_OVERRIDE_FILE"
-    fi
+  # Пауза — домашняя Wi‑Fi (в файле SSID) или VPN (метка @vpn). Ручной запуск
+  # оставляет то же значение в override: оно действует, пока причина не уйдёт.
+  local ssid="" vpn=0 ovr="" want=""
+  [ "$HOME_WIFI" = "1" ] && ssid=$(active_ssid)
+  [ "$VPN_PAUSE" = "1" ] && vpn_active && vpn=1
+  [ -f "$HOME_OVERRIDE_FILE" ] && ovr=$(cat "$HOME_OVERRIDE_FILE" 2>/dev/null)
+  case "$ovr" in
+    '') ;;
+    @vpn) [ "$vpn" = 1 ] || { rm -f "$HOME_OVERRIDE_FILE"; ovr=""; } ;;
+    *) [ "$ovr" = "$ssid" ] || { rm -f "$HOME_OVERRIDE_FILE"; ovr=""; } ;;
+  esac
+  if [ "$vpn" = 1 ] && [ "$ovr" != "@vpn" ]; then
+    want="@vpn"
+  elif [ "$HOME_WIFI" = "1" ] && ssid_is_home "$ssid" && [ "$ovr" != "$ssid" ]; then
+    want="$ssid"
   fi
-  if [ "$HOME_WIFI" = "1" ] && ssid_is_home "$ssid"; then
-    if [ ! -f "$HOME_OVERRIDE_FILE" ] && is_running && [ ! -f "$HOME_PAUSED_FILE" ]; then
-      log_msg "Домашняя Wi-Fi «$ssid» — обход приостановлен"
+  if [ -n "$want" ]; then
+    if is_running && [ ! -f "$HOME_PAUSED_FILE" ]; then
+      if [ "$want" = "@vpn" ]; then log_msg "Включён VPN — обход приостановлен"
+      else log_msg "Домашняя Wi-Fi «$want» — обход приостановлен"; fi
       stop >/dev/null 2>&1
-      printf '%s' "$ssid" > "$HOME_PAUSED_FILE"
-      update_description paused "$ssid"
+      printf '%s' "$want" > "$HOME_PAUSED_FILE"
+      update_description paused "$want"
+    elif [ -f "$HOME_PAUSED_FILE" ] && [ "$(cat "$HOME_PAUSED_FILE" 2>/dev/null)" != "$want" ]; then
+      # причина паузы сменилась (VPN выключили дома) — пауза остаётся
+      printf '%s' "$want" > "$HOME_PAUSED_FILE"
+      update_description paused "$want"
     fi
   elif [ -f "$HOME_PAUSED_FILE" ]; then
+    if [ "$(cat "$HOME_PAUSED_FILE" 2>/dev/null)" = "@vpn" ]; then log_msg "VPN выключен — обход возобновлён"
+    else log_msg "Домашняя Wi-Fi больше не активна — обход возобновлён"; fi
     rm -f "$HOME_PAUSED_FILE"
-    log_msg "Домашняя Wi-Fi больше не активна — обход возобновлён"
-    start >/dev/null 2>&1 || log_msg "Не удалось возобновить обход после домашней Wi-Fi"
+    start >/dev/null 2>&1 || log_msg "Не удалось возобновить обход после паузы"
   fi
   rmdir "$STATE_DIR/home.lock" 2>/dev/null
-  return 0
-}
-
-# On a network change apply the strategy saved for that network.
-network_strategy_check() {
-  [ "$NET_STRATEGY" = "1" ] || return 0
-  is_running || return 0
-  [ -f "$HOME_PAUSED_FILE" ] && return 0 # keep the strategy during a home pause
-
-  local cur_net last_net saved cur_strat
-  cur_net=$(current_network_key 2>/dev/null)
-  [ -n "$cur_net" ] || return 0
-  last_net=$(cat "$STATE_DIR/last_network" 2>/dev/null)
-
-  if [ "$cur_net" != "$last_net" ]; then
-    printf '%s' "$cur_net" > "$STATE_DIR/last_network"
-    saved=$(load_net_strategy "$cur_net" 2>/dev/null)
-    cur_strat=$(get_current_strategy 2>/dev/null)
-    if [ -n "$saved" ] && [ "$saved" != "$cur_strat" ]; then
-      log_msg "Смена сети на $(current_network_title 2>/dev/null || echo "$cur_net") — переключение на сохранённую стратегию «$saved»"
-      if sh "$MODDIR/bin/nfqws2-ctl" set-strategy "$saved" >/dev/null 2>&1; then
-        stop >/dev/null 2>&1
-        start >/dev/null 2>&1
-      fi
-    fi
-  fi
   return 0
 }
 
@@ -374,7 +360,9 @@ network_strategy_check() {
 manual_start() {
   local ssid
   rm -f "$HOME_PAUSED_FILE"
-  if [ "$HOME_WIFI" = "1" ] && ssid=$(active_ssid) && ssid_is_home "$ssid"; then
+  if [ "$VPN_PAUSE" = "1" ] && vpn_active; then
+    printf '%s' "@vpn" > "$HOME_OVERRIDE_FILE"
+  elif [ "$HOME_WIFI" = "1" ] && ssid=$(active_ssid) && ssid_is_home "$ssid"; then
     printf '%s' "$ssid" > "$HOME_OVERRIDE_FILE"
   fi
   start
@@ -392,7 +380,6 @@ case "$1" in
   start)              manual_start ;;
   stop)               rm -f "$HOME_PAUSED_FILE" "$HOME_OVERRIDE_FILE"; stop ;;
   home_check)         home_check; ensure_watchdog ;;
-  net_check)          network_strategy_check ;;
   restart)            stop; start ;;
   reload)             reload_lists ;;
   status)             status_service ;;
@@ -418,7 +405,11 @@ case "$1" in
     dns_boot_reset
     if [ "$AUTOSTART" = "1" ]; then
       ssid=$(active_ssid)
-      if [ "$HOME_WIFI" = "1" ] && ssid_is_home "$ssid"; then
+      if [ "$VPN_PAUSE" = "1" ] && vpn_active; then
+        log_msg "Включён VPN — автозапуск отложен до его отключения"
+        printf '%s' "@vpn" > "$HOME_PAUSED_FILE"
+        update_description paused "@vpn"
+      elif [ "$HOME_WIFI" = "1" ] && ssid_is_home "$ssid"; then
         log_msg "Домашняя Wi-Fi «$ssid» — автозапуск отложен до выхода из неё"
         printf '%s' "$ssid" > "$HOME_PAUSED_FILE"
         update_description paused "$ssid"

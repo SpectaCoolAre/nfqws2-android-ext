@@ -113,9 +113,6 @@ function isDark(){
   if(currentMode === 'dark') return true;
   return matchMedia('(prefers-color-scheme: dark)').matches;
 }
-function isAnimationsDisabled(){
-  return store.get('m3_no_animations') === 'true' || store.get('m3_animations') === 'false';
-}
 function isMonochrome(){
   return store.get('m3_monochrome') === 'true' || currentSeed === '#757575';
 }
@@ -289,8 +286,6 @@ function applyTheme(skipUI){
   document.documentElement.setAttribute('data-amoled', amoled ? 'true' : 'false');
   document.documentElement.setAttribute('data-containers', containers ? 'true' : 'false');
   document.documentElement.setAttribute('data-monochrome', monochrome ? 'true' : 'false');
-  const noAnim = isAnimationsDisabled();
-  document.documentElement.setAttribute('data-animations', noAnim ? 'false' : 'true');
   const meta = document.querySelector('meta[name="theme-color"]');
   if(meta) meta.setAttribute('content', R.background);
   if(!skipUI) drawThemeUI();
@@ -323,7 +318,6 @@ function drawThemeUI(){
     '<span class="tp-role" style="background:var(--md-sys-color-' + v + ')"></span>').join(''), false);
   $('amoled-toggle').checked = store.get('m3_amoled') === 'true';
   $('amoled-toggle').disabled = !dark;
-  if($('monochrome-toggle')) $('monochrome-toggle').checked = mono;
   if($('containers-toggle')) $('containers-toggle').checked = store.get('m3_containers') !== 'false';
   syncPicker(true);
 }
@@ -397,30 +391,12 @@ function applyMonet(seedHex){
   store.set('m3_seed', currentSeed);
   applyTheme();
 }
-function toggleMonochrome(on){
-  store.set('m3_monochrome', on ? 'true' : 'false');
-  if(on){
-    if(currentSeed !== '#757575') store.set('m3_last_color_seed', currentSeed);
-    currentSeed = '#757575';
-    store.set('m3_seed', currentSeed);
-  } else {
-    const last = store.get('m3_last_color_seed') || systemSeed();
-    currentSeed = (/^#[0-9a-fA-F]{6}$/.test(last) && last.toLowerCase() !== '#757575') ? last.toLowerCase() : '#a8c7fa';
-    store.set('m3_seed', currentSeed);
-  }
-  applyTheme();
-}
 function toggleAmoled(on){
   store.set('m3_amoled', on ? 'true' : 'false');
   applyTheme();
 }
 function toggleContainers(on){
   store.set('m3_containers', on ? 'true' : 'false');
-  applyTheme();
-}
-function toggleAnimations(disabled){
-  store.set('m3_no_animations', disabled ? 'true' : 'false');
-  store.set('m3_animations', disabled ? 'false' : 'true');
   applyTheme();
 }
 function onHexInput(val){

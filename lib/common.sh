@@ -48,7 +48,6 @@ IPT_GROUP_MQ="nfqws_mquic"     # filter: мгновенный отказ QUIC к
 # Сети Meta (Instagram, Facebook, WhatsApp): AS32934
 META_NET4="157.240.0.0/16 31.13.24.0/21 31.13.64.0/18 57.144.0.0/14 163.70.128.0/17 129.134.0.0/16 69.171.224.0/19 173.252.64.0/18 179.60.192.0/22 185.60.216.0/22 66.220.144.0/20 69.63.176.0/20 102.132.96.0/20 204.15.20.0/22 45.64.40.0/22"
 META_NET6="2a03:2880::/32"
-NET_STRATEGIES_DIR="$CONFDIR/net_strategies"
 IPT_CAP_CACHE="$STATE_DIR/iptables-capabilities"
 
 # xt_owner allows max 128 ranges per rule
@@ -60,8 +59,8 @@ CNT_IN_MASK=0x000f0000   # bits 16-19, apart from out counter (24-27) and MARK_*
 CNT_IN_STEP=65536        # 1<<16
 
 # dirs usually exist; builtin test avoids forking mkdir (sourced on every nfqws2-ctl call)
-if [ ! -d "$LISTS_DIR" ] || [ ! -d "$STATE_DIR" ] || [ ! -d "$LOG_DIR" ] || [ ! -d "$USER_STRATEGIES_DIR" ] || [ ! -d "$NET_STRATEGIES_DIR" ]; then
-  mkdir -p "$LISTS_DIR" "$STATE_DIR" "$LOG_DIR" "$USER_STRATEGIES_DIR" "$NET_STRATEGIES_DIR" 2>/dev/null
+if [ ! -d "$LISTS_DIR" ] || [ ! -d "$STATE_DIR" ] || [ ! -d "$LOG_DIR" ] || [ ! -d "$USER_STRATEGIES_DIR" ]; then
+  mkdir -p "$LISTS_DIR" "$STATE_DIR" "$LOG_DIR" "$USER_STRATEGIES_DIR" 2>/dev/null
 fi
 
 set_defaults() {
@@ -82,8 +81,8 @@ set_defaults() {
   : "${PKT_LIMIT_OUT:=15}"
   : "${PKT_LIMIT_IN:=15}"
   : "${HOME_WIFI:=0}"
+  : "${VPN_PAUSE:=0}"
   : "${ENABLE_HOTSPOT:=1}"
-  : "${NET_STRATEGY:=0}"
   : "${DOH_BYPASS:=0}"
   : "${META_QUIC_REJECT:=1}"
 }
@@ -1111,7 +1110,7 @@ update_description() { # running | stopped | paused <ssid>
       strat=$(cat "$ACTIVE_FILE" 2>/dev/null); strat="${strat#imp:}"
       mode=$(current_mode)
       d="✅ Работает · ${strat:-default}${mode:+ · $mode}" ;;
-    paused) d="⏸ Пауза: домашняя Wi-Fi «$2»" ;;
+    paused) if [ "$2" = "@vpn" ]; then d="⏸ Пауза: включён VPN"; else d="⏸ Пауза: домашняя Wi-Fi «$2»"; fi ;;
     *)      d="⛔ Остановлено" ;;
   esac
   d=$(printf '%s' "$d | $DESC_BASE" | tr -d '\n\r')
@@ -1161,7 +1160,7 @@ render_strategy() {
 
 # Module settings (same across strategies) are carried over whole from the live
 # config on strategy change/reset. NFQWS_EXTRA_ARGS only for standard $MODE_* refs.
-USER_KEYS="DOH_BYPASS META_QUIC_REJECT IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI ENABLE_HOTSPOT NET_STRATEGY NFQWS_EXTRA_ARGS"
+USER_KEYS="DOH_BYPASS META_QUIC_REJECT IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT NFQWS_EXTRA_ARGS"
 merge_user_keys() { # <generated config> <settings source config>  -> stdout
   awk -v keys=" $USER_KEYS " -v src="$2" '
     function quotes(str,   t) { t = str; return gsub(/"/, "", t) }
@@ -1243,81 +1242,21 @@ active_ssid() {
   wifi_is_default || return 1
   printf '%s' "$s"
 }
+# Включён ли VPN: интерфейс VPN-приложения (tun), WireGuard или IPsec поднят.
+# Пока VPN работает, трафик идёт через туннель, и обход DPI ему не нужен.
+vpn_active() {
+  local d f
+  local n="${NFQWS_SYSNET:-/sys/class/net}"
+  for d in "$n"/tun* "$n"/wg* "$n"/ipsec*; do
+    [ -r "$d/flags" ] || continue
+    f=$(cat "$d/flags" 2>/dev/null)
+    case "$f" in 0x*) [ $(( $f & 1 )) -eq 1 ] && return 0 ;; esac
+  done
+  return 1
+}
 ssid_is_home() {
   if [ -z "$1" ] || [ ! -f "$HOME_FILE" ]; then return 1; fi
   grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$HOME_FILE" 2>/dev/null | grep -Fxq -- "$1"
-}
-
-# ---------------------------------------------------------------- network strategy caching
-current_network_key() {
-  local ssid op
-  if ssid=$(active_ssid 2>/dev/null) && [ -n "$ssid" ]; then
-    printf 'wifi_%s' "$(printf '%s' "$ssid" | tr -c 'a-zA-Z0-9._-' '_')"
-    return 0
-  fi
-  op=$(getprop gsm.operator.alpha 2>/dev/null | cut -d',' -f1 | tr -d '\r\n')
-  [ -z "$op" ] && op=$(getprop gsm.sim.operator.alpha 2>/dev/null | cut -d',' -f1 | tr -d '\r\n')
-  if [ -n "$op" ]; then
-    printf 'cell_%s' "$(printf '%s' "$op" | tr -c 'a-zA-Z0-9._-' '_')"
-  else
-    printf 'cellular'
-  fi
-  return 0
-}
-
-current_network_title() {
-  local ssid op
-  if ssid=$(active_ssid 2>/dev/null) && [ -n "$ssid" ]; then
-    printf 'Wi-Fi «%s»' "$ssid"
-    return 0
-  fi
-  op=$(getprop gsm.operator.alpha 2>/dev/null | cut -d',' -f1 | tr -d '\r\n')
-  [ -z "$op" ] && op=$(getprop gsm.sim.operator.alpha 2>/dev/null | cut -d',' -f1 | tr -d '\r\n')
-  if [ -n "$op" ]; then
-    printf 'Мобильная сеть (%s)' "$op"
-  else
-    printf 'Мобильная сеть'
-  fi
-  return 0
-}
-
-save_net_strategy() { # <strategy_name> [net_key]
-  local strat="$1" key="${2:-$(current_network_key 2>/dev/null)}" title
-  if [ -z "$strat" ] || [ -z "$key" ]; then
-    return 1
-  fi
-  [ -d "$NET_STRATEGIES_DIR" ] || mkdir -p "$NET_STRATEGIES_DIR" 2>/dev/null
-  printf '%s\n' "$strat" > "$NET_STRATEGIES_DIR/$key"
-  title=$(current_network_title 2>/dev/null)
-  [ -n "$title" ] && printf '%s\n' "$title" > "$NET_STRATEGIES_DIR/$key.title"
-  return 0
-}
-
-load_net_strategy() { # [net_key] -> prints strategy name
-  local key="${1:-$(current_network_key 2>/dev/null)}"
-  [ -f "$NET_STRATEGIES_DIR/$key" ] || return 1
-  local s
-  s=$(head -n1 "$NET_STRATEGIES_DIR/$key" 2>/dev/null | tr -d '\r\n')
-  [ -n "$s" ] || return 1
-  printf '%s' "$s"
-}
-
-list_net_strategies() {
-  local f key strat title
-  for f in "$NET_STRATEGIES_DIR"/*; do
-    [ -f "$f" ] || continue
-    case "$f" in *.title) continue ;; esac
-    key="${f##*/}"
-    strat=$(head -n1 "$f" 2>/dev/null | tr -d '\r\n')
-    title=""
-    [ -f "$f.title" ] && title=$(head -n1 "$f.title" 2>/dev/null | tr -d '\r\n')
-    [ -n "$title" ] || title="$key"
-    printf '%s\t%s\t%s\n' "$key" "$strat" "$title"
-  done
-}
-
-clear_net_strategies() {
-  rm -rf "$NET_STRATEGIES_DIR"/* 2>/dev/null
 }
 
 # DNS по профилям: без bin/dnsproxy dns_enabled всегда ложно, и всё dns_* молчит.

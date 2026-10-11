@@ -377,8 +377,6 @@ active_ssid >/dev/null; assert_rc 1 $? "and fails"
 MOCK_DEFAULT=none; assert_eq "" "$(active_ssid)" "no default network at all (still validating) does not either"
 MOCK_DEFAULT=odd; assert_eq "Home" "$(active_ssid)" "an unknown network id falls back to trusting the SSID"
 MOCK_DEFAULT=; assert_eq "Home" "$(active_ssid)" "so does a dumpsys without the default network line"
-MOCK_DEFAULT=cell
-assert_match "$(current_network_key)" "^cell" "per-network strategies follow the traffic too"
 rm -f "$MOCKBIN/cmd" "$MOCKBIN/dumpsys"
 
 # ── setup_cli_symlinks ────────────────────────────────────────────────────────

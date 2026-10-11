@@ -34,6 +34,7 @@ HOSTS_SOURCES="$HOSTS_DIR/sources.txt"         # источники блокир
 HOSTS_BYPASS_PRESET="$HOSTS_DIR/bypass_preset" # какой пресет загружен в обход
 HOSTS_CACHE="$HOSTS_DIR/cache"
 HOSTS_PRESETS_DIR="$MODDIR/defaults/hosts-presets"
+HOSTS_DEFAULT_BYPASS="$MODDIR/defaults/hosts-bypass.txt"   # записи обхода при первом запуске
 HOSTS_TARGET="${HOSTS_TARGET:-/system/etc/hosts}"
 HOSTS_MODULES_DIR="${HOSTS_MODULES_DIR:-/data/adb/modules}"
 HOSTS_MARK="# nfqws2-android-ext hosts"
@@ -131,7 +132,17 @@ hosts_init() {
   [ -f "$HOSTS_SOURCES" ] || : > "$HOSTS_SOURCES"
   hosts_migrate
   [ -s "$HOSTS_BYPASS" ] && [ -f "$HOSTS_BLOCK_CUSTOM" ] && return 0
+  local first=0
+  [ -f "$HOSTS_BYPASS" ] || first=1
   hosts_import
+  # Первый запуск: к записям из системного hosts — записи обхода по умолчанию
+  # (домены, которых там ещё нет)
+  [ "$first" = 1 ] && [ -f "$HOSTS_DEFAULT_BYPASS" ] || return 0
+  hosts_clean < "$HOSTS_BYPASS" | awk '{ print $2 }' > "$HOSTS_DIR/have.tmp"
+  { echo; awk -v hf="$HOSTS_DIR/have.tmp" 'BEGIN { while ((getline l < hf) > 0) h[l] = 1 }
+      /^[[:space:]]*#/ || NF < 2 { print; next } !($2 in h)' "$HOSTS_DEFAULT_BYPASS"; } >> "$HOSTS_BYPASS"
+  rm -f "$HOSTS_DIR/have.tmp"
+  hosts_build_block
 }
 # Прежний формат (одна часть, custom.txt): кэш источников хранил и записи
 # обхода, а пресеты обхода стояли в sources.txt. Части возьмутся из hosts.

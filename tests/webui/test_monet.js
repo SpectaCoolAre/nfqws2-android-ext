@@ -248,18 +248,8 @@ sect('android monet detection');
   const palettes = vm.runInContext('PALETTES', sandbox);
   truthy(palettes.some(p => p[0] === 'Монохром' && p[1] === '#757575'), 'PALETTES includes Monochrome preset');
 
-  // Test toggleMonochrome(true)
-  sandbox.toggleMonochrome(true);
-  eq('true', dom.docEl.attrs['data-monochrome'], 'toggleMonochrome(true) sets data-monochrome="true"');
-  eq('true', dom.storage['m3_monochrome'], 'toggleMonochrome(true) stores m3_monochrome="true"');
-  eq('#757575', vm.runInContext('currentSeed', sandbox), 'toggleMonochrome(true) sets currentSeed to #757575');
-  truthy(vm.runInContext('isMonochrome()', sandbox), 'isMonochrome() is true');
-
-  // Test toggleMonochrome(false)
-  sandbox.toggleMonochrome(false);
-  eq('false', dom.docEl.attrs['data-monochrome'], 'toggleMonochrome(false) sets data-monochrome="false"');
-  eq('false', dom.storage['m3_monochrome'], 'toggleMonochrome(false) stores m3_monochrome="false"');
-  truthy(!vm.runInContext('isMonochrome()', sandbox), 'isMonochrome() is false');
+  // Отдельного переключателя монохрома нет: тема включается пресетом
+  truthy(typeof sandbox.toggleMonochrome === 'undefined', 'toggleMonochrome is removed (preset only)');
 
   // Test applyMonet('#757575') activates monochrome
   sandbox.applyMonet('#757575');
@@ -273,24 +263,10 @@ sect('android monet detection');
   eq('false', dom.storage['m3_monochrome'], 'applyMonet(#deb0da) stores m3_monochrome="false"');
   truthy(!vm.runInContext('isMonochrome()', sandbox), 'isMonochrome() is false after applying color');
 
-  // ── 6. Animations toggle ──────────────────────────────────────────────────
-  sect('animations toggle');
-  truthy(typeof sandbox.toggleAnimations === 'function', 'toggleAnimations is defined');
-  truthy(typeof sandbox.isAnimationsDisabled === 'function', 'isAnimationsDisabled is defined');
-  truthy(!sandbox.isAnimationsDisabled(), 'animations enabled by default');
-  eq('true', dom.docEl.attrs['data-animations'], 'data-animations="true" by default');
-
-  // Test toggleAnimations(true)
-  sandbox.toggleAnimations(true);
-  eq('false', dom.docEl.attrs['data-animations'], 'toggleAnimations(true) sets data-animations="false"');
-  eq('true', dom.storage['m3_no_animations'], 'toggleAnimations(true) stores m3_no_animations="true"');
-  truthy(sandbox.isAnimationsDisabled(), 'isAnimationsDisabled() is true after disabling');
-
-  // Test toggleAnimations(false)
-  sandbox.toggleAnimations(false);
-  eq('true', dom.docEl.attrs['data-animations'], 'toggleAnimations(false) sets data-animations="true"');
-  eq('false', dom.storage['m3_no_animations'], 'toggleAnimations(false) stores m3_no_animations="false"');
-  truthy(!sandbox.isAnimationsDisabled(), 'isAnimationsDisabled() is false after re-enabling');
+  // ── 6. No animations toggle ───────────────────────────────────────────────
+  sect('animations toggle is gone');
+  truthy(typeof sandbox.toggleAnimations === 'undefined', 'toggleAnimations was removed');
+  eq(undefined, dom.docEl.attrs['data-animations'], 'data-animations is not set');
 
   // Summary
   process.stdout.write('\n----------------------------------------\n');

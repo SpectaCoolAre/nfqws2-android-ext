@@ -44,6 +44,8 @@ assert_contains "$(cat "$H/bypass.txt")" "1.2.3.4 sys.example" "bypass entries a
 assert_not_contains "$(cat "$H/bypass.txt")" "localhost" "without localhost"
 assert_contains "$(cat "$H/block_custom.txt")" "ad.sys.example" "a blocked domain goes to the own block domains"
 assert_not_contains "$(cat "$H/bypass.txt")" "ad.sys.example" "and not to the bypass"
+assert_contains "$(cat "$H/bypass.txt")" "57.144.244.128 cdn.fbsbx.com" "the default Instagram entries are added on first start"
+assert_eq 1 "$(grep -c 'graph.facebook.com' "$H/bypass.txt")" "once each"
 
 section "switching on replaces the hosts file at once"
 ctl hosts-set-enabled 1

@@ -28,19 +28,17 @@ function renderSettings(){
   const homeN = S.home_wifi == 1 ? t('Включено') : t('Выключено');
   const groups = [
     ['Работа', [
-      {icon: 'home', title: 'Домашняя Wi‑Fi', sub: t('Пауза обхода в домашних сетях') + ' · ' + homeN, on: "navigate('wifi')", chevron: true},
-      {icon: 'refresh', title: 'Стратегии по сетям', sub: t('Запоминать стратегию отдельно для каждой сети'), sw: true, checked: S.net_strategy == 1, on: 'toggleNetStrategy(this.checked)'}
+      {icon: 'home', title: 'Отключать на Wi‑Fi', sub: t('Пауза обхода в домашних сетях') + ' · ' + homeN, on: "navigate('wifi')", chevron: true},
+      {icon: 'shield', title: 'Отключать при VPN', sub: t('Пауза обхода, пока включён VPN'), sw: true, checked: S.vpn_pause == 1, on: 'toggleVpnPause(this.checked)'}
     ]],
-    ['Инструменты', [
+    ['Инструменты', (S.dns_available == 1 ? [
+      // только если в модуле есть dnsproxy
+      {icon: 'dns', title: 'DNS профили', sub: t('Свои DoH, DoT и DNS-серверы для выбранных доменов'), on: "navigate('dns')", chevron: true}
+    ] : []).concat([
+      {icon: 'edit', title: 'Редактор hosts', sub: t('Обход ограничений и блокировка рекламы — без перезагрузки'), on: "navigate('hosts')", chevron: true},
       {icon: 'apps', title: 'Фильтр приложений', sub: t('Обход только для выбранных приложений или для всех, кроме них'), on: "navigate('apps')", chevron: true},
-      {icon: 'status', title: 'nfqws2 Helper', sub: t('Плитка быстрых настроек и уведомление о состоянии'), on: 'openHelperApp()', chevron: true},
       {icon: 'test', title: 'Проверка доступности', sub: t('Открывает адреса из probe_hosts.list через обход'), on: "navigate('test')", chevron: true},
       {icon: 'medical', title: 'Диагностика', sub: t('Ядро, правила iptables и аргументы запуска'), on: "navigate('diag')", chevron: true}
-    ].concat(S.dns_available == 1 ? [
-      // только если в модуле есть dnsproxy
-      {icon: 'dns', title: 'DNS по профилям', sub: t('Свои DoH, DoT и DNS-серверы для выбранных доменов'), on: "navigate('dns')", chevron: true}
-    ] : []).concat([
-      {icon: 'edit', title: 'Редактор hosts', sub: t('Обход ограничений и блокировка рекламы — без перезагрузки'), on: "navigate('hosts')", chevron: true}
     ])],
     ['Резервная копия', [
       {icon: 'download', title: 'Создать копию', sub: t('Конфиг, списки, стратегии и оформление — в архив .tar'), on: 'createBackup()'},
@@ -48,7 +46,6 @@ function renderSettings(){
     ]],
     ['Оформление', [
       {icon: 'palette', title: 'Тема оформления', sub: t('Светлая, тёмная, AMOLED и цвет акцента'), on: 'openMonetModal()'},
-      {icon: 'motion', title: 'Отключение анимаций', sw: true, checked: isAnimationsDisabled(), id: 'animations-toggle', on: 'toggleAnimations(this.checked); renderSettings()'},
       {icon: 'apps', title: 'Ярлык на рабочий стол', sub: t('Добавить на главный экран телефона'), on: 'addDesktopShortcut()'},
       {icon: 'translate', title: 'Язык', sub: LANG === 'en' ? 'English' : 'Русский', on: 'pickLanguage(this)', menu: true}
     ]],
@@ -77,8 +74,6 @@ function renderSettings(){
     devHtml, false);
 }
 const GITHUB_URL = 'https://github.com/SpectaCoolAre/nfqws2-android-ext';
-const HELPER_PACKAGE = 'org.nfqws2.helper';
-const HELPER_RELEASE_URL = 'https://github.com/duhenduhen/nfqws2-helper/releases/tag/1.0';
 
 let deferredInstallPrompt = null;
 if(typeof window !== 'undefined'){
@@ -113,14 +108,6 @@ function addDesktopShortcut(){
 async function openUrl(url){
   const r = await sh('am start -a android.intent.action.VIEW -d ' + q(url) + ' >/dev/null 2>&1', 8000);
   if(r.code) try { window.open(url, '_blank'); } catch(e) {}
-}
-async function openHelperApp(){
-  const installed = await sh('pm path ' + q(HELPER_PACKAGE) + ' >/dev/null 2>&1', 8000);
-  if(!installed.code){
-    const r = await sh('am start -a android.settings.QS_TILE_SETTINGS >/dev/null 2>&1', 8000);
-    if(!r.code) return;
-  }
-  await openUrl(HELPER_RELEASE_URL);
 }
 function pickLanguage(anchor){
   openMenu(anchor, [['ru', 'Русский'], ['en', 'English']].map(([k, label]) => ({
@@ -252,7 +239,7 @@ async function openBackupSheet(){
   openSheet('backup-sheet');
   // Список — после выезда листа: exec без spawn занимает главный поток,
   // и анимация дёргалась
-  await new Promise(res => setTimeout(res, isAnimationsDisabled() ? 0 : 480));
+  await new Promise(res => setTimeout(res, 480));
   if(openSheetId !== 'backup-sheet') return;
   const r = await ctlx(['backup-list']);
   if(openSheetId !== 'backup-sheet') return;
@@ -320,11 +307,11 @@ async function toggleHotspot(checked){
   else { S.enable_hotspot = on ? 1 : 0; if(typeof renderStatus === 'function') renderStatus(); stat(); }
 }
 
-async function toggleNetStrategy(checked){
-  const on = typeof checked === 'boolean' ? checked : (S.net_strategy != 1);
-  const r = await withBusy(['set', 'NET_STRATEGY', on ? '1' : '0'], 40000);
-  if(r.code) toast(errText(r, 'Не удалось переключить привязку стратегий'));
-  else { S.net_strategy = on ? 1 : 0; renderSettings(); stat(); }
+async function toggleVpnPause(on){
+  const r = await withBusy(['set', 'VPN_PAUSE', on ? '1' : '0'], 40000);
+  if(r.code) toast(errText(r, 'Не удалось сохранить'));
+  else { S.vpn_pause = on ? 1 : 0; toast(on ? t('Обход встанет на паузу, пока включён VPN') : t('Сохранено')); stat(); }
+  renderSettings();
 }
 
 /* ══ Что нового ══════════════════════════════════════════════════════════

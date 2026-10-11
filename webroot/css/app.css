@@ -137,6 +137,8 @@ html[data-amoled="true"] .nav-bar { box-shadow: inset 0 1px 0 color-mix(in srgb,
 
 /* ── Лист темы ───────────────────────────────────────────────────────── */
 .theme-sheet { gap: 14px; }
+/* содержимое листа прокручивается; круг цвета жест не отдаёт прокрутке */
+.theme-scroll { display: flex; flex-direction: column; gap: 14px; }
 .theme-preview {
   display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: var(--shape-extra-large);
   background: var(--md-sys-color-surface-container-high);
@@ -157,7 +159,7 @@ html[data-amoled="true"] .nav-bar { box-shadow: inset 0 1px 0 color-mix(in srgb,
 .tp-roles { display: flex; gap: 8px; }
 .tp-role { width: 20px; height: 20px; border-radius: 50%; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent); }
 
-.amoled-row, .monochrome-row, .containers-row { border-radius: var(--shape-large); }
+.amoled-row, .containers-row { border-radius: var(--shape-large); }
 .swatch-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(48px, 1fr)); gap: 10px; justify-items: center; }
 .swatch-dot {
   appearance: none; border: 0; cursor: pointer; width: 48px; height: 48px; border-radius: 50%; padding: 0;

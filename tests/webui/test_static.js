@@ -263,16 +263,13 @@ truthy(/\.list-item:active\s*\{[^}]*border-radius:\s*20px/s.test(styleBlock),
 truthy(/html\[data-containers="true"\]\s+\.list-item\s*\{[^}]*transition:[^}]*border-radius\s+0\.2s\s+ease/s.test(styleBlock),
   'container list-item has border-radius 0.2s ease transition');
 
-// ── animations toggle and M3 sheet typography ─────────────────────────────────
-sect('animations toggle and M3 sheet typography');
-truthy(/html\[data-animations="false"\]\s*\{[^}]*--dur-short:\s*0ms\s*!important/s.test(styleBlock),
-  'data-animations="false" zeros motion duration tokens');
-truthy(/html\[data-animations="false"\]\s*\*:not\(\.spinner\)[^}]*transition-duration:\s*0\.001ms\s*!important/s.test(styleBlock),
-  'data-animations="false" zeroes transition durations');
+// ── M3 sheet typography ─────────────────────────────────
+sect('M3 sheet typography; no animations toggle');
+truthy(!/data-animations/.test(styleBlock), 'the removed animations toggle left no CSS behind');
 truthy(/\.sheet-title\s*\{[^}]*font-weight:\s*var\(--w-regular\)/s.test(styleBlock),
   'sheet-title uses regular weight conforming to M3 guidelines');
 const settingsJs = fs.readFileSync(path.join(REPO, 'webroot', 'js', 'settings.js'), 'utf8');
-truthy(settingsJs.includes('animations-toggle'), 'settings.js contains animations-toggle');
+truthy(!settingsJs.includes('animations-toggle'), 'settings.js has no animations toggle');
 
 // ── summary ───────────────────────────────────────────────────────────────────
 process.stdout.write('\n----------------------------------------\n');

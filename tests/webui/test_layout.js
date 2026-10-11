@@ -556,6 +556,49 @@ const VIEWPORTS = [
     await ctx.close();
   }
 
+  // ── theme sheet: scrolls like the others, the colour wheel picks ────────
+  {
+    sect('theme sheet swipe');
+    const ctx = await browser.newContext({ viewport: { width: 360, height: 640 }, isMobile: true, hasTouch: true });
+    await ctx.addInitScript(STUB);
+    const page = await ctx.newPage();
+    const pageErrors = [];
+    page.on('pageerror', e => pageErrors.push(e.message));
+    await page.goto(INDEX, { waitUntil: 'load' });
+    await page.waitForTimeout(600);
+    const swipe = (at, dy, scroll) => page.evaluate(async ([at, dy, scroll]) => {
+      const list = document.querySelector('#monet-modal .sheet-scroll');
+      list.scrollTop = scroll;
+      const el = document.querySelector(at), r = el.getBoundingClientRect(), x = r.left + r.width / 2, y0 = r.top + r.height / 2;
+      const fire = (type, y) => {
+        const t = new Touch({ identifier: 1, target: el, clientX: x, clientY: y });
+        const ev = new TouchEvent(type, { bubbles: true, cancelable: true, touches: type === 'touchend' ? [] : [t], changedTouches: [t] });
+        el.dispatchEvent(ev);
+        return ev.defaultPrevented;
+      };
+      fire('touchstart', y0);
+      let prevented = false;
+      for (let i = 1; i <= 8; i++) { prevented = fire('touchmove', y0 + dy * i / 8) || prevented; await new Promise(r => setTimeout(r, 8)); }
+      const mid = document.querySelector('#monet-modal').style.transform;
+      fire('touchend', y0 + dy);
+      await new Promise(r => setTimeout(r, 120));
+      return { prevented, mid, open: document.querySelector('#monet-modal').classList.contains('open') };
+    }, [at, dy, scroll]);
+
+    await page.evaluate(() => openMonetModal()); await page.waitForTimeout(500);
+    eq(null, await page.$('#monochrome-toggle'), 'there is no separate monochrome switch');
+    truthy(await page.evaluate(() => { const l = document.querySelector('#monet-modal .sheet-scroll'); return l && l.scrollHeight > l.clientHeight + 40; }),
+      'the theme sheet content scrolls on a small screen');
+    let r = await swipe('#wheel', 200, 0);
+    truthy(r.open && !r.prevented && !r.mid, 'dragging on the colour wheel does not move the sheet');
+    r = await swipe('#monet-modal .theme-preview', 300, 40);
+    truthy(r.open && !r.mid, 'with the content scrolled, a swipe down scrolls it');
+    r = await swipe('#monet-modal .theme-preview', 300, 0);
+    truthy(!r.open && r.prevented, 'at the top, a swipe down closes the sheet');
+    eq('', pageErrors.join(' | '), 'no script errors');
+    await ctx.close();
+  }
+
   // ── list editor: find and remove duplicates ─────────────────────────────
   {
     sect('list editor: find and duplicates');

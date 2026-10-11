@@ -316,6 +316,37 @@ assert_eq "$wd" "$(cat "$WD_PIDFILE" 2>/dev/null)" "a running watchdog is not sp
 
 kill "$wd" 2>/dev/null
 
+# ── pause while a VPN is on ──────────────────────────────────────────────────
+section "VPN pause"
+NFQWS_SYSNET="$SANDBOX/sysnet"; export NFQWS_SYSNET
+mkdir -p "$NFQWS_SYSNET/rmnet_data1"; printf '0x1003\n' > "$NFQWS_SYSNET/rmnet_data1/flags"
+svc stop >/dev/null 2>&1
+printf 'VPN_PAUSE=1\nWATCHDOG=0\n' >> "$CONFFILE"
+svc start >/dev/null 2>&1
+assert_file "$PIDFILE" "without a VPN the bypass runs"
+mkdir -p "$NFQWS_SYSNET/tun0"; printf '0x1091\n' > "$NFQWS_SYSNET/tun0/flags"
+svc home_check >/dev/null 2>&1
+assert_no_file "$PIDFILE" "a VPN coming up pauses the bypass"
+assert_eq "@vpn" "$(cat "$HOME_PAUSED_FILE" 2>/dev/null)" "and the pause is marked as VPN"
+svc start >/dev/null 2>&1
+assert_file "$PIDFILE" "a manual start overrides the VPN pause"
+assert_eq "@vpn" "$(cat "$HOME_OVERRIDE_FILE" 2>/dev/null)" "until the VPN goes away"
+svc home_check >/dev/null 2>&1
+assert_file "$PIDFILE" "the override holds while the VPN is on"
+printf '0x1090\n' > "$NFQWS_SYSNET/tun0/flags"
+svc home_check >/dev/null 2>&1
+assert_no_file "$HOME_OVERRIDE_FILE" "a VPN going down clears the override"
+printf '0x1091\n' > "$NFQWS_SYSNET/tun0/flags"
+svc home_check >/dev/null 2>&1
+assert_no_file "$PIDFILE" "the next VPN pauses again"
+rm -rf "$NFQWS_SYSNET/tun0"
+svc home_check >/dev/null 2>&1
+assert_file "$PIDFILE" "the VPN going away resumes the bypass"
+assert_no_file "$HOME_PAUSED_FILE" "and clears the pause"
+svc stop >/dev/null 2>&1
+conf_reset
+unset NFQWS_SYSNET
+
 # ── boot-completed.sh lifecycle hook ──────────────────────────────────────────
 section "boot-completed.sh lifecycle hook"
 

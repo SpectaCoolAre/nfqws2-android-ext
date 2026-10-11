@@ -95,6 +95,7 @@ sandbox_init() {
   cp "$REPO_DIR/lib/hosts.sh" "$MODDIR/lib/hosts.sh"
   mkdir -p "$MODDIR/defaults/hosts-presets"
   cp -R "$REPO_DIR"/defaults/hosts-presets/. "$MODDIR/defaults/hosts-presets/"
+  cp "$REPO_DIR/defaults/hosts-bypass.txt" "$MODDIR/defaults/hosts-bypass.txt"
   HOSTS_TARGET="$SANDBOX/system_etc_hosts"
   printf '127.0.0.1 localhost\n::1 ip6-localhost\n# system\n1.2.3.4 sys.example\n' > "$HOSTS_TARGET"
   cp "$TESTS_DIR/lib/mock/mount" "$MOCKBIN/mount"

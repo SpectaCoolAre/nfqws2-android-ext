@@ -227,7 +227,8 @@ function renderStatus(){
   // Вместо лимита (он зависит от ядра и виден в «Диагностике») — состояние DNS
   const dns = j.dns_available == 1 ? ' · ' + (j.dns_enabled == 1 ? t('DNS включён') : t('DNS выключен')) : '';
   $('sub').textContent = paused
-    ? t('Домашняя Wi‑Fi «{0}». Обход возобновится, когда телефон уйдёт из этой сети.', j.paused)
+    ? (j.paused === '@vpn' ? t('Включён VPN. Обход возобновится, когда VPN отключится.')
+      : t('Домашняя Wi‑Fi «{0}». Обход возобновится, когда телефон уйдёт из этой сети.', j.paused))
     : t('Режим') + ' ' + (j.mode || '—') + dns;
   if(j.running) startUptTimer(j.uptime || 0); else stopUptTimer();
   renderHeroActions();

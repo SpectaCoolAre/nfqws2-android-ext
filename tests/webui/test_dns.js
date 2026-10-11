@@ -141,12 +141,12 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     await page.evaluate(() => navigate('settings')); await idle();
     // обычная сборка (нет dnsproxy): пункта нет
     const hidden = await page.evaluate(() => { const was = S.dns_available; S.dns_available = 0; renderSettings();
-      const has = $('settings-body').textContent.includes('DNS по профилям'); S.dns_available = was; renderSettings(); return !has; });
+      const has = $('settings-body').textContent.includes('DNS профили'); S.dns_available = was; renderSettings(); return !has; });
     truthy(hidden, 'the regular build (no dnsproxy) has no DNS item');
-    const row = await page.$('#settings-body .list-item:has-text("DNS по профилям")');
+    const row = await page.$('#settings-body .list-item:has-text("DNS профили")');
     truthy(!!row, 'the DNS row is in the settings');
     const group = await page.evaluate(() => {
-      const r = [...document.querySelectorAll('#settings-body .list-item')].find(e => e.textContent.includes('DNS по профилям'));
+      const r = [...document.querySelectorAll('#settings-body .list-item')].find(e => e.textContent.includes('DNS профили'));
       return r && r.closest('.stack').querySelector('.subhead').textContent;
     });
     eq('Инструменты', group, 'in the Tools group');
