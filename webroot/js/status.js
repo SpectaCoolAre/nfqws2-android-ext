@@ -226,10 +226,14 @@ function renderStatus(){
   $('st').textContent = j.running ? t('Служба работает') : (paused ? t('Пауза') : t('Служба остановлена'));
   // Вместо лимита (он зависит от ядра и виден в «Диагностике») — состояние DNS
   const dns = j.dns_available == 1 ? ' · ' + (j.dns_enabled == 1 ? t('DNS включён') : t('DNS выключен')) : '';
-  $('sub').textContent = paused
-    ? (j.paused === '@vpn' ? t('Включён VPN. Обход возобновится, когда VPN отключится.')
-      : t('Домашняя Wi‑Fi «{0}». Обход возобновится, когда телефон уйдёт из этой сети.', j.paused))
+  // Одна строка в любом состоянии: карточка не меняет высоту при паузе.
+  // Подробности паузы — в title (долгое нажатие) и в журнале службы.
+  const sub = paused
+    ? (j.paused === '@vpn' ? t('Включён VPN') : t('Домашняя Wi‑Fi «{0}»', j.paused)) + dns
     : t('Режим') + ' ' + (j.mode || '—') + dns;
+  $('sub').textContent = sub;
+  $('sub').title = paused ? (j.paused === '@vpn' ? t('Включён VPN. Обход возобновится, когда VPN отключится.')
+    : t('Домашняя Wi‑Fi «{0}». Обход возобновится, когда телефон уйдёт из этой сети.', j.paused)) : '';
   if(j.running) startUptTimer(j.uptime || 0); else stopUptTimer();
   renderHeroActions();
   renderParams(j);
@@ -268,17 +272,46 @@ async function stat(quiet){
 }
 
 /* ── Автообновление статуса: пока экран виден и на нём есть что обновлять ──
-   Падение службы, пауза в домашней сети и рост auto.list видны без
-   перезахода. Опрос тихий — без полосы загрузки, и пропускается, пока
-   открыт редактор или идёт другая команда. */
+   Полный json-status — это запуск nfqws2-ctl с чтением конфига и списков,
+   и гонять его чаще раза в 5 секунд накладно. Поэтому на «Состоянии» раз в
+   1,5 с читается только «подпись»: жив ли процесс, причина паузы, ручной
+   запуск дома, включён ли DNS — несколько файлов одной командой. Изменилась
+   подпись (пауза ↔ работа, падение, смена сети) — сразу полный статус, и
+   карточка обновляется за 1–2 секунды, а не через 5–7. Опрос тихий — без
+   полосы загрузки, и пропускается, пока открыт редактор или идёт команда. */
 const POLL_PAGES = {control: 1, lists: 1};
-setInterval(() => {
-  if(document.visibilityState !== 'visible' || !POLL_PAGES[currentPage]) return;
-  if(busyCount || svcBusy || editorCtx || openSheetId) return;
-  stat(true);
-}, 5000);
+const SIG_CMD = 'd=/data/adb/nfqws2; p=$(cat "$d/state/nfqws2.pid" 2>/dev/null); ' +
+  'kill -0 "$p" 2>/dev/null && echo "run $p"; echo "p:$(cat "$d/state/home_paused" 2>/dev/null)"; ' +
+  'echo "o:$(cat "$d/state/home_override" 2>/dev/null)"; [ -f "$d/dns/enabled" ] && echo dns; true';
+let statSig = null, sigBusy = false, lastFull = 0;
+function pollIdle(){
+  return document.visibilityState === 'visible' && POLL_PAGES[currentPage] &&
+    !busyCount && !svcBusy && !editorCtx && !openSheetId;
+}
+async function readSig(){
+  const r = await sh(SIG_CMD, 4000);
+  return r.code ? null : r.out.trim();
+}
+// Подпись читается ДО статуса: изменение между ними поймает следующий тик
+async function fullStat(){
+  lastFull = Date.now();
+  // не прочиталась — пустая: иначе полный статус шёл бы на каждом тике
+  if(currentPage === 'control') statSig = (await readSig()) || '';
+  await stat(true);
+}
+async function statPoll(){
+  if(!pollIdle() || sigBusy) return;
+  sigBusy = true;
+  try {
+    // «Списки» и счётчики меняются без смены подписи — раз в 5 с полный статус
+    if(currentPage !== 'control' || statSig === null || Date.now() - lastFull >= 5000){ await fullStat(); return; }
+    const sig = await readSig();
+    if(sig !== null && sig !== statSig && pollIdle()){ await fullStat(); return; }
+  } finally { sigBusy = false; }
+}
+setInterval(statPoll, 1500);
 document.addEventListener('visibilitychange', () => {
-  if(document.visibilityState === 'visible' && POLL_PAGES[currentPage]) stat(true);
+  if(document.visibilityState === 'visible' && POLL_PAGES[currentPage]) fullStat();
 });
 
 async function setp(k, v){

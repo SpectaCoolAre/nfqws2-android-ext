@@ -195,8 +195,6 @@ function dnsWarnings(){
     w.push(banner('danger', 'error', t('В модуле нет dnsproxy. Переустановите модуль из архива релиза.')));
   else if(s.error)
     w.push(banner('danger', 'error', t('Ошибка: {0}', s.error)));
-  if(s.service !== 'running' && s.standalone !== '1')
-    w.push(banner('', 'info', t('Служба не запущена: профили применятся при её запуске. Чтобы DNS работал и без неё, включите «Без службы обхода».')));
   if(s.ipv6 === 'none' && s.rules === 'on')
     w.push(banner('warn', 'warn', t('Запросы к IPv6-серверам DNS идут мимо: в ядре нет ip6tables nat, а у сети нет IPv4-серверов.')));
   return w.join('');
@@ -208,10 +206,9 @@ function dnsStateRow(){
   const working = s.rules === 'on' && s.proxy === 'running';
   if(s.private === 'hostname') title = t('Не применяется: включён «Частный DNS»');
   else if(working){
-    title = s.service === 'running' ? t('Работает') : t('Работает без службы обхода');
+    title = t('Работает');
     sub = t('Перехвачено запросов: {0}', fmtCount(+s.hits || 0));
-  } else if(s.service !== 'running' && s.standalone !== '1') title = t('Ожидает запуска службы');
-  else if(!dnsSt.profiles.some(p => p.enabled && p.servers.length && p.domains.length) && (s.default || 'net') === 'net')
+  } else if(!dnsSt.profiles.some(p => p.enabled && p.servers.length && p.domains.length) && (s.default || 'net') === 'net')
     title = t('Не активно: нет включённых профилей с доменами');
   else title = t('Не работает — см. журнал DNS');
   // Куда сейчас уходит всё, что не попало в профили: выбранный профиль или
@@ -240,9 +237,6 @@ function renderDns(){
   setHTML('dns-general',
     settingsRow({icon: 'globe', title: 'DNS по умолчанию', sub: dnsDefaultLabel() + ' · ' + t('для доменов вне профилей'),
       on: 'pickDnsDefault(this)', menu: true}) +
-    settingsRow({icon: 'shield', title: 'Без службы обхода', sw: true, checked: s.standalone === '1',
-      sub: t('DNS работает, даже когда служба остановлена или на паузе. Выключить его тогда можно только переключателем выше.'),
-      on: 'setDnsStandalone(this.checked, this)'}) +
     (dnsLoaded && on ? dnsStateRow() : '') +
     settingsRow({icon: 'logs', title: 'Журнал DNS', sub: t('Запуски, перезапуски и ошибки dnsproxy'), on: 'openDnsLog()'}),
     false);
@@ -360,13 +354,6 @@ function openDnsLog(){ logSource = 'dns'; store.set('nfq_log_src', 'dns'); navig
 async function setDnsEnabled(on){
   const r = await withBusy(['dns-set-enabled', on ? '1' : '0'], 40000);
   if(r.code){ toast(errText(r, 'Не удалось сохранить')); $('dns-toggle').checked = !on; return; }
-  await loadDnsState();
-  renderDns();
-}
-
-async function setDnsStandalone(on, el){
-  const r = await withBusy(['dns-set-standalone', on ? '1' : '0'], 40000);
-  if(r.code){ toast(errText(r, 'Не удалось сохранить')); if(el) el.checked = !on; return; }
   await loadDnsState();
   renderDns();
 }

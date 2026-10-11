@@ -16,8 +16,12 @@ jobs:
   build-binaries:
     uses: ./.github/workflows/build-binaries.yml
 
+  # pkglist.jar (список приложений для фильтра) собирается из java/pkglist
+  build-pkglist:
+    uses: ./.github/workflows/build-pkglist.yml
+
   package:
-    needs: [build-binaries]
+    needs: [build-binaries, build-pkglist]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,6 +31,12 @@ jobs:
         with:
           pattern: nfqws2-*
           path: downloaded-binaries
+
+      - name: Скачать pkglist
+        uses: actions/download-artifact@v4
+        with:
+          name: pkglist
+          path: bin
 
       - name: Разместить nfqws2 и dnsproxy
         run: |

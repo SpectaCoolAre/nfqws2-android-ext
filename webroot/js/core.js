@@ -31,31 +31,51 @@ function blobToB64(blob){
     r.readAsDataURL(blob);
   });
 }
-async function exportBlobFile(blob, filename, mimeType, localFilePath){
+/* Папка для архива: в KernelSU/ReSukiSU WebView нет системного диалога
+   сохранения, поэтому спрашиваем путь сами и запоминаем его */
+const SAVE_DIR_DEFAULT = '/sdcard/Download/nfqws2';
+function normSaveDir(d){
+  d = String(d || '').trim().replace(/\/+$/, '') || SAVE_DIR_DEFAULT;
+  return d.startsWith('/') ? d : '/sdcard/' + d;
+}
+async function askSaveDir(title){
+  let dir = normSaveDir(store.get('nfq_save_dir'));
+  if(typeof window === 'undefined' || !window.ksu) return dir;
+  const chosen = await mdPrompt(title, t('Укажите папку для сохранения архива:'), dir, t('Папка для сохранения'), {ok: t('Сохранить')});
+  if(chosen === null) return null;
+  dir = normSaveDir(chosen);
+  store.set('nfq_save_dir', dir);
+  return dir;
+}
+async function exportBlobFile(blob, filename, mimeType, localFilePath, targetDir){
   mimeType = mimeType || 'application/x-tar';
-  if(typeof navigator !== 'undefined' && navigator.canShare && typeof File !== 'undefined'){
-    try {
-      const file = new File([blob], filename, { type: mimeType });
-      if(navigator.canShare({ files: [file] })){
-        await navigator.share({ files: [file], title: filename });
-        toast(t('Экспорт завершён: {0}', filename));
-        return true;
-      }
-    } catch(e){
-      if(e && e.name === 'AbortError') return false;
-    }
-  }
-  if(typeof window !== 'undefined' && window.showSaveFilePicker){
+  const ksu = typeof window !== 'undefined' && !!window.ksu;
+  if(!ksu && typeof window !== 'undefined' && window.showSaveFilePicker){
     try {
       const handle = await window.showSaveFilePicker({
         suggestedName: filename,
-        types: [{ description: filename, accept: { [mimeType]: ['.tar'] } }]
+        types: [{ description: filename, accept: { [mimeType]: ['.tar'], 'application/octet-stream': ['.tar'] } }]
       });
       const writable = await handle.createWritable();
       await writable.write(blob);
       await writable.close();
       toast(t('Файл сохранён: {0}', filename));
       return true;
+    } catch(e){
+      if(e && e.name === 'AbortError') return false;
+    }
+  }
+  if(!ksu && typeof navigator !== 'undefined' && navigator.canShare && typeof File !== 'undefined'){
+    try {
+      // Часть систем не принимает application/x-tar в «Поделиться»
+      let file = new File([blob], filename, { type: mimeType });
+      if(!navigator.canShare({ files: [file] })) file = new File([blob], filename, { type: 'application/octet-stream' });
+      if(!navigator.canShare({ files: [file] })) file = new File([blob], filename, { type: '' });
+      if(navigator.canShare({ files: [file] })){
+        await navigator.share({ files: [file], title: filename });
+        toast(t('Экспорт завершён: {0}', filename));
+        return true;
+      }
     } catch(e){
       if(e && e.name === 'AbortError') return false;
     }
@@ -69,12 +89,24 @@ async function exportBlobFile(blob, filename, mimeType, localFilePath){
     a.click();
     setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 2000);
   } catch(e) {}
-  if(localFilePath && typeof window !== 'undefined' && window.ksu){
+  if(localFilePath && ksu){
+    const dir = normSaveDir(targetDir);
+    const targetFile = dir + '/' + filename;
+    // file:// в ACTION_SEND с Android 7 запрещён: отдаём content:// из MediaStore
+    const safUri = 'content://com.android.externalstorage.documents/document/primary%3ADownload%2F' + encodeURIComponent(filename);
     try {
-      await sh('am start -a android.intent.action.SEND -t ' + q(mimeType) +
-               ' --eu android.intent.extra.STREAM ' + q('file://' + localFilePath) +
-               ' --es android.intent.extra.SUBJECT ' + q(filename) + ' >/dev/null 2>&1');
+      await sh('f=' + q(localFilePath) + '; tf=' + q(targetFile) + '; mkdir -p ' + q(dir) + ' 2>/dev/null; ' +
+        'if [ "$f" != "$tf" ]; then cp -f "$f" "$tf" 2>/dev/null; chmod 666 "$tf" 2>/dev/null; fi; ' +
+        'case "$tf" in /sdcard/*) rf="/storage/emulated/0/${tf#/sdcard/}" ;; *) rf="$tf" ;; esac; ' +
+        'am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d "file://$rf" >/dev/null 2>&1; ' +
+        'u=$(content insert --uri content://media/external/file --bind _data:s:"$rf" --bind mime_type:s:"application/octet-stream" 2>/dev/null | grep -o \'content://[^ ]*\'); ' +
+        '[ -z "$u" ] && u=$(content query --uri content://media/external/file --projection _id --where "_data=\'$tf\' OR _data=\'$rf\'" 2>/dev/null | grep -o \'_id=[0-9]*\' | head -n1 | sed \'s/_id=/content:\\/\\/media\\/external\\/file\\//\'); ' +
+        '[ -z "$u" ] && u=' + q(safUri) + '; ' +
+        'am start -a android.intent.action.SEND --user 0 -t "*/*" --eu android.intent.extra.STREAM "$u" --es android.intent.extra.SUBJECT ' + q(filename) +
+        ' --es android.intent.extra.TITLE ' + q(filename) + ' -f 0x10000001 >/dev/null 2>&1');
     } catch(e) {}
+    toast(t('Архив сохранён: {0}', targetFile));
+    return true;
   }
   toast(t('Экспорт завершён: {0}', filename));
   return true;

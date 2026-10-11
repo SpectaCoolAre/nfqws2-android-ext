@@ -338,7 +338,9 @@ body.nav-hidden .content { padding-bottom: calc(var(--bottom-inset) + 24px); }
 .hero-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .hero-state { font-size: var(--ts-headline-small); line-height: var(--lh-headline-small); font-weight: var(--w-emph); }
 .hero-sub { font-size: var(--ts-body-medium); line-height: var(--lh-body-medium);
-  letter-spacing: var(--tr-body-medium); opacity: .8; word-break: break-word; }
+  letter-spacing: var(--tr-body-medium); opacity: .8;
+  /* одна строка: длинное имя сети не растягивает карточку */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Статистика службы: равномерное центрирование по трём колонкам и внутри блоков */
 .hero-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; width: 100%; }
 .hstat { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 2px; min-width: 0; }

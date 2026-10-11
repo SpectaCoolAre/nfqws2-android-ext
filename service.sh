@@ -119,8 +119,6 @@ start() {
 
 stop() {
   rm -f "$DESIRED_FILE" "$STARTED_FILE"
-  # DNS «без службы» переживает остановку обхода
-  dns_standalone || dns_stop "остановка службы"
   release_wakelock
   firewall_stop
   if [ -f "$PIDFILE" ]; then
@@ -419,7 +417,7 @@ case "$1" in
     else
       update_description stopped
     fi
-    # DNS «без службы» поднимается и когда служба не стартовала
+    # DNS не зависит от службы: поднимается, даже если она не стартовала
     dns_start "загрузка"
     hosts_boot
     ensure_watchdog

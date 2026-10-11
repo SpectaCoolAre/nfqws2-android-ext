@@ -22,7 +22,6 @@ DNS_DIR="$CONFDIR/dns"
 DNS_PROFILES_DIR="$DNS_DIR/profiles"
 DNS_ENABLED_FILE="$DNS_DIR/enabled"      # есть файл — функция включена
 DNS_DEFAULT_FILE="$DNS_DIR/default"      # net | id профиля
-DNS_STANDALONE_FILE="$DNS_DIR/standalone" # есть файл — DNS работает и без службы обхода
 DNS_PRESETS_DIR="$MODDIR/defaults/dns-presets"
 DNS_BIN="$MODDIR/bin/dnsproxy"
 DNS_RUN_DIR="$STATE_DIR/dns"
@@ -43,11 +42,6 @@ DNS_MAX_DOMAINS=1000
 DNS_PUBLIC="77.88.8.8 1.1.1.1 8.8.8.8"
 
 dns_enabled() { [ -f "$DNS_ENABLED_FILE" ] && [ -f "$DNS_BIN" ]; }
-# Независимо от службы: тогда остановка службы (вручную, паузой в домашней
-# Wi‑Fi, кнопкой в менеджере) DNS не трогает — выключить его можно только
-# главным переключателем на экране DNS.
-dns_standalone() { [ -f "$DNS_STANDALONE_FILE" ]; }
-dns_service_up() { [ -f "$DESIRED_FILE" ] && is_running; }
 
 dns_default() {
   local d=""
@@ -499,13 +493,16 @@ dns_rules_ok() { iptables -w -t nat -C OUTPUT -j $DNS_CHAIN 2>/dev/null; }
 # Загрузка: всё в $DNS_RUN_DIR — от прошлой загрузки. Старый PID мог достаться
 # другому процессу, и dns_start счёл бы dnsproxy живым.
 dns_boot_reset() {
-  rm -f "$DNS_PIDFILE" "$DNS_RUN_DIR/running.upstreams" "$DNS_RUN_DIR/running.args" \
+  # standalone — флаг прежних версий: теперь DNS всегда работает сам по себе
+  rm -f "$DNS_DIR/standalone" "$DNS_PIDFILE" "$DNS_RUN_DIR/running.upstreams" "$DNS_RUN_DIR/running.args" \
         "$DNS_RUN_DIR/active" "$DNS_RUN_DIR/error" "$DNS_RUN_DIR/ipv6" 2>/dev/null
 }
 
-# Нужен ли перехват сейчас: функция включена, служба работает, есть что
-# применять (dns_build это решает).
-dns_wanted() { dns_enabled && { dns_standalone || dns_service_up; }; }
+# Нужен ли перехват сейчас. DNS работает независимо от службы обхода:
+# остановка службы, пауза в домашней Wi‑Fi или при VPN его не трогают —
+# выключить его можно только главным переключателем на экране DNS. Есть ли
+# что применять, решает dns_build.
+dns_wanted() { dns_enabled; }
 
 # Что будет применено — одной строкой в журнал DNS
 dns_describe() {
@@ -631,8 +628,6 @@ dns_state() {
   echo "#status"
   echo "enabled=$(dns_enabled && echo 1 || echo 0)"
   echo "default=$(dns_default)"
-  echo "service=$(dns_service_up && echo running || echo stopped)"
-  echo "standalone=$(dns_standalone && echo 1 || echo 0)"
   echo "proxy=$proxy"
   echo "rules=$(dns_rules_ok && echo on || echo off)"
   echo "ipv6=$(cat "$DNS_RUN_DIR/ipv6" 2>/dev/null)"
@@ -679,8 +674,6 @@ dns_doctor() { # строки для «Диагностики»; в обычно
     row ok dns "$(M "dnsproxy работает, перехвачено запросов: $(dns_hits)" "dnsproxy running, queries intercepted: $(dns_hits)")"
   elif dns_wanted; then
     row warn dns "$(M 'включён, но перехват не работает — см. журнал службы' 'on, but interception is not working — see the service log')"
-  else
-    row info dns "$(M 'применится при запуске службы' 'applies when the service starts')"
   fi
   case "$(dns_private_mode)" in
     hostname) row warn private_dns "$(M 'в Android включён «Частный DNS» — профили не применяются' 'Android Private DNS is on — profiles do not apply')" ;;
@@ -693,7 +686,6 @@ dns_backup_add() { # <каталог в архиве>
   mkdir -p "$1/profiles" && cp -f "$DNS_PROFILES_DIR"/*.conf "$1/profiles/" 2>/dev/null
   cp -f "$DNS_DEFAULT_FILE" "$1/" 2>/dev/null
   dns_enabled && : > "$1/enabled"
-  dns_standalone && : > "$1/standalone"
   return 0
 }
 # Профили из архива проходят ту же проверку, что и сохранение из WebUI.
@@ -708,7 +700,6 @@ dns_backup_restore() { # <каталог из архива>
   done
   [ -f "$1/default" ] && cp -f "$1/default" "$DNS_DEFAULT_FILE"
   if [ -f "$1/enabled" ]; then : > "$DNS_ENABLED_FILE"; else rm -f "$DNS_ENABLED_FILE"; fi
-  if [ -f "$1/standalone" ]; then : > "$DNS_STANDALONE_FILE"; else rm -f "$DNS_STANDALONE_FILE"; fi
   return 0
 }
 
@@ -730,15 +721,6 @@ dns_ctl() {
         *) echo "Допустимо 0 или 1" >&2; return 1 ;;
       esac
       # Наблюдатели нужны DNS для смены сети; home_check поднимает их по нужде
-      sh "$MODDIR/service.sh" home_check >/dev/null 2>&1
-      dns_apply_now; echo OK ;;
-    dns-set-standalone)
-      dns_init
-      case "$1" in
-        1) : > "$DNS_STANDALONE_FILE" ;;
-        0) rm -f "$DNS_STANDALONE_FILE" ;;
-        *) echo "Допустимо 0 или 1" >&2; return 1 ;;
-      esac
       sh "$MODDIR/service.sh" home_check >/dev/null 2>&1
       dns_apply_now; echo OK ;;
     dns-set-default)

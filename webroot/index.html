@@ -307,7 +307,7 @@
       <input type="checkbox" class="switch" role="switch" id="dns-toggle" aria-label="DNS по профилям" data-ta="aria-label"
              onchange="setDnsEnabled(this.checked)">
     </label>
-    <div class="helper" data-t>Как в Keenetic: запросы к доменам профиля и их поддоменам идут на его DNS-серверы (DoH, DoT, DoQ или обычные), остальные — на DNS по умолчанию. Включается и выключается вместе со службой обхода, если не выбрано «Без службы обхода».</div>
+    <div class="helper" data-t>Как в Keenetic: запросы к доменам профиля и их поддоменам идут на его DNS-серверы (DoH, DoT, DoQ или обычные), остальные — на DNS по умолчанию. Работает независимо от службы обхода: остановка или пауза его не выключают.</div>
     <div id="dns-warn" class="stack"></div>
 
     <div id="dns-body" class="stack">

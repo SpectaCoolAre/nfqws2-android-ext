@@ -218,6 +218,8 @@ async function setHomeWifi(on){
 /* ══ РЕЗЕРВНАЯ КОПИЯ ═════════════════════════════════════════════════════ */
 const UI_KEYS = ['m3_seed', 'm3_mode', 'm3_amoled', 'm3_containers', 'm3_monochrome', 'nfq_lang', 'nfq_dev'];
 async function createBackup(){
+  const dir = await askSaveDir(t('Сохранить копию'));
+  if(dir === null) return;
   const ui = {};
   UI_KEYS.forEach(k => { const v = store.get(k); if(v != null) ui[k] = v; });
   const r = await withBusy(['backup-create', b64(JSON.stringify(ui))], 60000);
@@ -228,7 +230,7 @@ async function createBackup(){
   const b64Data = parts[2] || '';
   if(b64Data){
     const blob = b64toBlob(b64Data, 'application/x-tar');
-    await exportBlobFile(blob, filename, 'application/x-tar', filePath);
+    await exportBlobFile(blob, filename, 'application/x-tar', filePath, dir);
   } else {
     toast(t('Копия сохранена: {0}', filename));
   }

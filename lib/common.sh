@@ -1247,7 +1247,9 @@ active_ssid() {
 vpn_active() {
   local d f
   local n="${NFQWS_SYSNET:-/sys/class/net}"
-  for d in "$n"/tun* "$n"/wg* "$n"/ipsec*; do
+  # tun — VpnService-приложения, wg — WireGuard, ppp/ipsec — встроенный VPN
+  # Android, tap/tailscale — Tailscale и мосты (список как в оригинале)
+  for d in "$n"/tun* "$n"/wg* "$n"/ppp* "$n"/ipsec* "$n"/tap* "$n"/tailscale*; do
     [ -r "$d/flags" ] || continue
     f=$(cat "$d/flags" 2>/dev/null)
     case "$f" in 0x*) [ $(( $f & 1 )) -eq 1 ] && return 0 ;; esac

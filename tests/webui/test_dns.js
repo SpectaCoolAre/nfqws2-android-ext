@@ -40,7 +40,7 @@ const STATUS = JSON.stringify({
 
 // Заглушка модуля: ksu.exec разбирает команду nfqws2-ctl и отвечает из памяти.
 const STUB = `
-window.__dns = { enabled: false, def: 'net', priv: 'off', privHost: '', standalone: false, service: true, profiles: {}, calls: [] };
+window.__dns = { enabled: false, def: 'net', priv: 'off', privHost: '', service: true, profiles: {}, calls: [] };
 window.__presets = ${JSON.stringify(PRESETS)};
 (function(){
   const st = window.__dns;
@@ -62,9 +62,8 @@ window.__presets = ${JSON.stringify(PRESETS)};
   }
   function state(){
     const any = Object.values(st.profiles).some(t => /ENABLED=1/.test(t) && /DOMAIN=/.test(t) && /SERVER=/.test(t));
-    const on = st.enabled && (st.service || st.standalone) && (any || st.def !== 'net');
+    const on = st.enabled && (any || st.def !== 'net');
     let out = ['#status', 'enabled=' + (st.enabled ? 1 : 0), 'default=' + st.def,
-      'service=' + (st.service ? 'running' : 'stopped'), 'standalone=' + (st.standalone ? 1 : 0),
       'proxy=' + (on ? 'running' : 'stopped'), 'rules=' + (on ? 'on' : 'off'), 'ipv6=redirect',
       'private=' + st.priv, 'private_host=' + st.privHost, 'net_dns=192.168.1.1', 'hits=' + (on ? 1234 : 0), 'error=',
       'max_profiles=32', 'max_servers=8', 'max_domains=1000'];
@@ -77,7 +76,6 @@ window.__presets = ${JSON.stringify(PRESETS)};
     switch (a[0]) {
       case 'dns-state': return [0, state()];
       case 'dns-set-enabled': st.enabled = a[1] === '1'; return [0, 'OK'];
-      case 'dns-set-standalone': st.standalone = a[1] === '1'; return [0, 'OK'];
       case 'dns-set-default': if (a[1] !== 'net' && !st.profiles[a[1]]) return [1, '', 'Профиль не найден'];
         st.def = a[1]; return [0, 'OK'];
       case 'dns-save-b64': try { st.profiles[a[1]] = norm(dec(a[2])); return [0, 'OK']; } catch (e) { return [1, '', String(e)]; }
@@ -315,18 +313,15 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     eq('settings', await page.evaluate(() => currentPage), 'back to settings');
     await page.evaluate(() => navigate('dns')); await page.waitForTimeout(900);
 
-    sect(`${mode}: standalone`);
+    sect(`${mode}: independent of the service`);
     // профиль с доменами, чтобы было что применять
     await page.evaluate(() => { window.__dns.profiles.xbox = window.__dns.profiles.xbox.replace('ENABLED=0', 'ENABLED=1') + '\nDOMAIN=chatgpt.com'; });
     await page.evaluate(() => { window.__dns.service = false; }); await page.evaluate(() => dnsInit()); await idle();
-    truthy((await page.textContent('#dns-warn')).includes('Без службы обхода'), 'with the service stopped the screen points at the standalone switch');
-    truthy((await page.textContent('#dns-general')).includes('Ожидает запуска службы'), 'and waits for the service');
-    await page.click('#dns-general label:has-text("Без службы обхода")'); await idle();
-    eq(true, await page.evaluate(() => window.__dns.standalone), 'the standalone switch is saved');
+    truthy(!(await page.textContent('#dns-general')).includes('Без службы обхода'), 'there is no standalone switch');
+    truthy(!(await page.textContent('#dns-warn')).includes('Служба не запущена'), 'no "service stopped" warning');
     state = await page.textContent('#dns-general');
-    truthy(state.includes('Работает без службы обхода'), 'DNS works with the service stopped');
+    truthy(state.includes('Работает'), 'DNS works with the service stopped');
     truthy(state.includes('остальное — через DNS сети (192.168.1.1)'), 'the network DNS is shown when it is the default');
-    truthy(!(await page.textContent('#dns-warn')).includes('Служба не запущена'), 'no "service stopped" warning in standalone mode');
     await shot('standalone');
     await page.evaluate(() => { window.__dns.service = true; });
 

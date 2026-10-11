@@ -64,6 +64,8 @@ async function loadLog(){
   lg.scrollTop = lg.scrollHeight;
 }
 async function exportLogs(){
+  const dir = await askSaveDir(t('Экспорт журналов'));
+  if(dir === null) return;
   const r = await withBusy(['export-logs'], 30000);
   if(r.code){ toast(errText(r, 'Не удалось экспортировать журналы')); return; }
   const parts = r.out.trim().split('\n')[0].split('\t');
@@ -72,7 +74,7 @@ async function exportLogs(){
   const b64Data = parts[2] || '';
   if(b64Data){
     const blob = b64toBlob(b64Data, 'application/x-tar');
-    await exportBlobFile(blob, filename, 'application/x-tar', filePath);
+    await exportBlobFile(blob, filename, 'application/x-tar', filePath, dir);
   } else {
     toast(t('Журналы сохранены: {0}', filename));
   }

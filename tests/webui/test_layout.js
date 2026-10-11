@@ -50,7 +50,8 @@ window.ksu = { exec: function(cmd, opts, cb){
   }
   window.__calls.push(cmd);
   var out = 'OK';
-  if (cmd.indexOf('json-status') >= 0) out = ${JSON.stringify(STATUS)};
+  if (cmd.indexOf('home_paused') >= 0) out = window.__sig || 'run 4710';
+  else if (cmd.indexOf('json-status') >= 0) out = window.__st ? JSON.stringify(window.__st) : ${JSON.stringify(STATUS)};
   else if (cmd.indexOf('list-strategies') >= 0) out = ${JSON.stringify(STRATEGIES)};
   else if (cmd.indexOf('get-strategy') >= 0) out = 'alt13';
   else if (cmd.indexOf('get-list') >= 0 && cmd.indexOf('apps') >= 0) out = 'com.termux\\ncom.example.one';
@@ -552,6 +553,53 @@ const VIEWPORTS = [
       return s ? s.style.clipPath : 'none';
     });
     truthy(/^inset\(/.test(rip), 'a chip ripple is clipped to the chip: ' + rip);
+    eq('', pageErrors.join(' | '), 'no script errors');
+    await ctx.close();
+  }
+
+  // ── status card: quick refresh on pause/resume, steady size ────────────
+  {
+    sect('status card refresh');
+    const ctx = await browser.newContext({ viewport: { width: 360, height: 800 }, isMobile: true, hasTouch: true });
+    await ctx.addInitScript(STUB);
+    const page = await ctx.newPage();
+    const pageErrors = [];
+    page.on('pageerror', e => pageErrors.push(e.message));
+    await page.goto(INDEX, { waitUntil: 'load' });
+    await page.waitForTimeout(2000);
+    const running = await page.evaluate(() => ({ h: document.querySelector('#hero-status').offsetHeight, st: $('st').textContent }));
+    eq('Служба работает', running.st, 'starts as running');
+    const base = Object.assign({}, await page.evaluate(() => S), { dns_available: 1, dns_enabled: 1 });
+    const t0 = Date.now();
+    await page.evaluate(st => {
+      window.__st = Object.assign({}, st, { running: false, pid: '', uptime: 0,
+        paused: 'Очень длинное имя домашней сети, которое не помещается в одну строку', home_override: '' });
+      window.__sig = 'p:home';
+    }, base);
+    await page.waitForFunction(() => $('st').textContent === 'Пауза', null, { timeout: 4000 }).catch(() => {});
+    const dt = Date.now() - t0;
+    const paused = await page.evaluate(() => {
+      const sub = $('sub');
+      return { st: $('st').textContent, h: document.querySelector('#hero-status').offsetHeight, sub: sub.textContent,
+        oneLine: sub.offsetHeight <= parseFloat(getComputedStyle(sub).lineHeight) + 1, title: sub.title };
+    });
+    eq('Пауза', paused.st, 'the pause shows up');
+    truthy(dt < 2500, 'within about a second and a half, not on the 5 s poll: ' + dt + ' ms');
+    truthy(paused.sub.includes('DNS включён'), 'the paused card tells the DNS state: ' + paused.sub);
+    truthy(paused.oneLine, 'the subtitle stays on one line');
+    eq(running.h, paused.h, 'the card keeps its height when paused');
+    truthy(paused.title.includes('возобновится'), 'the full explanation is in the title');
+    await page.evaluate(st => { window.__st = Object.assign({}, st, { paused: '@vpn', running: false }); window.__sig = 'p:@vpn'; }, base);
+    await page.waitForFunction(() => $('sub').textContent.startsWith('Включён VPN'), null, { timeout: 4000 }).catch(() => {});
+    eq('Включён VPN · DNS включён', await page.evaluate(() => $('sub').textContent), 'a VPN pause reads short too');
+    const t1 = Date.now();
+    await page.evaluate(st => { window.__st = st; window.__sig = 'run 4711'; }, base);
+    await page.waitForFunction(() => $('st').textContent === 'Служба работает', null, { timeout: 4000 }).catch(() => {});
+    truthy(Date.now() - t1 < 2500, 'resuming shows up as fast: ' + (Date.now() - t1) + ' ms');
+    const n = await page.evaluate(() => window.__calls.filter(c => c.indexOf('json-status') >= 0).length);
+    await page.waitForTimeout(3200);
+    const n2 = await page.evaluate(() => window.__calls.filter(c => c.indexOf('json-status') >= 0).length);
+    truthy(n2 - n <= 1, 'with nothing changing the full status is not re-read every tick: ' + (n2 - n));
     eq('', pageErrors.join(' | '), 'no script errors');
     await ctx.close();
   }

@@ -234,24 +234,21 @@ ctl get-logs dns 300
 assert_contains "$ctl_out" "лишний dnsproxy" "nfqws2-ctl get-logs dns shows the DNS log"
 
 svc stop
-assert_no_file "$DNS_PIDFILE" "stopping the service stops dnsproxy"
-assert_eq "" "$(ipt_rules OUTPUT nat | grep nfqws_dns)" "and removes the jump"
-assert_no_file "$MOCK_IPT_STORE/iptables/nat/nfqws_dns" "and the chain"
+assert_file "$DNS_PIDFILE" "stopping the service leaves dnsproxy running"
+assert_contains "$(ipt_rules OUTPUT nat)" "-j nfqws_dns" "with its interception"
 
 rm -f "$DNS_ENABLED_FILE"
 svc start
 assert_no_file "$DNS_PIDFILE" "with the feature off the service starts without dnsproxy"
 svc stop
 
-section "standalone: DNS without the bypass service"
+section "DNS is independent of the bypass service"
 
-: > "$DNS_ENABLED_FILE"
-ctl dns-set-standalone 1
-assert_rc 0 "$ctl_rc" "standalone mode is switched on"
-assert_file "$DNS_STANDALONE_FILE" "and remembered"
+ctl dns-set-enabled 1
 assert_file "$DNS_PIDFILE" "dnsproxy starts at once, with the service stopped"
 assert_contains "$(ipt_rules OUTPUT nat)" "-j nfqws_dns" "and intercepts"
-assert_contains "$(ctl dns-state; printf '%s' "$ctl_out")" "service=stopped" "while the service is reported as stopped"
+ctl dns-set-standalone 1
+assert_rc 1 "$ctl_rc" "there is no standalone switch any more"
 svc start
 svc stop
 assert_file "$DNS_PIDFILE" "stopping the service leaves DNS running"
@@ -273,7 +270,8 @@ echo 999999 > "$DNS_PIDFILE"; : > "$DNS_RUN_DIR/active"
 dns_boot_reset
 assert_no_file "$DNS_PIDFILE" "a pidfile from the previous boot is dropped"
 assert_no_file "$DNS_RUN_DIR/active" "as is the running marker"
-ctl dns-set-standalone 0
+: > "$DNS_DIR/standalone"; dns_boot_reset
+assert_no_file "$DNS_DIR/standalone" "the standalone flag of older versions is cleaned up"
 rm -f "$DNS_ENABLED_FILE"
 
 # ── команды WebUI ─────────────────────────────────────────────────────────────
@@ -331,19 +329,18 @@ assert_no_file "$DNS_ENABLED_FILE" "and off"
 
 section "backup carries the profiles"
 
-: > "$DNS_ENABLED_FILE"; : > "$DNS_STANDALONE_FILE"; echo insta > "$DNS_DEFAULT_FILE"
+: > "$DNS_ENABLED_FILE"; echo insta > "$DNS_DEFAULT_FILE"
 BACKUP_DIR_OLD="${NFQWS_BACKUP_DIR:-}"
 NFQWS_BACKUP_DIR="$SANDBOX/dl"; export NFQWS_BACKUP_DIR
 ctl backup-create
 assert_rc 0 "$ctl_rc" "a backup is created"
 name=$(printf '%s' "$ctl_out" | head -n 1 | cut -f1)
 svc dns_stop
-rm -f "$DNS_PROFILES_DIR/insta.conf" "$DNS_ENABLED_FILE" "$DNS_STANDALONE_FILE"; echo net > "$DNS_DEFAULT_FILE"
+rm -f "$DNS_PROFILES_DIR/insta.conf" "$DNS_ENABLED_FILE"; echo net > "$DNS_DEFAULT_FILE"
 ctl backup-restore "$name"
 assert_rc 0 "$ctl_rc" "and restored"
 assert_file "$DNS_PROFILES_DIR/insta.conf" "the profile is back"
 assert_file "$DNS_ENABLED_FILE" "the feature state is back"
-assert_file "$DNS_STANDALONE_FILE" "and the standalone mode"
 assert_eq "insta" "$(dns_default)" "the default is back"
 
 harness_finish
