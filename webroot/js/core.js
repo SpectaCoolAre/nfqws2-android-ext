@@ -125,6 +125,7 @@ const fmtCount = n => Number(n).toLocaleString(LANG === 'en' ? 'en-US' : 'ru-RU'
 
 /* ── Ripple: pointerdown на любой .state, делегирование переживает innerHTML ── */
 document.addEventListener('pointerdown', e => {
+  if(typeof isAnimationsDisabled === 'function' && isAnimationsDisabled()) return;
   let el = e.target.closest && e.target.closest('.state, .nav-dest');
   if(el && el.classList.contains('nav-dest')) el = el.querySelector('.nav-ind');
   if(!el || el.classList.contains('is-disabled') || el.disabled) return;
@@ -576,11 +577,12 @@ function showPage(page, mode){
    стиль нового экрана точно ушёл в композитор. Без spawn первый вызов ещё и
    ждёт конца анимации — синхронный exec иначе заморозил бы её первый кадр. */
 function afterTransition(fn){
+  if(typeof isAnimationsDisabled === 'function' && isAnimationsDisabled()){ fn(); return; }
   requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(fn, spawnOK ? 0 : 320)));
 }
 function navigate(page){
   if(page === currentPage){
-    if(!PAGE_META[page].child) scrollTo({top: 0, behavior: 'smooth'});
+    if(!PAGE_META[page].child) scrollTo({top: 0, behavior: (typeof isAnimationsDisabled === 'function' && isAnimationsDisabled()) ? 'auto' : 'smooth'});
     return;
   }
   closeMenu();

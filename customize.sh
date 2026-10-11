@@ -1,7 +1,7 @@
 #!/system/bin/sh
 
 # grab own info (version)
-version=$(sed -n 's/^version=//p' "$MODPATH/module.prop")
+version=$(sed -n 's/^version=//p' "$MODPATH/module.prop" | tr -d '\r')
 
 ui_print "*******************************************"
 ui_print "- nfqws2-android-ext"
@@ -50,6 +50,9 @@ cp -f "$MODPATH/binaries/$BIN/dnsproxy" "$MODPATH/bin/dnsproxy" ||
   abort "! Failed to install dnsproxy"
 [ -s "$MODPATH/bin/dnsproxy" ] || abort "! Installed dnsproxy binary is empty"
 rm -rf "$MODPATH/binaries"
+
+# Иконка модуля для Magisk / KernelSU / APatch / MMRL
+[ -f "$MODPATH/webroot/icon.png" ] && cp -f "$MODPATH/webroot/icon.png" "$MODPATH/icon.png" 2>/dev/null
 
 CONF=/data/adb/nfqws2
 mkdir -p "$CONF/lists" "$CONF/state" "$CONF/logs" "$CONF/imports" "$CONF/strategies" ||

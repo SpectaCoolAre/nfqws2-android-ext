@@ -33,6 +33,7 @@ function renderSettings(){
     ]],
     ['Инструменты', [
       {icon: 'apps', title: 'Фильтр приложений', sub: t('Обход только для выбранных приложений или для всех, кроме них'), on: "navigate('apps')", chevron: true},
+      {icon: 'status', title: 'nfqws2 Helper', sub: t('Плитка быстрых настроек и уведомление о состоянии'), on: 'openHelperApp()', chevron: true},
       {icon: 'test', title: 'Проверка доступности', sub: t('Открывает адреса из probe_hosts.list через обход'), on: "navigate('test')", chevron: true},
       {icon: 'medical', title: 'Диагностика', sub: t('Ядро, правила iptables и аргументы запуска'), on: "navigate('diag')", chevron: true}
     ].concat(S.dns_available == 1 ? [
@@ -76,6 +77,8 @@ function renderSettings(){
     devHtml, false);
 }
 const GITHUB_URL = 'https://github.com/SpectaCoolAre/nfqws2-android-ext';
+const HELPER_PACKAGE = 'org.nfqws2.helper';
+const HELPER_RELEASE_URL = 'https://github.com/duhenduhen/nfqws2-helper/releases/tag/1.0';
 
 let deferredInstallPrompt = null;
 if(typeof window !== 'undefined'){
@@ -110,6 +113,14 @@ function addDesktopShortcut(){
 async function openUrl(url){
   const r = await sh('am start -a android.intent.action.VIEW -d ' + q(url) + ' >/dev/null 2>&1', 8000);
   if(r.code) try { window.open(url, '_blank'); } catch(e) {}
+}
+async function openHelperApp(){
+  const installed = await sh('pm path ' + q(HELPER_PACKAGE) + ' >/dev/null 2>&1', 8000);
+  if(!installed.code){
+    const r = await sh('am start -a android.settings.QS_TILE_SETTINGS >/dev/null 2>&1', 8000);
+    if(!r.code) return;
+  }
+  await openUrl(HELPER_RELEASE_URL);
 }
 function pickLanguage(anchor){
   openMenu(anchor, [['ru', 'Русский'], ['en', 'English']].map(([k, label]) => ({

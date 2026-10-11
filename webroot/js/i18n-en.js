@@ -224,6 +224,8 @@ EN = {
  "Пауза обхода в домашних сетях": "Pause bypass on home networks",
  "Инструменты": "Tools",
  "Обход только для выбранных приложений или для всех, кроме них": "Bypass only for selected apps, or for all except them",
+  "nfqws2 Helper": "nfqws2 Helper",
+  "Плитка быстрых настроек и уведомление о состоянии": "Quick Settings tile and status notification",
  "Открывает адреса из probe_hosts.list через обход": "Opens addresses from probe_hosts.list through the bypass",
  "Ядро, правила iptables и аргументы запуска": "Kernel, iptables rules and launch arguments",
  "Резервная копия": "Backup",

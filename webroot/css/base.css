@@ -61,33 +61,6 @@
   --dur-medium-long: 350ms;  /* duration-medium3 */
   --dur-long: 450ms;         /* duration-long1 */
 
-/* ── Отключение анимаций (m3_no_animations) ── */
-html[data-animations="false"] {
-  --dur-extra-short: 0ms !important;
-  --dur-short: 0ms !important;
-  --dur-medium: 0ms !important;
-  --dur-medium-long: 0ms !important;
-  --dur-long: 0ms !important;
-}
-html[data-animations="false"] *:not(.spinner),
-html[data-animations="false"] *:not(.spinner)::before,
-html[data-animations="false"] *:not(.spinner)::after {
-  animation-duration: 0.001ms !important;
-  animation-iteration-count: 1 !important;
-  transition-duration: 0.001ms !important;
-  scroll-behavior: auto !important;
-}
-html[data-animations="false"] .ripple { display: none !important; }
-html[data-animations="false"] .sheet,
-html[data-animations="false"] .fs-dialog,
-html[data-animations="false"] .scrim { transition: none !important; }
-html[data-animations="false"] .list-item:active,
-html[data-animations="false"] .list > .list-item:active,
-html[data-animations="false"] #pk .list-item:active {
-  border-radius: inherit !important;
-  transform: none !important;
-}
-
   /* ── State layers ── */
   --state-hover: .08;
   --state-focus: .12;
@@ -115,6 +88,35 @@ html[data-animations="false"] #pk .list-item:active {
   /* Остальные цветовые роли сюда НЕ пишутся: единственный источник — roles() в JS,
      а applyTheme() кладёт их в <style id="theme-vars">. Вторая копия в CSS однажды
      уже делала палитру мёртвой. Scrim — исключение: applyTheme() его не пишет. */
+}
+
+/* ── Отключение анимаций (m3_no_animations) ── */
+html[data-animations="false"] {
+  --dur-extra-short: 0ms !important;
+  --dur-short: 0ms !important;
+  --dur-medium: 0ms !important;
+  --dur-medium-long: 0ms !important;
+  --dur-long: 0ms !important;
+}
+html[data-animations="false"] *:not(.spinner),
+html[data-animations="false"] *:not(.spinner)::before,
+html[data-animations="false"] *:not(.spinner)::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+html[data-animations="false"] .ripple { display: none !important; }
+html[data-animations="false"] .sheet,
+html[data-animations="false"] .fs-dialog,
+html[data-animations="false"] .scrim,
+html[data-animations="false"] .menu,
+html[data-animations="false"] .dialog { transition: none !important; }
+html[data-animations="false"] .list-item:active,
+html[data-animations="false"] .list > .list-item:active,
+html[data-animations="false"] #pk .list-item:active {
+  border-radius: inherit !important;
+  transform: none !important;
 }
 
 /* Color roles: тёмная схема (fallback Purple, tone 80) */
