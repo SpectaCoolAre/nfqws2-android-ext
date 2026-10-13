@@ -98,7 +98,7 @@ hosts_clean() {
       if (d == "localhost" || d == "localhost.localdomain" || d == "local" || d == "broadcasthost" || d ~ /^ip6-/) return
       if (d ~ /^[a-z0-9_][a-z0-9_.-]*$/ && d ~ /\./) print ip, d
     }
-    NF == 1 && $1 ~ /[a-z]/ { out("0.0.0.0", $1); next }
+    NF == 1 && $1 ~ /[A-Za-z]/ { out("0.0.0.0", $1); next }
     NF >= 2 && $1 ~ /^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[0-9A-Fa-f]*:[0-9A-Fa-f:.]*|0)$/ {
       ip = $1; if (ip == "127.0.0.1" || ip == "::" || ip == "::1" || ip == "0") ip = "0.0.0.0"
       for (i = 2; i <= NF; i++) out(ip, $i)
@@ -142,7 +142,6 @@ hosts_init() {
   { echo; awk -v hf="$HOSTS_DIR/have.tmp" 'BEGIN { while ((getline l < hf) > 0) h[l] = 1 }
       /^[[:space:]]*#/ || NF < 2 { print; next } !($2 in h)' "$HOSTS_DEFAULT_BYPASS"; } >> "$HOSTS_BYPASS"
   rm -f "$HOSTS_DIR/have.tmp"
-  hosts_build_block
 }
 # Прежний формат (одна часть, custom.txt): кэш источников хранил и записи
 # обхода, а пресеты обхода стояли в sources.txt. Части возьмутся из hosts.
@@ -164,9 +163,6 @@ hosts_current() { if hosts_enabled && [ -s "$HOSTS_FILE" ]; then echo "$HOSTS_FI
 # исключения. Чужой hosts (первый запуск) делится по адресам.
 hosts_import() {
   local b="$HOSTS_DIR/import.bypass" k="$HOSTS_DIR/import.block" src n ours=0
-  [ -d "$HOSTS_CACHE" ] || mkdir -p "$HOSTS_CACHE"
-  [ -f "$HOSTS_WHITELIST" ] || printf '# Домены, которые не блокировать, даже если они есть в источниках\n' > "$HOSTS_WHITELIST"
-  [ -f "$HOSTS_SOURCES" ] || : > "$HOSTS_SOURCES"
   src=$(hosts_current)
   grep -qxF "$HOSTS_SEP" "$src" 2>/dev/null && [ -f "$HOSTS_BLOCK" ] && [ -f "$HOSTS_BLOCK_CUSTOM" ] && ours=1
   hosts_split "$b" "$k" < "$src"
@@ -375,9 +371,11 @@ hosts_state() {
   echo "conflicts=$(hosts_conflicts | tr '\n' ' ' | sed 's/ $//')"
   echo "bypass=$(hosts_clean < "$HOSTS_BYPASS" | hosts_only_bypass | wc -l | tr -d ' ')"
   echo "bypass_preset=$(cat "$HOSTS_BYPASS_PRESET" 2>/dev/null)"
-  echo "blocked=$(wc -l < "$HOSTS_BLOCK" 2>/dev/null | tr -d ' ')"
+  # cat …| wc: при «wc < нет_файла 2>/dev/null» ошибка печаталась бы раньше,
+  # чем перенаправление stderr, а значение было бы пустым вместо 0
+  echo "blocked=$(cat "$HOSTS_BLOCK" 2>/dev/null | wc -l | tr -d ' ')"
   echo "block_custom=$(hosts_clean < "$HOSTS_BLOCK_CUSTOM" | hosts_only_block | wc -l | tr -d ' ')"
-  echo "imported=$(wc -l < "$HOSTS_CACHE/imported.txt" 2>/dev/null | tr -d ' ')"
+  echo "imported=$(cat "$HOSTS_CACHE/imported.txt" 2>/dev/null | wc -l | tr -d ' ')"
   echo "dir=$HOSTS_DIR"
   for f in "$HOSTS_PRESETS_DIR"/*.conf; do
     [ -f "$f" ] || continue

@@ -31,7 +31,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
 // Setup sandbox environment simulating WebUI globals
 const sandbox = {
   console,
-  t: str => str,
+  t: (str, ...a) => String(str).replace(/\{(\d+)\}/g, (_, i) => a[i]),
   esc: str => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
   icon: (name, sz) => `<svg class="${sz}"><use href="#i-${name}"/></svg>`,
   banner: (t, kind, msg) => `<div class="banner ${kind}">${msg}</div>`,

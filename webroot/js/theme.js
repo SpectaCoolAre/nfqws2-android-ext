@@ -6,7 +6,7 @@
 function hexToRgb(hex){
   hex = String(hex).replace('#', '');
   if(hex.length === 3) hex = hex.split('').map(x => x + x).join('');
-  return [parseInt(hex.substr(0, 2), 16), parseInt(hex.substr(2, 2), 16), parseInt(hex.substr(4, 2), 16)];
+  return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
 }
 function rgbToHex(r, g, b){
   const p = x => Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, '0');
@@ -104,7 +104,6 @@ function systemSeed(){
   const mm = /rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/.exec(accent || '');
   if(!mm) return '#6750a4';
   const rgb = [+mm[1], +mm[2], +mm[3]], lab = rgbToLab(rgb);
-  if(rgb[0] === 0 && rgb[0] === 0 && rgb[2] === 0) return '#6750a4';
   if(Math.hypot(lab[1], lab[2]) < 6) return '#6750a4';
   return rgbToHex(rgb[0], rgb[1], rgb[2]).toLowerCase();
 }
@@ -285,7 +284,6 @@ function applyTheme(skipUI){
   document.documentElement.setAttribute('data-mode', dark ? 'dark' : 'light');
   document.documentElement.setAttribute('data-amoled', amoled ? 'true' : 'false');
   document.documentElement.setAttribute('data-containers', containers ? 'true' : 'false');
-  document.documentElement.setAttribute('data-monochrome', monochrome ? 'true' : 'false');
   const meta = document.querySelector('meta[name="theme-color"]');
   if(meta) meta.setAttribute('content', R.background);
   if(!skipUI) drawThemeUI();
@@ -314,7 +312,7 @@ function drawThemeUI(){
       ' style="--sw-a:' + r.primary + ';--sw-b:' + r.secondary + ';--sw-c:' + r.tertiary + '">' +
       '<span class="sw-check">' + icon('check', 's20') + '</span></button>';
   }).join(''), false);
-  setHTML('tp-roles', [['primary', 'P'], ['secondary', 'S'], ['tertiary', 'T'], ['primary-container', 'PC'], ['error', 'E']].map(([v, l]) =>
+  setHTML('tp-roles', ['primary', 'secondary', 'tertiary', 'primary-container', 'error'].map(v =>
     '<span class="tp-role" style="background:var(--md-sys-color-' + v + ')"></span>').join(''), false);
   $('amoled-toggle').checked = store.get('m3_amoled') === 'true';
   $('amoled-toggle').disabled = !dark;
@@ -344,7 +342,6 @@ const wheelHex = () => hslToHex(wheelH, wheelS, +$('cd-lum').value / 100);
 function wheelApply(final){
   store.set('m3_monochrome', 'false');
   currentSeed = wheelHex().toLowerCase();
-  store.set('m3_last_color_seed', currentSeed);
   if(!wheelFrame) wheelFrame = requestAnimationFrame(() => { wheelFrame = 0; applyTheme(true); syncPicker(false); });
   if(final){ store.set('m3_seed', currentSeed); setTimeout(drawThemeUI, 30); }
 }
@@ -380,13 +377,7 @@ function setThemeMode(m){
 function applyMonet(seedHex){
   if(!/^#[0-9a-fA-F]{6}$/.test(seedHex)) return;
   const hex = seedHex.toLowerCase();
-  if(hex === '#757575'){
-    if(currentSeed !== '#757575') store.set('m3_last_color_seed', currentSeed);
-    store.set('m3_monochrome', 'true');
-  } else {
-    store.set('m3_monochrome', 'false');
-    store.set('m3_last_color_seed', hex);
-  }
+  store.set('m3_monochrome', hex === '#757575' ? 'true' : 'false');
   currentSeed = hex;
   store.set('m3_seed', currentSeed);
   applyTheme();
@@ -404,16 +395,12 @@ function onHexInput(val){
   $('custom-hex-input').value = clean;
   if(clean.length !== 6) return;
   const hex = '#' + clean.toLowerCase();
-  if(hex === '#757575'){
-    store.set('m3_monochrome', 'true');
-  } else {
-    store.set('m3_monochrome', 'false');
-    store.set('m3_last_color_seed', hex);
-  }
+  store.set('m3_monochrome', hex === '#757575' ? 'true' : 'false');
   currentSeed = hex;
   store.set('m3_seed', currentSeed);
-  applyTheme(true);
-  syncPicker(true);
+  // полная перерисовка: иначе подсветка прежнего пресета оставалась бы;
+  // поле HEX в фокусе drawThemeUI не трогает
+  applyTheme();
 }
 function resetTheme(){
   ['m3_seed', 'm3_mode', 'm3_amoled', 'm3_containers', 'm3_monochrome', 'm3_last_color_seed', 'm3_no_animations', 'm3_animations'].forEach(k => store.del(k));

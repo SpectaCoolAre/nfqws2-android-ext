@@ -28,16 +28,41 @@ start_failed() {
   log_msg "Последние строки лога:"
   tail -n 8 "$NFQWS_LOG" 2>/dev/null | while IFS= read -r l; do log_msg "  $l"; done
   update_description stopped
+  # правила без живого демона гнали бы трафик в очередь без слушателя
+  firewall_stop
 }
 
 # watchdog/netwatch: auto-restart, home Wi-Fi pause, per-network strategies
 watchers_wanted() { [ "$WATCHDOG" = "1" ] || [ "$HOME_WIFI" = "1" ] || [ "$VPN_PAUSE" = "1" ] || dns_enabled; }
 
+# Запуск под замком: netwatch, watchdog, загрузка и WebUI могут позвать start
+# одновременно, и два демона сели бы на одну очередь (из оригинала, caa8be3).
+# Второй ждёт до 10 с и видит уже запущенную службу. Замок старше двух минут —
+# остаток убитого процесса.
 start() {
   if is_running; then
     echo "Служба nfqws2 уже запущена (PID $(cat "$PIDFILE"))"
     return 0
   fi
+  local lock="$STATE_DIR/start.lock" own=0 i=0 rc=0
+  [ -n "$(find "$lock" -maxdepth 0 -mmin +2 2>/dev/null)" ] && rmdir "$lock" 2>/dev/null
+  while [ "$i" -lt 50 ]; do
+    mkdir "$lock" 2>/dev/null && { own=1; break; }
+    sleep 0.2; i=$((i + 1))
+  done
+  if is_running; then
+    echo "Служба nfqws2 уже запущена (PID $(cat "$PIDFILE"))"
+  elif [ "$own" = 1 ]; then
+    _start || rc=$?
+  else
+    log_msg "Запуск пропущен: другой запуск не завершился за 10 с"
+    rc=1
+  fi
+  [ "$own" = 1 ] && rmdir "$lock" 2>/dev/null
+  return "$rc"
+}
+
+_start() {
   if [ ! -x "$NFQWS_BIN" ]; then
     chmod 0755 "$NFQWS_BIN" 2>/dev/null
     [ -x "$NFQWS_BIN" ] || { log_msg "Ошибка: нет исполняемого $NFQWS_BIN"; return 1; }
@@ -45,6 +70,9 @@ start() {
   local err
   err=$(validate_args_conf) || { log_msg "$err"; return 1; }
 
+  # DNS — первым (если включён): обход геоблока DNS-профилями должен работать
+  # раньше, чем пойдёт трафик через обход. Повторный вызов ничего не меняет
+  dns_start "запуск службы"
   log_msg "Запуск nfqws2..."
   kernel_modules
   rotate_logs start
@@ -54,7 +82,9 @@ start() {
   printf '%s\n' "$args" > "$ARGS_FILE"
 
   local dry_err
-  if ! dry_err=$(dry_run_check "$args"); then
+  if dry_run_known "$args"; then
+    :   # эти аргументы уже прошли проверку (обычно — при выборе стратегии)
+  elif ! dry_err=$(dry_run_check "$args"); then
     log_msg "Ошибка: проверка nfqws2 --dry-run не пройдена"
     printf '%s\n' "$dry_err" >> "$NFQWS_LOG"
     start_failed "Ошибка: параметры запуска nfqws2 некорректны (проверка --dry-run отклонена)."
@@ -104,7 +134,7 @@ start() {
     # a daemon without rules is useless and a stale pidfile would claim it runs
     kill -TERM "$pid" 2>/dev/null
     rm -f "$PIDFILE"
-    update_description stopped
+    start_failed "Ошибка: правила iptables не применились."
     return 1
   fi
 
@@ -113,7 +143,6 @@ start() {
   log_msg "nfqws2 запущен (PID $pid, Native Daemon)"
   update_description running
   ensure_watchdog
-  dns_start "запуск службы"
   return 0
 }
 
@@ -130,7 +159,10 @@ stop() {
     fi
     rm -f "$PIDFILE"
   fi
-  pidof nfqws2 >/dev/null 2>&1 && killall -9 nfqws2 2>/dev/null
+  # оставшиеся демоны (двойной запуск, потерянный PID-файл); -x — ровно nfqws2
+  if pidof nfqws2 >/dev/null 2>&1; then
+    pkill -9 -x nfqws2 2>/dev/null || kill -9 $(pidof nfqws2) 2>/dev/null
+  fi
 
   # a leftover chain still jumps to NFQUEUE with no listener, so the kernel
   # drops that traffic: stopped must mean rules gone
@@ -146,7 +178,7 @@ stop() {
 
 reload_lists() {
   is_running || { echo "Служба не запущена"; return 1; }
-  kill -HUP "$(cat "$PIDFILE")" 2>/dev/null
+  kill -HUP "$(cat "$PIDFILE")" 2>/dev/null || { log_msg "Списки не перечитаны: SIGHUP не доставлен"; return 1; }
   log_msg "Списки перечитаны (SIGHUP)"
 }
 
@@ -155,8 +187,8 @@ reload_lists() {
 # to raise netwatch only alongside the watchdog.
 ensure_helper() {
   local pf="$1" sub="$2"; shift 2
-  # bare "$@" is a no-op with no args in dash, but be explicit about it
-  [ $# -eq 0 ] || { "$@" || return 1; }
+  # условие запуска — молча: «command -v ip» печатал бы путь в вывод start
+  [ $# -eq 0 ] || "$@" >/dev/null 2>&1 || return 1
   if [ -f "$pf" ] && kill -0 "$(cat "$pf" 2>/dev/null)" 2>/dev/null; then
     return 1
   fi
@@ -169,6 +201,10 @@ ensure_helper() {
       exec sh "$MODDIR/service.sh" "$sub"
     fi
   ) &
+  # PID пишет и сам помощник, но только после загрузки библиотек и конфига;
+  # второй ensure_watchdog в этот промежуток поднял бы ещё одну копию.
+  # exec сохраняет PID, так что $! — это и есть помощник
+  echo $! > "$pf"
   return 0
 }
 
@@ -181,9 +217,20 @@ ensure_watchdog() {
 # Rebuild rules on events, not on a timer. Routers use a netfilter.d firmware
 # hook for this; ip monitor is the Android equivalent. Watchdog is the
 # fallback where ip monitor is unsupported.
-ensure_netwatch() {
-  watchers_wanted || return 0
-  ensure_helper "$WN_PIDFILE" netwatch command -v ip || return 0
+ensure_# Перечитать конфиг, только если он менялся с прошлого раза. netwatch опрашивает
+# раз в 2 с всю ночь: load_conf каждый тик — это лишние awk и чтение файлов.
+# Метка — свой файл у каждого процесса; -nt есть в dash, mksh и bash
+conf_refresh() {
+  local st="$STATE_DIR/conf_seen.$$"
+  if [ ! -f "$st" ] || [ "$CONFFILE" -nt "$st" ]; then
+    : > "$st"
+    load_conf >/dev/null 2>&1
+  fi
+}
+
+netwatch() { # зовётся только из ensure_watchdog, после watchers_wanted
+  ensure_helper "$WN_PIDFILE" netwatch command -v ip
+  return 0
 }
 
 netwatch() {
@@ -193,7 +240,10 @@ netwatch() {
 
   EVFILE="$STATE_DIR/netwatch_events"
   rm -f "$EVFILE"
-  local prev="" acted="" backoff=2 saw=0 sz mon up recheck
+  local prev="" acted="" backoff=2 saw=0 sz mon="" up recheck
+  # убитый извне (uninstall, остановка наблюдателей) — забрать и ip monitor,
+  # иначе он остался бы сиротой и дописывал в удалённый файл
+  trap 'kill -TERM "$mon" 2>/dev/null; rm -f "$WN_PIDFILE" "$EVFILE" "$STATE_DIR/conf_seen.$$"; exit 0' TERM INT HUP
   # Первая перепроверка — через 30 с после старта: при загрузке сеть ещё
   # устанавливается, и её смена до запуска ip monitor не дала бы события
   read -r up _ < /proc/uptime; recheck=$(( ${up%.*} + 30 ))
@@ -207,7 +257,7 @@ netwatch() {
     saw=0
     while :; do
       sleep 2
-      load_conf >/dev/null 2>&1
+      conf_refresh
       watchers_wanted || break 2
       if ! kill -0 "$mon" 2>/dev/null; then
         # died on its own. If it never wrote a byte, ip monitor is unsupported
@@ -256,7 +306,7 @@ netwatch() {
     wait "$mon" 2>/dev/null
   done
   kill -TERM "$mon" 2>/dev/null
-  rm -f "$WN_PIDFILE" "$EVFILE"
+  rm -f "$WN_PIDFILE" "$EVFILE" "$STATE_DIR/conf_seen.$$"
 }
 
 watchdog() {
@@ -395,19 +445,30 @@ case "$1" in
   *)
     # Метка «загрузочный запуск закончен» — её ждёт boot-completed.sh
     rm -f "$STATE_DIR/boot_done"
+    # Состояние прошлой загрузки: каталог на /data переживает перезагрузку, а
+    # номера PID — нет. Старый PID мог достаться чужому процессу, и тогда
+    # служба «уже запущена», наблюдатель «уже работает», а stop убил бы чужое.
+    # desired — «служба должна работать»: без сброса boot-completed поднимал бы
+    # её и при выключенном автозапуске
+    rm -f "$PIDFILE" "$WD_PIDFILE" "$WN_PIDFILE" "$DESIRED_FILE" "$STARTED_FILE"
+    rm -f "$STATE_DIR"/conf_seen.*
+    rmdir "$STATE_DIR/start.lock" 2>/dev/null
     until [ "$(getprop sys.boot_completed 2>/dev/null)" = "1" ]; do sleep 3; done
     sleep 4
     [ -f "$CONFDIR/disable" ] && { log_msg "Найден $CONFDIR/disable — автозапуск пропущен"; : > "$STATE_DIR/boot_done"; exit 0; }
     rm -f "$HOME_PAUSED_FILE" "$HOME_OVERRIDE_FILE"
     rmdir "$STATE_DIR/home.lock" 2>/dev/null
     dns_boot_reset
+    # DNS — первым: пока он не поднят, первые запросы приложений уходят мимо
+    # профилей (геоблок), и ответы остаются в кэше. От службы он не зависит
+    dns_start "загрузка"
     if [ "$AUTOSTART" = "1" ]; then
-      ssid=$(active_ssid)
       if [ "$VPN_PAUSE" = "1" ] && vpn_active; then
         log_msg "Включён VPN — автозапуск отложен до его отключения"
         printf '%s' "@vpn" > "$HOME_PAUSED_FILE"
         update_description paused "@vpn"
-      elif [ "$HOME_WIFI" = "1" ] && ssid_is_home "$ssid"; then
+      # SSID — только когда пауза дома включена: это два вызова Java на загрузке
+      elif [ "$HOME_WIFI" = "1" ] && ssid=$(active_ssid) && ssid_is_home "$ssid"; then
         log_msg "Домашняя Wi-Fi «$ssid» — автозапуск отложен до выхода из неё"
         printf '%s' "$ssid" > "$HOME_PAUSED_FILE"
         update_description paused "$ssid"
@@ -417,8 +478,6 @@ case "$1" in
     else
       update_description stopped
     fi
-    # DNS не зависит от службы: поднимается, даже если она не стартовала
-    dns_start "загрузка"
     hosts_boot
     ensure_watchdog
     : > "$STATE_DIR/boot_done"

@@ -253,13 +253,11 @@ sect('android monet detection');
 
   // Test applyMonet('#757575') activates monochrome
   sandbox.applyMonet('#757575');
-  eq('true', dom.docEl.attrs['data-monochrome'], 'applyMonet(#757575) activates data-monochrome="true"');
   eq('true', dom.storage['m3_monochrome'], 'applyMonet(#757575) stores m3_monochrome="true"');
   truthy(vm.runInContext('isMonochrome()', sandbox), 'isMonochrome() is true after applyMonet(#757575)');
 
   // Test applyMonet('#deb0da') deactivates monochrome
   sandbox.applyMonet('#deb0da');
-  eq('false', dom.docEl.attrs['data-monochrome'], 'applyMonet(#deb0da) resets data-monochrome="false"');
   eq('false', dom.storage['m3_monochrome'], 'applyMonet(#deb0da) stores m3_monochrome="false"');
   truthy(!vm.runInContext('isMonochrome()', sandbox), 'isMonochrome() is false after applying color');
 

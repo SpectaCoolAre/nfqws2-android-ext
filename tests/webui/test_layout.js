@@ -146,7 +146,14 @@ const VIEWPORTS = [
         // assert that the stand-in exists.
         out.cardRadius = radii(q('.group'))[0];
         out.heroRadius = radii(q('.hero'))[0];
-        out.titleLeft = Math.round(box(q('#app-title')).left);
+        const tb = box(q('#app-title')), ab = box(q('#app-bar'));
+        out.titleLeftOff = Math.round(tb.left - ab.left);
+        out.titleText = q('#app-title').textContent;
+        const lb = box(q('#brand-logo')), gb = box(q('#logs-btn'));
+        out.logoVisible = getComputedStyle(q('#brand-logo')).display !== 'none' && lb.width === 28;
+        out.logoNextToTitle = lb.left >= tb.right && lb.left - tb.right <= 12;
+        out.logsAtRight = !q('#logs-btn').hidden && Math.round(ab.right - gb.right) <= 16 && gb.left > lb.right;
+        out.settingsTab = !!q('#nav-settings');
         out.heroLeft = Math.round(box(q('.hero')).left);
 
         const sws = [...document.querySelectorAll('#sws .list-item')];
@@ -217,7 +224,11 @@ const VIEWPORTS = [
       // ── hero ──
       eq('Служба работает', geo.statusText, 'the service state is rendered from json-status');
       eq(0, geo.heroCounters, 'the hero carries no counters');
-      eq(geo.heroLeft, geo.titleLeft, 'the app title aligns with the hero card margin');
+      eq('nfqws2-android-ext', geo.titleText, 'top level: the module name instead of the section title');
+      truthy(geo.titleLeftOff <= 24, 'the name sits in the left corner: ' + geo.titleLeftOff + ' px from the edge');
+      truthy(geo.logoVisible && geo.logoNextToTitle, 'the 28px logo right after the name');
+      truthy(geo.logsAtRight, 'logs in the top right corner');
+      truthy(geo.settingsTab, 'settings is a bottom navigation tab');
 
       // ── shapes ──
       // Cards are .group on --shape-large (16dp) and the hero is on
@@ -229,9 +240,9 @@ const VIEWPORTS = [
       eq('16,16,4,4', geo.swsFirstRadius.join(','), 'the first list row has 16dp outer corners');
       eq('4,4,16,16', geo.swsLastRadius.join(','), 'the last list row has 16dp outer corners');
       eq('4,4,4,4', geo.swsMiddleRadius.join(','), 'the middle list rows use 4dp inner corners');
-      // #sws holds the four switches. The conventions are about the switches.
-      eq(4, geo.swsRows, 'the list holds the four switches');
-      eq(4, geo.swsSwitchRows, 'all four of those rows are switches');
+      // #sws holds the five switches. The conventions are about the switches.
+      eq(5, geo.swsRows, 'the list holds the five switches');
+      eq(5, geo.swsSwitchRows, 'all five of those rows are switches');
       eq(false, geo.swsHasIcons, 'switch rows carry no leading icons');
       eq(0, geo.swsSwitchWithSecondary, 'switch rows carry no descriptions');
       eq(56, geo.swsHeight, 'switch rows are single-line (56dp)');
@@ -587,7 +598,9 @@ const VIEWPORTS = [
     truthy(dt < 2500, 'within about a second and a half, not on the 5 s poll: ' + dt + ' ms');
     truthy(paused.sub.includes('DNS включён'), 'the paused card tells the DNS state: ' + paused.sub);
     truthy(paused.oneLine, 'the subtitle stays on one line');
-    eq(running.h, paused.h, 'the card keeps its height when paused');
+    truthy(await page.evaluate(() => $('hero-stats').hidden), 'no uptime row while paused');
+    eq('#i-pause', await page.evaluate(() => $('hero-ic').getAttribute('href')), 'the pause icon in the card');
+    truthy(!paused.sub.includes('Очень длинное'), 'the network name is not in the subtitle');
     truthy(paused.title.includes('возобновится'), 'the full explanation is in the title');
     await page.evaluate(st => { window.__st = Object.assign({}, st, { paused: '@vpn', running: false }); window.__sig = 'p:@vpn'; }, base);
     await page.waitForFunction(() => $('sub').textContent.startsWith('Включён VPN'), null, { timeout: 4000 }).catch(() => {});
@@ -596,6 +609,8 @@ const VIEWPORTS = [
     await page.evaluate(st => { window.__st = st; window.__sig = 'run 4711'; }, base);
     await page.waitForFunction(() => $('st').textContent === 'Служба работает', null, { timeout: 4000 }).catch(() => {});
     truthy(Date.now() - t1 < 2500, 'resuming shows up as fast: ' + (Date.now() - t1) + ' ms');
+    eq('#i-shield', await page.evaluate(() => $('hero-ic').getAttribute('href')), 'running: the shield icon');
+    truthy(await page.evaluate(() => !$('hero-stats').hidden), 'the uptime row is back');
     const n = await page.evaluate(() => window.__calls.filter(c => c.indexOf('json-status') >= 0).length);
     await page.waitForTimeout(3200);
     const n2 = await page.evaluate(() => window.__calls.filter(c => c.indexOf('json-status') >= 0).length);

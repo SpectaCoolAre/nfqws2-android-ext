@@ -72,7 +72,7 @@ try {
 if (status) {
   // Keys the script actually reads off the status object.
   const readKeys = new Set();
-  for (const m of webrootSrc.matchAll(/\b(?:j|S)\.([a-z_]+)\b/g)) readKeys.add(m[1]);
+  for (const m of webrootSrc.matchAll(/\b(?:j|S)\.([a-z][a-z0-9_]*)\b/g)) readKeys.add(m[1]);
   // The switch rows read their field through tables (SW, DEV_SW, LIMITS)
   // [key, label, status_key] or [key, label, hint, status_key]
   for (const m of webrootSrc.matchAll(/\['[A-Z0-9_]+'[^\]]*?,\s*'([a-z][a-z0-9_]*)'\]/g)) readKeys.add(m[1]);

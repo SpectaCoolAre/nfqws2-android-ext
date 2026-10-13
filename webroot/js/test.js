@@ -27,7 +27,9 @@ let dnsResults = {};
 let lastRecommendation = null;
 
 function testInit(){
-  updateTestDesc();
+  // секции результатов — по текущей вкладке (в разметке TCP 16K и DNS скрыты);
+  // selectTestTab сам обновляет описание
+  selectTestTab(currentTestTab);
   stat(true).then(renderTestWarn);
   renderTestWarn();
   refreshNetInfo();
@@ -41,7 +43,7 @@ function updateTestDesc(){
   } else if(currentTestTab === 'tcp16'){
     d.textContent = t('Тестирование соединений к зарубежным CDN и хостингам (Cloudflare, Hetzner, DO, OVH) с нарастающим объёмом данных до 32 КБ для выявления фильтра TCP 16-20KB.');
   } else if(currentTestTab === 'dns'){
-    d.textContent = t('Проверка резолверов по UDP:53 и DoH для обнаружения перехвата портов провайдером и подмены IP адресов на заглушки РКН.');
+    d.textContent = t('Проверка резолверов по UDP:53 и DoH для обнаружения перехвата портов провайдером и подмены IP-адресов на заглушки РКН.');
   } else {
     d.textContent = t('Комплексный анализ цензуры DPI: проверка доступности сайтов, детекция блокировок TCP 16-20KB и анализ перехвата DNS.');
   }
@@ -96,7 +98,7 @@ async function refreshNetInfo(){
   const ipEl = $('net-ip'), ispEl = $('net-isp'), badgeEl = $('net-badge');
   if(!ipEl || !ispEl) return;
   ispEl.textContent = t('Загрузка сети…');
-  const r = await ctlx(['net-info'], 8000);
+  const r = await ctlx(['net-info'], 15000);   // два curl по 4–6 с
   if(r.code && !r.out){
     ispEl.textContent = t('Сетевые данные недоступны');
     return;
@@ -151,12 +153,12 @@ function renderTcp16Row(i, provider, ip, port, status, detail){
   const isDetected = status === 'detected';
   const stClass = isClean ? 'ok' : (isDetected ? 'bad' : 'info');
   const icName = isClean ? 'check' : (isDetected ? 'warn' : 'close');
-  const trailText = isClean ? `${detail || 'OK'}` : (isDetected ? `БЛОК @ ${detail}` : t('Недоступен'));
+  const trailText = isClean ? `${detail || 'OK'}` : (isDetected ? t('БЛОК @ {0}', detail) : t('Недоступен'));
   return '<div class="list-item two-line" id="tcprow' + i + '">' +
     '<span class="status ' + stClass + '">' + icon(icName, 's16') + '</span>' +
     '<span class="li-text">' +
       '<span class="li-primary truncate">' + esc(provider.replace(/_/g, ' ')) + ' <span class="muted li-mono">(' + esc(ip) + ')</span></span>' +
-      '<span class="li-secondary">' + (isClean ? t('Чисто, передача данных стабильна') : (isDetected ? t('Обрыв сессии ТСПУ после {0}', detail) : t('Хост недоступен'))) + '</span>' +
+      '<span class="li-secondary">' + esc(isClean ? t('Чисто, передача данных стабильна') : (isDetected ? t('Обрыв сессии ТСПУ после {0}', detail) : t('Хост недоступен'))) + '</span>' +
     '</span>' +
     '<span class="li-trail ' + (isDetected ? 't-label-medium bad' : 'li-value') + '">' + esc(trailText) + '</span>' +
   '</div>';
@@ -164,13 +166,14 @@ function renderTcp16Row(i, provider, ip, port, status, detail){
 
 function renderDnsRow(i, name, ip, udp, doh, hijacked, detail){
   const isHijacked = hijacked === 'yes';
-  const isUdpOk = udp === 'ok';
-  const stClass = isHijacked ? 'bad' : (isUdpOk ? 'ok' : 'warn');
-  const icName = isHijacked ? 'warn' : (isUdpOk ? 'check' : 'close');
-  let sub = `UDP: ${isUdpOk ? 'OK' : t('Блок')}`;
-  if(doh && doh !== 'none') sub += ` · DoH: ${doh === 'ok' ? 'OK' : t('Блок')}`;
+  const isUdpOk = udp === 'ok', noUdp = udp === 'none';   // none — нет nslookup, UDP не проверялся
+  const stClass = isHijacked ? 'bad' : (isUdpOk || noUdp ? 'ok' : 'warn');
+  const icName = isHijacked ? 'warn' : (isUdpOk || noUdp ? 'check' : 'close');
+  let sub = `UDP: ${isUdpOk ? 'OK' : noUdp ? '—' : t('Блок')}`;
+  if(doh === 'dot_ok') sub += ' · DoT: OK';   // сервер без DoH: открыт ли хотя бы DoT
+  else if(doh && doh !== 'none') sub += ` · DoH: ${doh === 'ok' ? 'OK' : t('Блок')}`;
   if(isHijacked) sub += ` · ${detail}`;
-  const trail = isHijacked ? t('ПЕРЕХВАТ') : (isUdpOk ? 'OK' : t('СБОЙ'));
+  const trail = isHijacked ? t('ПЕРЕХВАТ') : (isUdpOk ? 'OK' : noUdp ? '—' : t('СБОЙ'));
   return '<div class="list-item two-line" id="dnsrow' + i + '">' +
     '<span class="status ' + stClass + '">' + icon(icName, 's16') + '</span>' +
     '<span class="li-text">' +
@@ -268,7 +271,8 @@ async function runTest(){
   try {
     const r = await ctlx(['probe-dpi', currentTestTab], 180000, onLine);
     if(!testCancelled){
-      if(tool === 'none' || (r.code && !hosts.length && currentTestTab === 'web')) {
+      // WebView проверяет только сайты — на вкладках TCP 16K и DNS ему нечего делать
+      if((tool === 'none' && (currentTestTab === 'all' || currentTestTab === 'web')) || (r.code && !hosts.length && currentTestTab === 'web')) {
         await runTestWebView();
       } else {
         Object.keys(webResults).forEach(i => {
@@ -285,7 +289,9 @@ async function runTest(){
       tb.disabled = false;
       tb.innerHTML = icon('play', 's18') + '<span>' + esc(t('Проверить снова')) + '</span>';
     }
-    renderRecommendation();
+    // остановленная проверка — не основание для рекомендации: недоделанные
+    // адреса считались бы сбоями
+    if(!testCancelled) renderRecommendation();
   }
 }
 
@@ -307,6 +313,8 @@ async function runTestWebView(){
   const r = await ctlx(['get-list', 'probe_hosts']);
   const hosts = (r.code ? '' : r.out).split('\n').map(s => s.trim()).filter(s => s && s[0] !== '#');
   setHTML('tr', hosts.map((h, i) => testRow(i, h)).join(''), false);
+  // результаты — туда же, где их ждут рекомендация и отчёт
+  hosts.forEach((h, i) => { webResults[i] = {host: h, list: []}; });
   if(!hosts.length){
     if($('test-empty')) $('test-empty').hidden = false;
     if($('test-empty-title')) $('test-empty-title').textContent = t('probe_hosts.list пуст');
@@ -315,14 +323,17 @@ async function runTestWebView(){
   for(let i = 0; i < hosts.length; i++){
     if(testCancelled) break;
     const h = hosts[i];
-    const out = [];
+    const out = webResults[i].list;
     for(let k = 0; k < 3; k++){
       if(testCancelled) break;
       const subCtrl = new AbortController();
+      // «Стоп» прерывает и текущий запрос, а не ждёт его таймаута
+      const onStop = () => subCtrl.abort();
+      webViewAbortCtrl.signal.addEventListener('abort', onStop);
       const tm = setTimeout(() => subCtrl.abort(), 6000);
       try {
         out.push(await probeFetch(h, subCtrl.signal));
-      } finally { clearTimeout(tm); }
+      } finally { clearTimeout(tm); webViewAbortCtrl.signal.removeEventListener('abort', onStop); }
     }
     finishTestRow(i, out);
   }
@@ -358,11 +369,9 @@ function analyzeProbeResults(webRes, tcp16Res, dnsRes){
   });
 
   let tcp16Detected = 0;
-  let tcp16Clean = 0;
   tcpKeys.forEach(k => {
     const st = tcp16Res[k].status;
     if(st === 'detected') tcp16Detected++;
-    else if(st === 'clean') tcp16Clean++;
   });
 
   let dnsHijacked = 0;
@@ -381,7 +390,7 @@ function analyzeProbeResults(webRes, tcp16Res, dnsRes){
   let reason = '';
 
   if(isClean){
-    const cur = (typeof currentStrategy !== 'undefined' && currentStrategy) ? currentStrategy : 'default';
+    const cur = currentStrategy || 'default';
     strategy = cur;
     altStrategies = cur === 'default' ? ['fake_tls_auto', 'alt4_mod'] : ['default', 'fake_tls_auto'];
     summaryTitle = t('Блокировок не обнаружено');
@@ -396,7 +405,7 @@ function analyzeProbeResults(webRes, tcp16Res, dnsRes){
       strategy = 'alt4_mod';
       altStrategies = ['alt4', 'fake_tls_auto_alt2'];
       summaryTitle = t('Обнаружен фильтр TCP 16-20KB');
-      reason = t('Соединения к зарубежным CDN (Cloudflare/Hetzner) обрываются после 16-20 КБ данных. Рекомендуется сегментация TCP пакетов.');
+      reason = t('Соединения к зарубежным CDN (Cloudflare/Hetzner) обрываются после 16-20 КБ данных. Рекомендуется сегментация TCP-пакетов.');
     }
   } else if(alertCount > 0){
     strategy = 'fake_tls_auto';
@@ -407,7 +416,7 @@ function analyzeProbeResults(webRes, tcp16Res, dnsRes){
     strategy = 'fake_tls_auto';
     altStrategies = ['simple_fake_alt2', 'alt8'];
     summaryTitle = t('Обнаружен активный сброс (TLS RST)');
-    reason = t('DPI инжектирует пакеты TCP RST при попытке установить защищенное соединение. Рекомендуется отправка фейкового ClientHello со сдвигом окна.');
+    reason = t('DPI инжектирует пакеты TCP RST при попытке установить защищённое соединение. Рекомендуется отправка фейкового ClientHello со сдвигом окна.');
   } else if(dropCount > 0){
     strategy = 'alt11';
     altStrategies = ['alt12', 'exp'];
@@ -431,8 +440,7 @@ function analyzeProbeResults(webRes, tcp16Res, dnsRes){
     title: summaryTitle,
     reason,
     dnsWarning,
-    isClean,
-    stats: { totalWeb, okWeb, failWeb, tcp16Detected, tcp16Clean, dnsHijacked }
+    isClean
   };
 }
 
@@ -448,9 +456,9 @@ function renderRecommendation(){
   }
   el.hidden = false;
 
-  const cur = (typeof currentStrategy !== 'undefined' && currentStrategy) ? currentStrategy : 'default';
+  const cur = currentStrategy || 'default';
   const isCurrent = cur === rec.strategy;
-  const stratTitle = typeof strategyName === 'function' ? strategyName(rec.strategy) : rec.strategy;
+  const stratTitle = strategyName(rec.strategy);
 
   let html = '<div class="subhead-row" style="margin-top:0;">' +
     '<span class="subhead plain">' + esc(t('Автоподбор стратегии')) + '</span>' +
@@ -463,7 +471,7 @@ function renderRecommendation(){
   }
 
   html += '<div class="row" style="margin-top:12px; flex-wrap:wrap; gap:8px;">' +
-    '<button class="btn with-icon state ' + (isCurrent ? 'tonal' : '') + '" onclick="applyRecommendedStrategy(\'' + esc(rec.strategy) + '\')"' + (isCurrent ? ' disabled' : '') + '>' +
+    '<button class="btn with-icon state ' + (isCurrent ? 'tonal' : '') + '" onclick="applyRecommendedStrategy(' + jsArg(rec.strategy) + ')"' + (isCurrent ? ' disabled' : '') + '>' +
       icon(isCurrent ? 'check' : 'tune', 's18') +
       '<span>' + (isCurrent ? esc(t('Стратегия «{0}» уже действует', stratTitle)) : esc(t('Применить «{0}»', stratTitle))) + '</span>' +
     '</button>';
@@ -471,8 +479,8 @@ function renderRecommendation(){
   if(rec.altStrategies && rec.altStrategies.length > 0){
     rec.altStrategies.forEach(altName => {
       const isAltCur = cur === altName;
-      const altTitle = typeof strategyName === 'function' ? strategyName(altName) : altName;
-      html += '<button class="btn tonal sm state" onclick="applyRecommendedStrategy(\'' + esc(altName) + '\')"' + (isAltCur ? ' disabled' : '') + '>' +
+      const altTitle = strategyName(altName);
+      html += '<button class="btn tonal sm state" onclick="applyRecommendedStrategy(' + jsArg(altName) + ')"' + (isAltCur ? ' disabled' : '') + '>' +
         '<span>' + esc(isAltCur ? altTitle + ' (' + t('действует') + ')' : altTitle) + '</span>' +
       '</button>';
     });
@@ -484,10 +492,8 @@ function renderRecommendation(){
 }
 
 async function applyRecommendedStrategy(name){
-  if(typeof applyStrategy === 'function'){
-    await applyStrategy(name);
-    renderRecommendation();
-  }
+  await applyStrategy(name);
+  renderRecommendation();
 }
 
 function copyTestReport(){
@@ -574,13 +580,6 @@ async function runDomainCheck(){
   dcRunning = false;
   $('dc-go').disabled = false;
   if(r.code){ setHTML('dc-res', banner('danger', 'error', errText(r, 'Не удалось проверить домен')), false); return; }
-  if(!st.mode) r.out.split('\n').forEach(line => {   // exec без построчной выдачи
-    const p = line.split('\t');
-    if(p[0] === 'MODE') st.mode = p[1];
-    else if(p[0] === 'LIST') st.lists.push({file: p[1], role: p[2], entry: p[3]});
-    else if(p[0] === 'IP') st.ip = p[1];
-    else if(p[0] === 'R'){ const [ok, v] = (p[2] || '').split(' '); st.tries.push({ok: ok === 'ok', v}); }
-  });
   paint(true);
 }
 function dcVerdict(st){
@@ -633,7 +632,8 @@ function dcRow(ic, title, sub, status){
 async function dcAddUser(q){
   const r = await withBusy(['add-domain', q]);
   if(r.code){ toast(errText(r, 'Не удалось добавить')); return; }
-  toast((r.out || '').trim() || t('Добавлено'));
+  // ответ ctl — по-русски («Добавлено: x»); в интерфейсе — своя строка
+  toast(t('Добавлено: {0}', (r.out || '').trim().split(': ').pop() || q));
   runDomainCheck();
 }
 /* Открыть список, где нашёлся домен, сразу с поиском этой записи. Списков

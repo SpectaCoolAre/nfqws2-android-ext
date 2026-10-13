@@ -127,6 +127,7 @@ async function loadDnsState(){
   dnsSt = parseDnsState(r.out);
   dnsSt.profiles.sort((a, b) => a.name.localeCompare(b.name, LANG));
   dnsLoaded = true;
+  snapSet('dns', r.out);
   return true;
 }
 
@@ -151,8 +152,19 @@ function dnsProfileSummary(p){
 /* ══ ЭКРАН «DNS по профилям» ════════════════════════════════════════════ */
 async function dnsInit(){
   if(dnsSel) dnsSelExit(true);
-  if(!dnsLoaded) renderDns();
-  if(await loadDnsState()) renderDns();
+  if(!dnsLoaded){
+    const snap = snapGet('dns');
+    if(snap){
+      dnsSt = parseDnsState(snap);
+      dnsSt.profiles.sort((a, b) => a.name.localeCompare(b.name, LANG));
+      dnsLoaded = true;
+      snapLock('dns', true);
+    }
+    renderDns();
+  }
+  const ok = await loadDnsState();
+  snapLock('dns', false);
+  if(ok) renderDns();
   await stat(true);
   renderDnsDoh();
 }
@@ -410,7 +422,7 @@ async function createDnsProfile(){
   const name = await mdPrompt(t('Новый профиль'), t('Например: Instagram, ИИ-сервисы, Игры.'), '', t('Название'), {ok: t('Создать')});
   if(!name) return;
   const p = {id: dnsNewId(name), name, desc: '', enabled: false, servers: [], domains: []};
-  if(await saveDnsProfile(p, true)) openDnsProfile(p.id);
+  if(await saveDnsProfile(p)) openDnsProfile(p.id);
 }
 
 function openDnsPresets(){
@@ -430,14 +442,14 @@ async function addDnsPreset(id){
   closeSheet();
   const p = Object.assign({}, pre, {id: dnsNewId(pre.id), name: t(pre.name), desc: t(pre.desc),
     servers: pre.servers.slice(), domains: pre.domains.slice(), enabled: pre.domains.length > 0});
-  if(await saveDnsProfile(p, true)){
+  if(await saveDnsProfile(p)){
     toast(t('Профиль «{0}» добавлен', p.name));
     if(currentPage === 'dns') renderDns();
   }
 }
 
 /* Сохранение профиля целиком; модуль применяет его сразу, если служба запущена */
-async function saveDnsProfile(p, isNew){
+async function saveDnsProfile(p){
   const r = await withBusy(['dns-save-b64', p.id, b64(dnsSerialize(p))], 40000);
   if(r.code){ toast(errText(r, 'Не удалось сохранить')); return false; }
   await loadDnsState();

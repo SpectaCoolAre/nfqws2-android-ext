@@ -1,37 +1,38 @@
-# probe_hosts.list — сайты для проверки доступности (DPI Detector, пункт 2)
+# probe_hosts.list — сайты для проверки доступности (DPI Detector, пункт 2). Где голый домен
+# лишь переадресует на www, сразу www: переадресация не считается за сбой и не тратит попытку
 # Формат: host или host/путь, по одному на строке.
-instagram.com
-facebook.com
-x.com
-linkedin.com
+www.instagram.com
+www.facebook.com
+x.com/i/api/1.1/graphql/user_flow.json
+www.linkedin.com
 discord.com
 gateway.discord.gg
 media.discordapp.net
-youtube.com
+www.youtube.com
 soundcloud.com
 meduza.io
-dw.com
-svoboda.org
+www.dw.com
+www.svoboda.org
 holod.media
-euronews.com
-torproject.org
+www.euronews.com
+www.torproject.org
 protonvpn.com
 amnezia.org
 nnmclub.to
 standby-rezka.tv
 hub.docker.com
-intel.com
-canva.com
-coursera.org
+www.intel.com
+www.canva.com
+www.coursera.org
 aws.amazon.com
-apkmirror.com
-currenttime.tv
-messenger.com
-themoscowtimes.com
-linuxserver.io
+www.apkmirror.com
+www.currenttime.tv
+www.messenger.com
+www.themoscowtimes.com
+www.linuxserver.io
 danbooru.donmai.us
 browserleaks.com
-cdn77.com
+www.cdn77.com
 shikimori.io
 kinopub.online
 vk.ru

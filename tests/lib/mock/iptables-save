@@ -1,0 +1,19 @@
+#!/bin/sh
+# Mock iptables-save / ip6tables-save: печатает таблицу из хранилища мока
+# iptables в формате save — «*таблица», «:цепочка», «-A цепочка правило», COMMIT.
+# MOCK_IPT_SAVE_FAIL=1 — save недоступен/падает.
+[ -n "${MOCK_IPT_SAVE_FAIL:-}" ] && exit 1
+BIN="${0%-save}"
+STORE="${MOCK_IPT_STORE:?MOCK_IPT_STORE not set}/${BIN##*/}"
+TABLE=mangle
+while [ $# -gt 0 ]; do
+  case "$1" in -t) TABLE="$2"; shift 2 ;; *) shift ;; esac
+done
+D="$STORE/$TABLE"
+printf '*%s\n' "$TABLE"
+for f in "$D"/*; do [ -f "$f" ] && printf ':%s - [0:0]\n' "${f##*/}"; done
+for f in "$D"/*; do
+  [ -f "$f" ] || continue
+  while IFS= read -r l; do printf -- '-A %s %s\n' "${f##*/}" "$l"; done < "$f"
+done
+printf 'COMMIT\n'

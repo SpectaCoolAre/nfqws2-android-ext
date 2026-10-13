@@ -48,6 +48,9 @@ IPT_GROUP_MQ="nfqws_mquic"     # filter: мгновенный отказ QUIC к
 # Сети Meta (Instagram, Facebook, WhatsApp): AS32934
 META_NET4="157.240.0.0/16 31.13.24.0/21 31.13.64.0/18 57.144.0.0/14 163.70.128.0/17 129.134.0.0/16 69.171.224.0/19 173.252.64.0/18 179.60.192.0/22 185.60.216.0/22 66.220.144.0/20 69.63.176.0/20 102.132.96.0/20 204.15.20.0/22 45.64.40.0/22"
 META_NET6="2a03:2880::/32"
+# Сети Telegram: AS62041, AS62014, AS59930, AS44907, AS211157
+TG_NET4="91.105.192.0/23 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 95.161.64.0/20 149.154.160.0/20 185.76.151.0/24"
+TG_NET6="2001:67c:4e8::/48 2001:b28:f23c::/48 2001:b28:f23d::/48 2001:b28:f23f::/48 2a0a:f280::/32"
 IPT_CAP_CACHE="$STATE_DIR/iptables-capabilities"
 
 # xt_owner allows max 128 ranges per rule
@@ -85,6 +88,7 @@ set_defaults() {
   : "${ENABLE_HOTSPOT:=1}"
   : "${DOH_BYPASS:=0}"
   : "${META_QUIC_REJECT:=1}"
+  : "${CALLS_BYPASS:=0}"
 }
 
 log_msg() {
@@ -97,6 +101,7 @@ log_msg() {
 }
 
 sync_lists_and_blobs() {
+  local sdir f bname
   # builtin dir check avoids a fork on every netwatch tick and nfqws2-ctl call
   [ -d "$LISTS_DIR" ] && [ -d "$LOG_DIR" ] && [ -d "$STATE_DIR" ] ||
     mkdir -p "$LISTS_DIR" "$CONFDIR" "$LOG_DIR" "$STATE_DIR" 2>/dev/null
@@ -105,7 +110,7 @@ sync_lists_and_blobs() {
     if [ -d "$sdir" ]; then
       for f in "$sdir"/*; do
         [ -f "$f" ] || continue
-        local bname="${f##*/}"
+        bname="${f##*/}"
         [ -f "$LISTS_DIR/$bname" ] || cp -f "$f" "$LISTS_DIR/$bname"
       done
     fi
@@ -283,10 +288,14 @@ app_uid_count() {
 
 # 0 = app filter applied, 1 = off/not applicable, 2 = error
 app_rules() {
-  local CMD="$1" uids n chunk mark FAM="${FW_FAMILY:-$1}"
+  local CMD="$1" uids n chunk chunks mark FAM="${FW_FAMILY:-$1}"
   if ! app_mode_active; then
-    $CMD -w -t mangle -F $IPT_GROUP_APP 2>/dev/null
-    $CMD -w -t mangle -X $IPT_GROUP_APP 2>/dev/null
+    # В пакете -F/-X несуществующей цепочки сорвали бы весь iptables-restore;
+    # её и так сняла остановка правил перед пакетом
+    if [ "$CMD" != "_fw_batch_cmd" ]; then
+      $CMD -w -t mangle -F $IPT_GROUP_APP 2>/dev/null
+      $CMD -w -t mangle -X $IPT_GROUP_APP 2>/dev/null
+    fi
     rm -f "$APP_UIDS_FILE"
     return 1
   fi
@@ -310,12 +319,15 @@ app_rules() {
   [ "$APP_MODE" = "exclude" ] && mark="$MARK_EXCLUDE"
   $CMD -w -t mangle -N $IPT_GROUP_APP 2>/dev/null
   $CMD -w -t mangle -F $IPT_GROUP_APP
-  printf '%s\n' "$uids" | tr ',' '\n' | grep -E '^[0-9]+$' | sort -n -u | awk -v mx="$APP_UID_MAX" '
+  chunks=$(printf '%s\n' "$uids" | tr ',' '\n' | grep -E '^[0-9]+$' | sort -n -u | awk -v mx="$APP_UID_MAX" '
       # не a[b] = (b in a ? …): mawk и toybox awk заводят a[b] до проверки,
       # и первый UID получал запятую впереди («--uid-owner ,10201»)
       { b = int((NR - 1) / mx); if (b in a) a[b] = a[b] "," $0; else a[b] = $0 }
-      END { for (i = 0; i <= b; i++) if (i in a) print a[i] }' | while IFS= read -r chunk; do
-    [ -n "$chunk" ] || continue
+      END { for (i = 0; i <= b; i++) if (i in a) print a[i] }')
+  # не «| while read»: тело в подоболочке, и пакетный режим (_fw_batch_cmd
+  # копит строки в переменной) терял бы эти правила. В пачке пробелов нет,
+  # так что хватает обычного разбиения по словам
+  for chunk in $chunks; do
     $CMD -w -t mangle -A $IPT_GROUP_APP -m owner --uid-owner "$chunk" -j CONNMARK --set-xmark "$mark"
   done
   $CMD -w -t mangle -A $IPT_GROUP_POST -j $IPT_GROUP_APP
@@ -328,6 +340,41 @@ app_rules() {
   fi
   log_msg "Фильтр по приложениям ($APP_MODE): $n UID"
   return 0
+}
+
+# Профиль звонков с подставленными сетями Meta и Telegram
+calls_args() {
+  local m t
+  m=$(printf '%s' "$META_NET4 $META_NET6" | tr ' ' ',')
+  t=$(printf '%s' "$TG_NET4 $TG_NET6" | tr ' ' ',')
+  norm_args "$(sed -e "s#@META@#$m#g" -e "s#@TG@#$t#g" "$MODDIR/defaults/calls-bypass.conf")"
+}
+
+# Добавить порты или диапазоны (a:b) в список для iptables. То, что новый
+# диапазон покрывает целиком, из списка уходит: multiport берёт не больше 15
+# портов (диапазон — за два), и лишние записи переполнили бы правило.
+port_list_add() { # <список> <порт|a:b>...
+  local l="$1"; shift
+  printf '%s\n' "$@" | awk -v l="$l" '
+    function lo(x) { return x ~ /:/ ? substr(x, 1, index(x, ":") - 1) + 0 : x + 0 }
+    function hi(x) { return x ~ /:/ ? substr(x, index(x, ":") + 1) + 0 : x + 0 }
+    BEGIN { n = split(l, a, ",") }
+    NF { add[++m] = $0 }
+    END {
+      out = ""
+      for (i = 1; i <= n; i++) {
+        if (a[i] == "") continue
+        cov = 0
+        for (j = 1; j <= m; j++) if (a[i] != add[j] && lo(a[i]) >= lo(add[j]) && hi(a[i]) <= hi(add[j])) cov = 1
+        if (!cov) out = out (out == "" ? "" : ",") a[i]
+      }
+      for (j = 1; j <= m; j++) {
+        dup = 0
+        for (i = 1; i <= n; i++) if (lo(add[j]) >= lo(a[i]) && hi(add[j]) <= hi(a[i])) dup = 1
+        if (!dup) out = out (out == "" ? "" : ",") add[j]
+      }
+      printf "%s", out
+    }'
 }
 
 port_list_without() {
@@ -365,6 +412,10 @@ _startup_args() {
   if [ "$DOH_BYPASS" = "1" ] && [ -f "$MODDIR/defaults/doh-bypass.conf" ]; then
     args="$args --blob=doh_tls:@$BLOBS_DIR/tls_clienthello.bin $(norm_args "$(cat "$MODDIR/defaults/doh-bypass.conf")") --new"
   fi
+  # Обход звонков — так же, до стратегии
+  if [ "$CALLS_BYPASS" = "1" ] && [ -f "$MODDIR/defaults/calls-bypass.conf" ]; then
+    args="$args --blob=calls_stun:@$BLOBS_DIR/stun.bin --blob=calls_tls:@$BLOBS_DIR/tls_clienthello.bin $(calls_args) --new"
+  fi
   [ -n "$custom" ] && args="$args $custom --new"
   [ -n "$udp" ] && args="$args $udp --new"
 
@@ -379,9 +430,26 @@ _startup_args() {
   printf '%s' "$args" | tr -s ' '
 }
 
+# Аргументы, уже прошедшие --dry-run, запоминаются; запуск службы с ними
+# повторно не проверяет (dry_run_known). Проверка грузит все списки и ipset
+# (десятки тысяч строк), а при смене стратегии их иначе грузили бы трижды:
+# проверка конфига, проверка при запуске, сам запуск. Явные проверки (check,
+# сохранение конфига, диагностика) проверяют всегда. Ключ — версия модуля,
+# размер бинарника и аргументы.
+DRYRUN_OK="$STATE_DIR/dryrun.ok"
+dry_run_key() {
+  printf '%s|%s|%s' "$(sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null)" \
+    "$(wc -c < "$NFQWS_BIN" 2>/dev/null)" "$*" | cksum
+}
+
+dry_run_known() { # <args...>
+  [ -f "$DRYRUN_OK" ] && [ "$(cat "$DRYRUN_OK" 2>/dev/null)" = "$(dry_run_key "$@")" ]
+}
+
 dry_run_check() { # <args...>
   [ -x "$NFQWS_BIN" ] || return 0
-  local out rc
+  local out rc key
+  key=$(dry_run_key "$@")
   out=$(
     cd "$MODDIR/bin" 2>/dev/null || exit 1
     set -f
@@ -399,6 +467,7 @@ dry_run_check() { # <args...>
     fi
     return "$rc"
   fi
+  echo "$key" > "$DRYRUN_OK" 2>/dev/null
   return 0
 }
 
@@ -462,13 +531,14 @@ _ipt_cap_cache_put() { # <command> <probe key> <value>
   [ -n "$kernel" ] || return 0
   mkdir -p "$STATE_DIR" 2>/dev/null
   tmp="$IPT_CAP_CACHE.tmp"
-  if [ -f "$IPT_CAP_CACHE" ]; then
-    while IFS='|' read -r k c p v; do
+  # одной записью «>»: остаток .tmp от прерванного прогона не подмешается
+  {
+    [ -f "$IPT_CAP_CACHE" ] && while IFS='|' read -r k c p v; do
       [ "$k" = "$kernel" ] && [ "$c" = "$1" ] && [ "$p" = "$2" ] && continue
       printf '%s|%s|%s|%s\n' "$k" "$c" "$p" "$v"
-    done < "$IPT_CAP_CACHE" > "$tmp"
-  fi
-  printf '%s|%s|%s|%s\n' "$kernel" "$1" "$2" "$3" >> "$tmp"
+    done < "$IPT_CAP_CACHE"
+    printf '%s|%s|%s|%s\n' "$kernel" "$1" "$2" "$3"
+  } > "$tmp"
   mv -f "$tmp" "$IPT_CAP_CACHE"
 }
 
@@ -549,65 +619,54 @@ _fw_add_rule() {
 }
 
 _fw_batch_cmd() {
-  local table=mangle arg line original="$*"
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      -w) shift ;;
-      -t) table="$2"; shift 2 ;;
-      *) break ;;
-    esac
-  done
-  [ "$#" -gt 0 ] || return 1
-  # run via real command to reflect actual kernel
-  case "$*" in
-    *nfqws_test*) "$FW_PROBE_CMD" $original; return $? ;;
+  local table=mangle line arg
+  case " $* " in
+    # пробы возможностей — настоящей командой: важно, что умеет ядро
+    *nfqws_test*) "$FW_PROBE_CMD" "$@"; return $? ;;
   esac
+  [ "$1" = "-w" ] && shift
+  if [ "$1" = "-t" ]; then table="$2"; shift 2; fi
   case "$1" in
     -D) return 1 ;;
+    # строки копятся в памяти, а не дописываются в файл по одной. Склейка
+    # пробелами явно: "$*" взял бы первый символ IFS, а его меняют вызывающие
     -N|-F|-X|-A|-I)
       line="$1"; shift
       for arg in "$@"; do line="$line $arg"; done
-      printf '%s|%s\n' "$table" "$line" >> "$FW_BATCH_FILE"
+      FW_BATCH_BUF="$FW_BATCH_BUF$table|$line
+"
       return 0 ;;
   esac
   return 1
 }
 
 # Пакетная загрузка правил: тот же построитель _firewall_start, но вместо
-# iptables — _fw_batch_cmd, который складывает команды в файл, а потом всё
+# iptables — _fw_batch_cmd, который копит команды в переменной FW_BATCH_BUF, а потом всё
 # применяется одним iptables-restore. Построитель смотрит на имя команды
 # (NAT_FIX, файл лимитера, UID приложений — только для iptables), поэтому
 # настоящая команда передаётся в FW_FAMILY.
 _firewall_start_restore() {
-  local CMD="$1" restore raw rules table line current="" restore_file
-  restore_file="${FW_RESTORE_DIR}/${CMD}.rules"
-  raw="${FW_RESTORE_DIR}/${CMD}.raw"
-  rules="${FW_RESTORE_DIR}/${CMD}.input"
+  local CMD="$1" rules="${FW_RESTORE_DIR}/${1}.input"
 
   command -v "${CMD}-restore" >/dev/null 2>&1 || return 1
   _firewall_stop "$CMD" || true
-  FW_BATCH_FILE="$raw"
   FW_PROBE_CMD="$CMD"
-  : > "$raw"
+  FW_BATCH_BUF=""
   FW_FAMILY="$CMD"
-  _firewall_start _fw_batch_cmd || { FW_FAMILY=""; rm -f "$raw"; return 1; }
+  _firewall_start _fw_batch_cmd || { FW_FAMILY=""; FW_BATCH_BUF=""; return 1; }
   FW_FAMILY=""
 
-  current=""
-  : > "$rules"
-  while IFS='|' read -r table line; do
-    [ "$table" = "$current" ] || {
-      [ -z "$current" ] || printf 'COMMIT\n' >> "$rules"
-      current="$table"
-      printf '*%s\n' "$table" >> "$rules"
-    }
-    printf '%s\n' "$line" >> "$rules"
-  done < "$raw"
-  [ -z "$current" ] || printf 'COMMIT\n' >> "$rules"
+  # строки «таблица|правило» -> блоки *таблица ... COMMIT
+  printf '%s' "$FW_BATCH_BUF" | awk '
+    { i = index($0, "|"); t = substr($0, 1, i - 1)
+      if (t != cur) { if (cur != "") print "COMMIT"; cur = t; print "*" t }
+      print substr($0, i + 1) }
+    END { if (cur != "") print "COMMIT" }' > "$rules"
+  FW_BATCH_BUF=""
 
   "${CMD}-restore" --noflush < "$rules"
   local rc=$?
-  rm -f "$raw" "$rules"
+  rm -f "$rules"
   return "$rc"
 }
 
@@ -672,8 +731,14 @@ _firewall_start() {
   [ "$BLOCK_QUIC" = "1" ] && IPT_UDP_EFF=$(port_list_without "$IPT_UDP_EFF" 443)
   # DoT (853) нужен в очереди, только когда включён обход блокировки DoT/DoH
   if [ "$DOH_BYPASS" = "1" ]; then
-    case ",$IPT_TCP_PORTS," in *,853,*) ;; *) IPT_TCP_PORTS="$IPT_TCP_PORTS,853" ;; esac
-    case ",$IPT_UDP_EFF," in *,853,*) ;; *) IPT_UDP_EFF="$IPT_UDP_EFF,853" ;; esac
+    IPT_TCP_PORTS=$(port_list_add "$IPT_TCP_PORTS" 853)
+    IPT_UDP_EFF=$(port_list_add "$IPT_UDP_EFF" 853)
+  fi
+  # Звонки: ретрансляторы WhatsApp (3478, 3482) и Telegram (590–600, 1400),
+  # STUN между ними; сигнальный канал WhatsApp — TCP 5222
+  if [ "$CALLS_BYPASS" = "1" ]; then
+    IPT_UDP_EFF=$(port_list_add "$IPT_UDP_EFF" 590:1400 3478:3482)
+    IPT_TCP_PORTS=$(port_list_add "$IPT_TCP_PORTS" 5222)
   fi
 
   LIMITER=$(detect_limiter "$CMD")
@@ -762,8 +827,47 @@ _firewall_start() {
   fi
 }
 
+# Снять наши цепочки одной парой save/restore на таблицу вместо ~20 вызовов
+# iptables: на телефоне каждый вызов — 50–100 мс, а при перезапуске правила
+# снимаются дважды (stop и перед пакетной загрузкой). В пакет — только то, что
+# есть: -D отсутствующего правила сорвал бы весь restore. Цепочки DNS и отказа
+# QUIC сюда не входят — у них свой жизненный цикл.
+_firewall_stop_batch() { # <iptables|ip6tables>
+  local CMD="$1" t chains in
+  if ! command -v "$CMD-save" >/dev/null 2>&1 || ! command -v "$CMD-restore" >/dev/null 2>&1; then
+    return 1
+  fi
+  for t in mangle nat; do
+    if [ "$t" = mangle ]; then
+      chains="$IPT_GROUP_POST $IPT_GROUP_PRE $IPT_GROUP_FWD $IPT_GROUP_QOUT $IPT_GROUP_QIN $IPT_GROUP_APP"
+    else
+      [ "$CMD" = iptables ] || continue
+      chains="$IPT_GROUP_NAT"
+    fi
+    in=$("$CMD-save" -t "$t" 2>/dev/null) || return 1
+    in=$(printf '%s\n' "$in" | awk -v t="$t" -v list=" $chains " '
+      function ours(c) { return index(list, " " c " ") > 0 }
+      /^:/ { c = substr($1, 2); if (ours(c)) own[++m] = c; next }
+      /^-A / && !ours($2) {
+        for (i = 3; i < NF; i++) if ($i == "-j" && ours($(i + 1))) { sub(/^-A /, "-D "); del[++n] = $0; break }
+      }
+      END {
+        if (!n && !m) exit
+        print "*" t
+        for (i = 1; i <= n; i++) print del[i]
+        for (i = 1; i <= m; i++) print "-F " own[i]
+        for (i = 1; i <= m; i++) print "-X " own[i]
+        print "COMMIT"
+      }')
+    [ -n "$in" ] || continue
+    printf '%s\n' "$in" | "$CMD-restore" --noflush 2>/dev/null || return 1
+  done
+  return 0
+}
+
 _firewall_stop() {
   local CMD="$1"
+  _firewall_stop_batch "$CMD" && return 0
   while $CMD -w -t mangle -D POSTROUTING -j $IPT_GROUP_POST 2>/dev/null; do :; done
   while $CMD -w -t mangle -D PREROUTING -j $IPT_GROUP_PRE 2>/dev/null; do :; done
   while $CMD -w -t mangle -D FORWARD -j $IPT_GROUP_FWD 2>/dev/null; do :; done
@@ -777,6 +881,9 @@ _firewall_stop() {
     while $CMD -w -t nat -D POSTROUTING -j $IPT_GROUP_NAT 2>/dev/null; do :; done
     $CMD -w -t nat -F $IPT_GROUP_NAT 2>/dev/null; $CMD -w -t nat -X $IPT_GROUP_NAT 2>/dev/null
   fi
+  # снимать то, чего нет (NAT_FIX=0, правила уже сняты), — не ошибка;
+  # проверка «правил не осталось» — firewall_ok
+  return 0
 }
 
 # QUIC к Meta — сразу отказ (ICMP «порт недоступен»), а не молчаливая потеря.
@@ -789,13 +896,14 @@ _meta_quic_chain() { # <iptables|ip6tables> <сети> <reject-with>
   local C="$1" n
   command -v "$C" >/dev/null 2>&1 || return 0
   $C -w -t filter -N $IPT_GROUP_MQ 2>/dev/null || return 0
-  for n in $2; do
-    $C -w -t filter -A $IPT_GROUP_MQ -p udp --dport 443 -d "$n" -j REJECT --reject-with "$3" 2>/dev/null || {
-      log_msg "$C: нет REJECT — отказ QUIC к Meta недоступен"
-      $C -w -t filter -F $IPT_GROUP_MQ 2>/dev/null; $C -w -t filter -X $IPT_GROUP_MQ 2>/dev/null
-      return 0
-    }
-  done
+  # все сети одним вызовом: iptables сам раскладывает список через запятую
+  # в отдельные правила, а вызов на сеть стоил бы по 50–100 мс на каждую
+  n=$(printf '%s' "$2" | tr -s ' ' ',')
+  $C -w -t filter -A $IPT_GROUP_MQ -p udp --dport 443 -d "$n" -j REJECT --reject-with "$3" 2>/dev/null || {
+    log_msg "$C: нет REJECT — отказ QUIC к Meta недоступен"
+    $C -w -t filter -F $IPT_GROUP_MQ 2>/dev/null; $C -w -t filter -X $IPT_GROUP_MQ 2>/dev/null
+    return 0
+  }
   $C -w -t filter -I OUTPUT 1 -j $IPT_GROUP_MQ
   $C -w -t filter -I FORWARD 1 -j $IPT_GROUP_MQ 2>/dev/null
   return 0
@@ -874,12 +982,11 @@ firewall_start() {
 }
 
 firewall_stop() {
-  local rc=0
-  _firewall_stop iptables || rc=1
-  _firewall_stop ip6tables || rc=1
+  _firewall_stop iptables
+  _firewall_stop ip6tables
   meta_quic_stop
   restore_tether_offload
-  return $rc
+  return 0
 }
 
 firewall_ok() {
@@ -892,7 +999,6 @@ firewall_ok() {
 # -w first: dash reports a redirect open() error before 2>/dev/null applies.
 protect_process() {   # $1 - PID; default: current process
   local p="${1:-$$}"
-  [ -z "$p" ] && return 0
   [ -d "/proc/$p" ] || return 0
   if [ -w "/proc/$p/oom_score_adj" ] 2>/dev/null; then
     echo -1000 > "/proc/$p/oom_score_adj" 2>/dev/null
@@ -904,6 +1010,11 @@ protect_process() {   # $1 - PID; default: current process
   fi
   if [ -w /dev/cpuset/cgroup.procs ] 2>/dev/null; then
     echo "$p" > /dev/cpuset/cgroup.procs 2>/dev/null
+  fi
+  # демону — высший приоритет: пакеты в очереди ждут его (из оригинала,
+  # 18ed353). Наблюдателям (без аргумента) не нужно: они почти всё время спят
+  if [ -n "$1" ] && command -v renice >/dev/null 2>&1; then
+    renice -n -20 -p "$p" >/dev/null 2>&1 || renice -20 "$p" >/dev/null 2>&1
   fi
   return 0
 }
@@ -980,18 +1091,13 @@ list_imports() {
 # all strategies and taken from the live config on switch (see USER_KEYS).
 STRATEGY_KEYS="NFQWS_BASE_ARGS NFQWS_ARGS NFQWS_ARGS_QUIC NFQWS_ARGS_UDP NFQWS_ARGS_IPSET NFQWS_ARGS_CUSTOM"
 
-# foreign options to strip
-FOREIGN_OPTS=""
-
-# Unsupported long options in a file, one per line. FOREIGN_OPTS plus a grep of
-# the binary (option names are strings in it); if the binary isn't nfqws2
-# (no "lua-desync"), FOREIGN_OPTS only.
+# Unsupported long options in a file, one per line: a grep of the binary (option
+# names are strings in it); if the binary isn't nfqws2 (no "lua-desync"), none.
 unsupported_opts() { # <file>
   local n real=0
   grep -qF lua-desync "$NFQWS_BIN" 2>/dev/null && grep -qF filter-tcp "$NFQWS_BIN" 2>/dev/null && real=1
   grep -v '^[[:space:]]*#' "$1" 2>/dev/null | grep -oE -e '(^|[[:space:]"])--[A-Za-z0-9][A-Za-z0-9-]*' | sed 's/^.*--//' | sort -u |
   while IFS= read -r n; do
-    case " $FOREIGN_OPTS " in *" $n "*) echo "$n"; continue ;; esac
     [ "$real" = 1 ] && ! grep -qF -e "$n" "$NFQWS_BIN" 2>/dev/null && echo "$n"
   done
 }
@@ -1115,7 +1221,9 @@ update_description() { # running | stopped | paused <ssid>
   esac
   d=$(printf '%s' "$d | $DESC_BASE" | tr -d '\n\r')
   tmp="$STATE_DIR/module.prop.$$"
-  awk -v d="$d" 'BEGIN { done = 0 } /^description=/ { print "description=" d; done = 1; next } { print }
+  # через окружение, а не -v: -v разбирает «\n» и прочие escape-последовательности,
+  # и SSID с обратной косой чертой ломал бы module.prop
+  D="$d" awk 'BEGIN { d = ENVIRON["D"]; done = 0 } /^description=/ { print "description=" d; done = 1; next } { print }
     END { if (!done) print "description=" d }' "$prop" > "$tmp" && cat "$tmp" > "$prop"
   rm -f "$tmp"
   return 0
@@ -1160,7 +1268,7 @@ render_strategy() {
 
 # Module settings (same across strategies) are carried over whole from the live
 # config on strategy change/reset. NFQWS_EXTRA_ARGS only for standard $MODE_* refs.
-USER_KEYS="DOH_BYPASS META_QUIC_REJECT IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT NFQWS_EXTRA_ARGS"
+USER_KEYS="DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT NFQWS_EXTRA_ARGS"
 merge_user_keys() { # <generated config> <settings source config>  -> stdout
   awk -v keys=" $USER_KEYS " -v src="$2" '
     function quotes(str,   t) { t = str; return gsub(/"/, "", t) }
@@ -1198,7 +1306,7 @@ merge_user_keys() { # <generated config> <settings source config>  -> stdout
 # Current SSID, rc 1 if not on Wi-Fi. cmd wifi needs Android 11; dumpsys is the fallback.
 current_ssid() {
   local out s
-  out=$(cmd wifi status 2>/dev/null)
+  out=$(cmd wifi status </dev/null 2>/dev/null)   # без stdin: cmd иначе может ждать ввода
   case "$out" in
     *"Wifi is "*)
       # cmd wifi отвечает — ему и верим: нет «connected to» значит не подключено.

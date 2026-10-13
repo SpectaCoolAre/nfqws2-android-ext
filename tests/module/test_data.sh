@@ -228,8 +228,8 @@ section "uninstall"
 # suppressed, but the intent is invisible. The pid has to be read and checked.
 assert_eq "0" "$(grep -c 'kill "\$(cat' "$REPO_DIR/uninstall.sh")" \
   "uninstall does not kill a pid it has not checked"
-assert_contains "$(cat "$REPO_DIR/uninstall.sh")" '[ -n "$wpid" ]' \
-  "uninstall checks the watchdog pid before killing it"
+assert_contains "$(cat "$REPO_DIR/uninstall.sh")" '/proc/$p/cmdline' \
+  "uninstall checks the watchdog pid is ours before killing it"
 assert_contains "$(cat "$REPO_DIR/uninstall.sh")" 'rm -rf /data/adb/nfqws2/state' \
   "uninstall still clears the state directory"
 

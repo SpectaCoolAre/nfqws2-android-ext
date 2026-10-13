@@ -77,7 +77,9 @@
   --top-inset: var(--window-inset-top, env(safe-area-inset-top, 0px));
   --bottom-inset: var(--window-inset-bottom, env(safe-area-inset-bottom, 0px));
   --appbar-height: 64px;
-  --navbar-height: 80px;
+  --navbar-pill: 60px;
+  --navbar-gap: 10px;
+  --navbar-height: calc(var(--navbar-pill) + var(--navbar-gap));
   --content-max: 760px;
   --screen-margin: 16px;
   --gap: 12px;
@@ -116,7 +118,22 @@ html, body {
   min-height: 100dvh;
   transition: background-color var(--dur-medium) var(--standard), color var(--dur-medium) var(--standard);
 }
-body { overflow-x: hidden; overscroll-behavior-y: none; }
+/* Системное растяжение при упоре в край тянет весь WebView — вместе с шапкой
+   и капсулой навигации. Корень не прокручивается, а растяжение рисует
+   core.js — только у содержимого страницы. */
+html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+/* Прокручивается не документ, а этот слой: корень неподвижен, и WebView нечего
+   растягивать при упоре в край — шапка и капсула навигации лежат вне
+   прокрутки и не сдвигаются. overscroll-behavior: none не пускает упор к корню. */
+.scroller {
+  /* на 1 px выше экрана: слой ровно во весь экран Chromium на Android делает
+     корневым (implicit root scroller), и упор снова уходит в WebView */
+  position: fixed; top: 0; left: 0; right: 0; bottom: -1px;
+  overflow-x: hidden; overflow-y: auto; overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+}
+.page.stretch { will-change: transform; }
+.page.stretch-release { transition: transform var(--dur-medium) var(--emphasized-decelerate); }
 /* Как в приложении: подписи, пункты и пояснения не выделяются долгим
    нажатием. Выделяется только то, что имеет смысл копировать: поля ввода,
    журналы, аргументы запуска. */
@@ -182,7 +199,14 @@ svg.icon.s24 { width: 24px; height: 24px; }
 .app-bar .title { flex: 1; min-width: 0; padding-left: 8px;
   font-size: var(--ts-title-large); line-height: var(--lh-title-large); font-weight: var(--w-regular);
   color: var(--md-sys-color-on-surface); }
-#back-btn[hidden] ~ .title { margin-left: calc(var(--screen-margin) - 4px); padding-left: 0; }
+/* Верхний уровень, как у Telegram: название слева, сразу за ним логотип в
+   кружке, справа — журналы. Отступ названия — как у полей экрана */
+.app-bar.top .title { flex: 0 1 auto; padding-left: calc(var(--screen-margin) - 4px); font-weight: var(--w-medium); }
+.brand-logo { width: 28px; height: 28px; margin: 0 auto 0 8px; flex: none; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary); }
+.brand-logo svg { width: 18px; height: 18px; }
+.app-bar:not(.top) .brand-logo { display: none; }
 /* 32dp чип состояния в баре: PID / выкл / нет связи */
 
 /* Icon button 48×48 */
@@ -209,58 +233,71 @@ svg.icon.s24 { width: 24px; height: 24px; }
 
 /* ── App bar: действия текущего экрана + overflow ─────────────────────── */
 .bar-actions { display: flex; align-items: center; flex: none; }
+/* пустой блок занимал бы ещё один зазор и сдвигал название от центра */
+.bar-actions:empty { display: none; }
 .app-bar .title.swap { animation: title-in var(--dur-medium) var(--emphasized-decelerate); }
 @keyframes title-in { from { opacity: 0; transform: translateY(4px); } }
 
-/* ── Navigation bar (M3): 80dp, индикатор 64×32, подписи видны всегда ───
-   Индикатор раскрывается от иконки по горизонтали (scaleX .5 → 1) — так
-   M3 показывает смену выбранного раздела. Ripple ограничен индикатором. */
+/* ── Navigation bar: плавающая капсула, как в Telegram для Android ──────
+   Панель оторвана от низа экрана: под ней — полоса жестов, она остаётся
+   прозрачной. Разделы стянуты к центру, выбранный подсвечен капсулой
+   вокруг значка и подписи. Без размытия фона. --navbar-height — капсула
+   плюс отступ снизу: на неё рассчитаны отступы содержимого и снекбара. */
 .nav-bar {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
-  height: calc(var(--navbar-height) + var(--bottom-inset));
-  padding-bottom: var(--bottom-inset);
+  position: fixed; left: 0; right: 0; bottom: calc(var(--bottom-inset) + var(--navbar-gap)); z-index: 30;
+  margin: 0 auto;
+  width: max-content; max-width: calc(100% - 2 * var(--screen-margin));
+  height: var(--navbar-pill); padding: 4px;
   display: flex; justify-content: center;
-  background: var(--md-sys-color-surface-container);
+  border-radius: var(--shape-full);
+  background: var(--md-sys-color-surface-container-high);
+  box-shadow: 0 2px 6px rgb(0 0 0 / .12), 0 6px 20px rgb(0 0 0 / .10);
+  -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  backdrop-filter: blur(18px) saturate(1.6);
   transition: transform var(--dur-medium-long) var(--emphasized-decelerate),
               background-color var(--dur-medium) var(--standard);
 }
-/* На дочерних экранах панель уезжает вниз: M3 показывает её только на разделах верхнего уровня */
+/* Капсула слегка прозрачная, под ней размыто то, что прокручивается мимо.
+   Без backdrop-filter остаётся сплошной — иначе текст под ней мешал бы подписям */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .nav-bar { background: color-mix(in srgb, var(--md-sys-color-surface-container-high) 76%, transparent); }
+}
+/* На дочерних экранах панель уезжает вниз: она есть только на разделах верхнего уровня */
 body.nav-hidden .nav-bar {
-  transform: translateY(100%);
+  transform: translateY(calc(100% + var(--bottom-inset) + var(--navbar-gap) + 8px));
   transition: transform var(--dur-medium) var(--emphasized-accelerate);
 }
-.nav-bar-inner { display: flex; width: 100%; max-width: var(--content-max); }
+.nav-bar-inner { display: flex; min-width: 0; }
 .nav-dest {
+  position: relative;
   appearance: none; border: 0; background: none; cursor: pointer;
-  flex: 1 1 0; min-width: 0;
-  display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 4px;
-  padding: 12px 0 16px;
+  flex: 0 1 74px; width: 74px; min-width: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  padding: 0 4px; border-radius: var(--shape-full);
   color: var(--md-sys-color-on-surface-variant);
 }
-.nav-dest:focus-visible { outline: none; }
-.nav-dest:focus-visible .nav-ind { outline: 3px solid var(--md-sys-color-secondary); outline-offset: 2px; }
+/* капсула выбранного раздела — вокруг значка и подписи */
+.nav-dest::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; z-index: 0;
+  background: var(--md-sys-color-secondary-container);
+  transform: scale(.7); opacity: 0;
+  transition: transform var(--dur-medium-long) var(--spring), opacity var(--dur-short) var(--standard);
+}
+.nav-dest[aria-current="page"]::before { transform: none; opacity: 1; }
+.nav-dest:focus-visible { outline: 3px solid var(--md-sys-color-secondary); outline-offset: -3px; }
 .nav-ind {
-  width: 64px; height: 32px; flex: none; border-radius: var(--shape-full);
+  position: relative; width: 28px; height: 26px; flex: none;
   display: grid; place-items: center;
   transition: color var(--dur-short) var(--standard);
 }
-.nav-ind::before {
-  content: ""; position: absolute; inset: 0; border-radius: inherit; z-index: 0;
-  background: var(--md-sys-color-secondary-container);
-  transform: scaleX(.5); opacity: 0;
-  transition: transform var(--dur-medium-long) var(--spring), opacity var(--dur-short) var(--standard);
-}
-@media (hover: hover) {
-  .nav-dest:hover .nav-ind::after { opacity: var(--state-hover); }
-}
-.nav-dest[aria-current="page"] .nav-ind { color: var(--md-sys-color-on-secondary-container); }
-.nav-dest[aria-current="page"] .nav-ind::before { transform: none; opacity: 1; }
+.nav-ind .icon { width: 22px; height: 22px; }
+.nav-dest[aria-current="page"] { color: var(--md-sys-color-on-secondary-container); }
 .nav-label {
-  max-width: 100%; padding: 0 4px;
-  font-size: var(--ts-label-medium); line-height: var(--lh-label-medium); font-weight: var(--w-medium);
-  letter-spacing: .5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  position: relative; max-width: 100%;
+  font-size: 11px; line-height: 14px; font-weight: var(--w-medium);
+  letter-spacing: .2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.nav-dest[aria-current="page"] .nav-label { color: var(--md-sys-color-on-surface); font-weight: var(--w-bold); }
+.nav-dest[aria-current="page"] .nav-label { font-weight: var(--w-bold); }
 
 /* ── Content / pages ─────────────────────────────────────────────────── */
 .content {
@@ -268,6 +305,11 @@ body.nav-hidden .nav-bar {
   padding: calc(var(--top-inset) + var(--appbar-height) + 8px) var(--screen-margin)
            calc(var(--bottom-inset) + var(--navbar-height) + 24px);
   max-width: var(--content-max); margin: 0 auto;
+  /* Сдвиг вкладок и растяжение у края не должны менять размеры документа:
+     иначе WebView расширяет область, к которой привязаны fixed-элементы, и
+     капсула навигации уезжает или пропадает. clip — не контейнер прокрутки и
+     не containing block для fixed: закреплённые страницы им не режутся. */
+  overflow: clip;
 }
 body.nav-hidden .content { padding-bottom: calc(var(--bottom-inset) + 24px); }
 .page { display: none; flex-direction: column; gap: var(--gap); }
@@ -275,6 +317,12 @@ body.nav-hidden .content { padding-bottom: calc(var(--bottom-inset) + 24px); }
 /* Уходящий экран закреплён fixed на своём месте, пока новый появляется в потоке:
    так оба видны одновременно и прокрутка не дёргается. */
 .page.leaving { pointer-events: none; z-index: 1; }
+/* Соседняя вкладка, пока её тянут пальцем: закреплена рядом со своей прокруткой */
+.page.peek { display: flex; position: fixed; pointer-events: none; z-index: 1; }
+/* Вертикальная прокрутка — браузеру, горизонталь — свайпу между вкладками */
+body:not(.nav-hidden) .content { touch-action: pan-y; }
+body.swiping .state:active { transform: none; }
+body.swiping .state::after { opacity: 0 !important; }
 
 /* ── Переходы M3 ─────────────────────────────────────────────────────────
    Fade through — между разделами Navigation bar: старый гаснет за 90ms,
@@ -341,14 +389,13 @@ body.nav-hidden .content { padding-bottom: calc(var(--bottom-inset) + 24px); }
   letter-spacing: var(--tr-body-medium); opacity: .8;
   /* одна строка: длинное имя сети не растягивает карточку */
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* Статистика службы: равномерное центрирование по трём колонкам и внутри блоков */
-.hero-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; width: 100%; }
+/* Статистика службы (сейчас — только время работы), по центру карточки */
+.hero-stats { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; width: 100%; }
 .hstat { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 2px; min-width: 0; }
 .hstat-label { width: 100%; text-align: center; font-size: var(--ts-label-medium); line-height: var(--lh-label-medium); font-weight: var(--w-medium);
   opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hstat-value { width: 100%; text-align: center; font-size: var(--ts-title-large); line-height: var(--lh-title-large); font-weight: var(--w-emph);
   font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hstat-value.bad { color: var(--md-sys-color-error); }
 /* Основное действие растянуто; перезапуск — outlined icon button рядом (M3 button group) */
 .hero-actions { display: flex; align-items: center; gap: 8px; }
 .hero-actions #bt {

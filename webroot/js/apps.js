@@ -31,6 +31,8 @@ async function setAppMode(v){
   const r = await withBusy(['set', 'APP_MODE', v], 30000);
   toast(r.code ? errText(r, 'Не удалось сменить режим') : t('Режим фильтра сохранён'));
   await stat();
+  // режим не сменился — разметка та же, и выбранная кнопка осталась бы нажатой
+  if(r.code) $('amode-list')._html = '';
   renderAppModes();
 }
 async function loadPk(force){
@@ -161,12 +163,20 @@ async function drawPk(animate){
     cb.onchange = () => togglePkg(cb.getAttribute('data-pkg'), cb.checked);
   });
 }
-async function togglePkg(p, want){
+/* Сохранения идут по очереди: параллельные save-list-b64 со снимками списка
+   могли лечь в обратном порядке, и одно переключение терялось */
+let pkSave = Promise.resolve();
+function togglePkg(p, want){
+  return (pkSave = pkSave.then(() => togglePkgNow(p, want), () => togglePkgNow(p, want)));
+}
+async function togglePkgNow(p, want){
   const s = await getAppsList();
   // s — тот же Set, что лежит в кэше: он мутируется на месте, так что кэш уже
   // актуален и перечитывать список после сохранения не нужно.
   if(want) s.add(p); else s.delete(p);
   const r = await withBusy(['save-list-b64', 'apps', b64([...s].join('\n'))], 30000);
+  // не сохранилось — вернуть кэш к тому, что на диске
+  if(r.code){ if(want) s.delete(p); else s.add(p); }
   if(r.code) toast(errText(r, 'Не удалось сохранить'), {label: t('Повторить'), fn: () => togglePkg(p, want)});
   else toast((want ? t('Добавлено: {0}', p) : t('Убрано: {0}', p)));
   await drawPk(false);

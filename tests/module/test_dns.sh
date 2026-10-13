@@ -275,6 +275,19 @@ assert_no_file "$DNS_DIR/standalone" "the standalone flag of older versions is c
 rm -f "$DNS_ENABLED_FILE"
 
 # ── команды WebUI ─────────────────────────────────────────────────────────────
+section "interception skips VPN tunnels"
+: > "$DNS_ENABLED_FILE"
+dns_rules_add
+nat=$(ipt_rules nfqws_dns nat)
+assert_contains "$nat" "-o tun+ -j RETURN" "queries into a VPN tunnel are not redirected"
+assert_contains "$nat" "-o wg+ -j RETURN" "WireGuard included"
+first=$(printf '%s\n' "$nat" | grep -n -- '-o tun+' | cut -d: -f1); redir=$(printf '%s\n' "$nat" | grep -n REDIRECT | head -n1 | cut -d: -f1)
+[ "$first" -lt "$redir" ]
+assert_rc 0 $? "before the REDIRECT"
+dns_rules_del 2>/dev/null
+rm -f "$DNS_ENABLED_FILE"
+assert_contains "$(sed -n '/upstream-mode/p' "$MODDIR/lib/dns.sh")" "parallel" "dnsproxy asks all servers of a profile at once"
+
 section "nfqws2-ctl dns-*"
 
 ctl dns-state

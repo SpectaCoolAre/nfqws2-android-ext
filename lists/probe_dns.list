@@ -37,3 +37,8 @@ Yandex|77.88.8.8|https://common.dot.dns.yandex.net/dns-query
 Geohide|45.155.204.190|https://dns.geohide.ru:444/dns-query
 Comss.one|83.220.169.155|https://doh.comss.one/dns-query
 Comss.one|212.109.195.93|https://doh.comss.one/dns-query
+Mullvad|194.242.2.2|https://dns.mullvad.net/dns-query
+Level3|209.244.0.3|
+Level3|4.2.2.1|
+Comodo|8.26.56.26|
+DNS_Watch|84.200.69.80|

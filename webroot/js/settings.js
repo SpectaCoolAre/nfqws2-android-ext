@@ -302,16 +302,10 @@ async function restoreBackup(name){
   toast(t('Копия восстановлена'));
 }
 
-async function toggleHotspot(checked){
-  const on = typeof checked === 'boolean' ? checked : (S.enable_hotspot != 1);
-  const r = await withBusy(['set', 'ENABLE_HOTSPOT', on ? '1' : '0'], 40000);
-  if(r.code) toast(errText(r, 'Не удалось переключить точку доступа'));
-  else { S.enable_hotspot = on ? 1 : 0; if(typeof renderStatus === 'function') renderStatus(); stat(); }
-}
-
 async function toggleVpnPause(on){
   const r = await withBusy(['set', 'VPN_PAUSE', on ? '1' : '0'], 40000);
-  if(r.code) toast(errText(r, 'Не удалось сохранить'));
+  // не сохранилось — та же разметка, и setHTML её не перерисовал бы: сброс кэша
+  if(r.code){ toast(errText(r, 'Не удалось сохранить')); $('settings-body')._html = ''; }
   else { S.vpn_pause = on ? 1 : 0; toast(on ? t('Обход встанет на паузу, пока включён VPN') : t('Сохранено')); stat(); }
   renderSettings();
 }

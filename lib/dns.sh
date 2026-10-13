@@ -148,7 +148,9 @@ dns_profile_set_enabled() { # <id> <0|1>
   local f="$DNS_PROFILES_DIR/$1.conf"
   dns_id_ok "$1" && [ -f "$f" ] || { echo "Профиль не найден" >&2; return 1; }
   case "$2" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; return 1 ;; esac
-  sed "s/^ENABLED=.*/ENABLED=$2/" "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
+  # chmod: nfqws2-ctl работает с umask 077, и после mv файл стал бы 0600
+  sed "s/^ENABLED=.*/ENABLED=$2/" "$f" > "$f.tmp" && mv -f "$f.tmp" "$f" && chmod 0644 "$f" ||
+    { rm -f "$f.tmp"; return 1; }
 }
 
 # ---------------------------------------------------------------- DNS сети
@@ -185,7 +187,7 @@ dns_addr_port() {
 # fallback.txt и args (аргументы запуска). Код 1 — включённых правил нет,
 # и перехватывать нечего: DNS по умолчанию «DNS сети» и ни одного профиля.
 dns_build() {
-  local def net up="$DNS_RUN_DIR/upstreams.txt.new" a ip routed
+  local def net up="$DNS_RUN_DIR/upstreams.txt.new" ip routed
   mkdir -p "$DNS_RUN_DIR"
   def=$(dns_default)
   net=$(dns_net_servers)
@@ -242,7 +244,10 @@ dns_build() {
     for ip in $(printf '%s' "$net" | tr ',' ' ') $DNS_PUBLIC; do echo "-b"; dns_addr_port "$ip"; echo; done
     echo "--cache"
     echo "--timeout=5s"
-    echo "--upstream-mode=load_balance"
+    # parallel: запрос — всем серверам профиля, ответ — от первого ответившего.
+    # В load_balance он уходил одному случайному, и молчащий сервер (часть DNS
+    # с геоблоком не отвечает на запросы типа HTTPS) давал ошибку и ожидание
+    echo "--upstream-mode=parallel"
     [ "${LOG_LEVEL:-0}" = 1 ] && echo "-v"
   } > "$DNS_RUN_DIR/args"
   return 0
@@ -272,6 +277,11 @@ dns_lock() { # [0 — не ждать]
     owner=""
     [ -f "$DNS_LOCK/pid" ] && IFS= read -r owner < "$DNS_LOCK/pid"
     if [ -n "$owner" ] && [ ! -d "/proc/$owner" ]; then
+      rm -rf "$DNS_LOCK"; continue
+    fi
+    # каталог без pid дольше секунды — владелец умер между mkdir и записью pid;
+    # первую секунду ждём: он может как раз записывать
+    if [ -z "$owner" ] && [ "$i" -ge 5 ]; then
       rm -rf "$DNS_LOCK"; continue
     fi
     [ "$1" = 0 ] && return 1
@@ -363,6 +373,8 @@ DNS_LOG_FILTER='
 function tsec(t,   a) { split(t, a, ":"); return a[1] * 3600 + a[2] * 60 + int(a[3]) }
 {
   if (index($0, " ERROR response received ")) next
+  # остановка: TLS-соединение к серверу закрылось раньше прощального пакета — норма
+  if (index($0, "failed to send closeNotify")) next
   if (index($0, " ERROR exchange failed ")) {
     up = ""; if (match($0, /upstream=[^ ]+/)) up = substr($0, RSTART + 9, RLENGTH - 9)
     er = ""; if (match($0, /err="[^"]*"/)) er = substr($0, RSTART + 5, RLENGTH - 6)
@@ -440,10 +452,19 @@ dns_proxy_stop() {
 # ip6tables nat; если ядро его не умеет — отказ IPv6-запросам netd, чтобы
 # резолвер ушёл на IPv4-серверы сети (только если такие есть, иначе DNS
 # пропал бы совсем).
+# Запросы, уходящие в туннель VPN (tun, wg, ppp, ipsec, tap), не трогаем: у них
+# свой DNS внутри туннеля, а ответ dnsproxy с 127.0.0.1 на адрес туннеля ядро
+# отвергает («sendmsg: invalid argument»), и запрос пропадал
+DNS_VPN_IFACES="tun+ wg+ ppp+ ipsec+ tap+"
+_dns_skip_vpn() { # <iptables|ip6tables> <таблица> <цепочка>
+  local i
+  for i in $DNS_VPN_IFACES; do $1 -w -t "$2" -A "$3" -o "$i" -j RETURN || return 1; done
+}
 _dns_chain_nat() { # <iptables|ip6tables>
   local C="$1"
   $C -w -t nat -N $DNS_CHAIN 2>/dev/null
   $C -w -t nat -F $DNS_CHAIN 2>/dev/null &&
+  _dns_skip_vpn "$C" nat $DNS_CHAIN &&
   $C -w -t nat -A $DNS_CHAIN -m mark --mark 0x0/0xffff -j RETURN &&
   $C -w -t nat -A $DNS_CHAIN -p udp --dport 53 -j REDIRECT --to-ports $DNS_PORT &&
   $C -w -t nat -A $DNS_CHAIN -p tcp --dport 53 -j REDIRECT --to-ports $DNS_PORT &&
@@ -466,6 +487,7 @@ dns_rules_add() {
     for ip in $(printf '%s' "$net" | tr ',' ' '); do case "$ip" in *:*) ;; *) v4=1 ;; esac; done
     if [ "$v4" = 1 ] && {
          ip6tables -w -t filter -N $DNS_CHAIN6F 2>/dev/null; ip6tables -w -t filter -F $DNS_CHAIN6F &&
+         _dns_skip_vpn ip6tables filter $DNS_CHAIN6F &&
          ip6tables -w -t filter -A $DNS_CHAIN6F -m mark --mark 0x0/0xffff -j RETURN &&
          ip6tables -w -t filter -A $DNS_CHAIN6F -p udp --dport 53 -j REJECT &&
          ip6tables -w -t filter -A $DNS_CHAIN6F -p tcp --dport 53 -j REJECT --reject-with tcp-reset &&
@@ -506,7 +528,7 @@ dns_wanted() { dns_enabled; }
 
 # Что будет применено — одной строкой в журнал DNS
 dns_describe() {
-  local def net up rules prof ipv6 pm
+  local def net up rules prof pm
   def=$(dns_default); net=$(cat "$DNS_RUN_DIR/net_dns" 2>/dev/null)
   rules=$(grep -c '^\[/' "$DNS_RUN_DIR/upstreams.txt" 2>/dev/null)
   prof=$(grep -l '^ENABLED=1$' "$DNS_PROFILES_DIR"/*.conf 2>/dev/null | sed 's#.*/##; s#\.conf$##' | tr '\n' ' ' | sed 's/ $//')
@@ -649,24 +671,6 @@ dns_state() {
   done
 }
 
-# Проверка домена: через системный резолвер (значит, через перехват), плюс
-# какой профиль его забирает — самое длинное совпадение суффикса, как у dnsproxy.
-dns_test() { # <домен>
-  local d="$1" ip prof
-  dns_domain_ok "$d" || { echo "Некорректный домен" >&2; return 1; }
-  ip=$(ping -c 1 -W 2 "$d" 2>/dev/null | sed -n '1s/^PING [^(]*(\([^)]*\)).*/\1/p')
-  [ -n "$ip" ] || ip=$(ping6 -c 1 -W 2 "$d" 2>/dev/null | sed -n '1s/^PING [^(]*(\([^)]*\)).*/\1/p')
-  prof=$(awk -v q="$d" '
-    FNR == 1 { id = FILENAME; sub(/.*\//, "", id); sub(/\.conf$/, "", id); en = 0 }
-    /^ENABLED=1$/ { en = 1 }
-    /^DOMAIN=/ && en {
-      v = substr($0, 8)
-      if ((q == v || substr(q, length(q) - length(v)) == "." v) && length(v) > best) { best = length(v); hit = id }
-    }
-    END { print hit }' "$DNS_PROFILES_DIR"/*.conf 2>/dev/null)
-  printf '%s\t%s\n' "${ip:-—}" "$prof"
-}
-
 dns_doctor() { # строки для «Диагностики»; в обычной сборке — ничего
   [ -f "$DNS_BIN" ] || return 0
   dns_enabled || { row info dns "$(M 'DNS по профилям выключен' 'DNS profiles are off')"; return 0; }
@@ -743,8 +747,6 @@ dns_ctl() {
         [ "$def" = "$id" ] && echo net > "$DNS_DEFAULT_FILE"
       done
       dns_apply_now; echo OK ;;
-    dns-test) dns_test "$1" ;;
-    dns-log) tail -n "${1:-100}" "$DNS_LOG" 2>/dev/null ;;
     *) echo "Неизвестная команда $cmd" >&2; return 1 ;;
   esac
 }

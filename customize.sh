@@ -128,7 +128,7 @@ if [ ! -f "$CONF/home_wifi.list" ]; then
     abort "! Failed to create $CONF/home_wifi.list"
 fi
 
-# set perms to nfwqws2
+# set perms for nfqws2
 busybox chmod +x "$MODPATH/bin/nfqws2"
 busybox chmod +x "$MODPATH/bin/nfqws2-ctl"
 busybox chmod +x "$MODPATH/bin/dnsproxy"

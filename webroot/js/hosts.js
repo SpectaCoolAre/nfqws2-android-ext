@@ -27,11 +27,18 @@ async function loadHostsState(){
   if(r.code && !r.out){ toast(errText(r, 'Не удалось прочитать настройки hosts')); return false; }
   hostsSt = parseHostsState(r.out);
   hostsLoaded = true;
+  snapSet('hosts', r.out);
   return true;
 }
 async function hostsInit(){
-  if(!hostsLoaded) renderHosts();
-  if(await loadHostsState()) renderHosts();
+  if(!hostsLoaded){
+    const snap = snapGet('hosts');   // слепок прошлого открытия — сразу, свежее следом
+    if(snap){ hostsSt = parseHostsState(snap); hostsLoaded = true; snapLock('hosts', true); }
+    renderHosts();
+  }
+  const ok = await loadHostsState();
+  snapLock('hosts', false);
+  if(ok) renderHosts();
 }
 
 const hostsPath = name => (hostsSt.status.dir || '/data/adb/nfqws2/hosts') + '/' + name;
@@ -129,8 +136,11 @@ async function loadBypassPreset(p){
 async function setHostsPreset(id, on, el){
   if(on) toast(t('Скачиваю источник…'));
   const r = await withBusy(['hosts-preset', id, on ? '1' : '0'], 120000);
-  if(r.code) toast(errText(r, 'Не удалось изменить источник'));
-  if(r.code && !on) el.checked = true;
+  if(r.code){
+    toast(errText(r, 'Не удалось изменить источник'));
+    // состояние прежнее — сброс кэша, чтобы переключатель вернулся на место
+    $('hosts-sources')._html = '';
+  }
   await hostsInit();
 }
 async function hostsBlockAdd(){

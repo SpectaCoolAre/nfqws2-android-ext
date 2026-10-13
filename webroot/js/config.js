@@ -71,8 +71,8 @@ async function renameImport(name){
 }
 async function delImport(name){
   if(!await mdConfirm(t('Удалить «{0}»?', name), t('Файл импорта будет удалён безвозвратно.'), {ok: t('Удалить'), danger: true})) return;
-  await withBusy(['delete-import', name]);
-  toast(t('Удалено'));
+  const r = await withBusy(['delete-import', name]);
+  toast(r.code ? errText(r, 'Не удалось удалить') : t('Удалено'));
   loadImports();
 }
 /* Вторая строка ответа import-add-b64 — параметры, которых нет в этой сборке

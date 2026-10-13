@@ -9,7 +9,7 @@ load_conf >/dev/null 2>&1
 SERVICE="$MODDIR/service.sh"
 
 # Каталоги стратегий создаёт lib/common.sh (STRATEGIES_DIR, USER_STRATEGIES_DIR),
-# a состояние — она же через load_conf/sync_lists_and_blobs. Раньше всё это
+# а состояние — она же через load_conf/sync_lists_and_blobs. Раньше всё это
 # повторялось здесь с теми же путями; оставляем только то, чего в common.sh
 # действительно нет — imports/.
 [ -d "$IMPORTS_DIR" ] || mkdir -p "$IMPORTS_DIR" 2>/dev/null
@@ -68,7 +68,7 @@ set_conf_param() {   # только однострочные значения
     BEGIN { d = 0 }
     $0 ~ "^" k "=" { if (!d) { print k "=\"" v "\""; d = 1 } ; next }
     { print }
-    END { if (!d) print k "=\"" v "\"" }' "$CONFFILE" > "$tmp" && mv -f "$tmp" "$CONFFILE"
+    END { if (!d) print k "=\"" v "\"" }' "$CONFFILE" > "$tmp" && mv -f "$tmp" "$CONFFILE" || rm -f "$tmp"
   chmod 0644 "$CONFFILE"
 }
 
@@ -196,7 +196,8 @@ cmd_json_status() {
   cnt_user="$1" cnt_auto="$2" cnt_excl="$3" cnt_ipset="$4" cnt_ipset_excl="$5" cnt_apps="$6"
   # нечисловое значение обваливает весь JSON и убивает WebUI, поэтому проверяем каждое поле
   for v in appn cnt_user cnt_auto cnt_excl cnt_ipset cnt_ipset_excl cnt_apps uptime qdrop \
-           PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC AUTOSTART WATCHDOG IPV6_ENABLED LOG_LEVEL NFQUEUE_NUM HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT; do
+           PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC AUTOSTART WATCHDOG IPV6_ENABLED LOG_LEVEL NFQUEUE_NUM HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT \
+           DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS; do
     eval "case \"\${$v}\" in ''|*[!0-9]*) $v=0 ;; esac"
   done
 
@@ -210,7 +211,7 @@ cmd_json_status() {
 {"running":$run,"pid":"$pid","uptime":$uptime,"strategy":"$(json_str "$cur_strat")","version":"$(json_str "$ver")","mode":"$(json_str "$(current_mode)")",
 "pkt_limit_out":$PKT_LIMIT_OUT,"pkt_limit_in":$PKT_LIMIT_IN,"block_quic":$BLOCK_QUIC,"app_mode":"$(json_str "$APP_MODE")","autostart":$AUTOSTART,"watchdog":$WATCHDOG,
 "ipv6":$IPV6_ENABLED,"log_level":$LOG_LEVEL,"qdrop":$qdrop,"queue":$NFQUEUE_NUM,"app_uids":$appn,
-"home_wifi":$HOME_WIFI,"vpn_pause":${VPN_PAUSE:-0},"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":${DOH_BYPASS:-0},"meta_quic":${META_QUIC_REJECT:-1},"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")","pending":"$(json_str "$pending")",
+"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":$DOH_BYPASS,"meta_quic":$META_QUIC_REJECT,"calls_bypass":$CALLS_BYPASS,"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")","pending":"$(json_str "$pending")",
 "counts":{"user":$cnt_user,"auto":$cnt_auto,"exclude":$cnt_excl,"ipset":$cnt_ipset,"ipset_exclude":$cnt_ipset_excl,"apps":$cnt_apps}}
 JSON
 }
@@ -473,7 +474,7 @@ cmd_log_summary() {
       END {
         if (last_ev == "start") printf "ok\t%s\t%s\n", T("nfqws2 запущен", "nfqws2 started"), last_start (pid != "" ? " · " pid : "")
         else if (last_ev == "stop") printf "info\t%s\t%s\n", T("nfqws2 остановлен", "nfqws2 stopped"), last_stop
-        else if (last_ev == "pause") printf "info\t%s\t%s\n", T("Пауза в домашней Wi-Fi", "Paused on home Wi-Fi"), last_pause
+        else if (last_ev == "pause") printf "info\t%s\t%s\n", (pmsg ~ /VPN/ ? T("Пауза: включён VPN", "Paused: VPN is on") : T("Пауза в домашней Wi-Fi", "Paused on home Wi-Fi")), last_pause
         if (crash) printf "warn\t%s\t%s\n", T("Автоперезапусков: ", "Automatic restarts: ") crash, T("последний ", "last ") last_crash
         if (net) printf "info\t%s\t%s\n", T("Пересборок правил при смене сети: ", "Rule rebuilds on network change: ") net, ""
         if (lost) printf "info\t%s\t%s\n", T("Правила восстановлены после сброса системой: ", "Rules restored after a system reset: ") lost, ""
@@ -537,6 +538,7 @@ cmd_export_logs() {
   if (cd "$tmp" && tar_cmd -cf "$out_file" .) 2>/dev/null; then
     printf '%s\t%s\t' "$name" "$out_file"; b64e < "$out_file" | tr -d '\n'; echo
   else
+    rm -f "$out_file"   # недописанный архив выглядел бы как настоящий
     local d="$BACKUP_DIR/nfqws2-logs"
     mkdir -p "$d" 2>/dev/null
     cp -f "$tmp"/* "$d"/ 2>/dev/null
@@ -720,7 +722,8 @@ probe_attempt() { # <вид> <путь к утилите> <host[/путь]>  -> 
   command -v timeout >/dev/null 2>&1 && to="timeout 12"
   t0=$(uptime_cs)
   if [ "$kind" = "curl" ]; then
-    out=$($to "$bin" -s -k -L --max-redirs 3 -m 10 --connect-timeout 6 -A 'Mozilla/5.0' \
+    # -o /dev/null: тело страницы не нужно, хватает кода и адреса переадресации
+    out=$($to "$bin" -s -k -L --max-redirs 3 -m 10 --connect-timeout 6 -o /dev/null -A 'Mozilla/5.0' \
       -w "\nREDIRECT_URL:%{redirect_url}\n" "$url" 2>&1); rc=$?
   else
     out=$($to "$bin" wget -q -T 6 -O /dev/null -U 'Mozilla/5.0' --no-check-certificate "$url" 2>&1); rc=$?
@@ -735,7 +738,7 @@ probe_attempt() { # <вид> <путь к утилите> <host[/путь]>  -> 
   esac
   if [ "$rc" = 0 ]; then echo "ok $(( (t1 - t0) * 10 ))"; return; fi
   case "$kind:$rc:$out" in
-    wget:*"server returned error"*|curl:22:*) echo "ok $(( (t1 - t0) * 10 ))" ;;
+    wget:*"server returned error"*) echo "ok $(( (t1 - t0) * 10 ))" ;;
     curl:35:*)
       case "$out" in
         *alert*|*Alert*|*unrecognized_name*|*handshake_failure*) echo "fail tls_alert" ;;
@@ -785,7 +788,7 @@ cmd_net_info() {
   [ -z "$dns1" ] && [ -f /etc/resolv.conf ] && dns1=$(awk '/nameserver/{print $2; exit}' /etc/resolv.conf 2>/dev/null)
 
   local cur_strat
-  cur_strat=$(current_strategy_name)
+  cur_strat=$(get_current_strategy); cur_strat="${cur_strat#imp:}"
 
   printf 'NET\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "${ip:-—}" "${loc:-—}" "${isp:-—}" "${asn:-—}" \
@@ -815,7 +818,8 @@ cmd_probe_all_inner() {
 cmd_probe_tcp16() {
   local tool kind bin to=""
   tool=$(probe_tool); kind="${tool%% *}"; bin="${tool#* }"
-  [ "$kind" = "none" ] && return 0
+  # только curl: заголовки с набивкой и коды ошибок — его
+  [ "$kind" = "curl" ] || return 0
   command -v timeout >/dev/null 2>&1 && to="timeout 8"
 
   local targets=""
@@ -841,56 +845,42 @@ OVH_OVH-01|5.196.63.68|443|"
   pad24=$(printf '%*s' 24576 '' | tr ' ' 'b')
   pad32=$(printf '%*s' 32768 '' | tr ' ' 'c')
 
+  # Запрос к узлу: с SNI — на имя, но соединение на заданный IP (--connect-to),
+  # иначе — прямо на IP. <доп. аргументы curl>...
+  t16_get() {
+    if [ -n "$sni" ]; then
+      $to "$bin" -s -k --connect-timeout 4 -o /dev/null "$@" --connect-to "$sni:$port:$ip:$port" "https://$sni:$port/" 2>&1
+    else
+      $to "$bin" -s -k --connect-timeout 4 -o /dev/null "$@" "https://$ip:$port/" 2>&1
+    fi
+  }
   local idx=0
   printf '%s\n' "$targets" | while IFS='|' read -r provider ip port sni; do
     [ -z "$provider" ] || [ -z "$ip" ] && continue
     [ -z "$port" ] && port=443
-    local host_hdr=""
-    [ -n "$sni" ] && host_hdr="-H Host: $sni"
 
-    # Step 1: 0KB probe
-    local out0 rc0
-    out0=$($to "$bin" -s -k -m 5 --connect-timeout 4 -o /dev/null -w "%{time_total}" $host_hdr "https://$ip:$port/" 2>&1); rc0=$?
-    if [ "$rc0" != 0 ] && [ "$rc0" != 22 ]; then
+    # 0 КБ: узел вообще доступен?
+    local out0 rc0 out rc sz pad hit=""
+    out0=$(t16_get -m 5 -w "%{time_total}"); rc0=$?
+    if [ "$rc0" != 0 ]; then
       printf 'T16\t%s\t%s\t%s\t%s\tunreachable\t%s\n' "$idx" "$provider" "$ip" "$port" "0KB"
       idx=$((idx + 1))
       continue
     fi
 
-    # Step 2: 16KB probe
-    local out16 rc16
-    out16=$($to "$bin" -s -k -m 6 --connect-timeout 4 -o /dev/null -H "X-Pad: $pad16" $host_hdr "https://$ip:$port/" 2>&1); rc16=$?
-    if [ "$rc16" != 0 ] && [ "$rc16" != 22 ]; then
-      case "$rc16:$out16" in
-        52:*|56:*|28:*|*:*reset*|*:*timed\ out*|*:*EOF*)
-          printf 'T16\t%s\t%s\t%s\t%s\tdetected\t%s\n' "$idx" "$provider" "$ip" "$port" "16KB"
-          idx=$((idx + 1))
-          continue ;;
+    # 16, 24, 32 КБ в заголовке: обрыв на одном из объёмов — фильтр ТСПУ
+    for sz in 16 24 32; do
+      eval "pad=\$pad$sz"
+      out=$(t16_get -m 6 -H "X-Pad: $pad"); rc=$?
+      [ "$rc" = 0 ] && continue
+      case "$rc:$out" in
+        52:*|56:*|28:*|*:*reset*|*:*timed\ out*|*:*EOF*) hit="${sz}KB"; break ;;
       esac
-    fi
-
-    # Step 3: 24KB probe
-    local out24 rc24
-    out24=$($to "$bin" -s -k -m 6 --connect-timeout 4 -o /dev/null -H "X-Pad: $pad24" $host_hdr "https://$ip:$port/" 2>&1); rc24=$?
-    if [ "$rc24" != 0 ] && [ "$rc24" != 22 ]; then
-      case "$rc24:$out24" in
-        52:*|56:*|28:*|*:*reset*|*:*timed\ out*|*:*EOF*)
-          printf 'T16\t%s\t%s\t%s\t%s\tdetected\t%s\n' "$idx" "$provider" "$ip" "$port" "24KB"
-          idx=$((idx + 1))
-          continue ;;
-      esac
-    fi
-
-    # Step 4: 32KB probe
-    local out32 rc32
-    out32=$($to "$bin" -s -k -m 6 --connect-timeout 4 -o /dev/null -H "X-Pad: $pad32" $host_hdr "https://$ip:$port/" 2>&1); rc32=$?
-    if [ "$rc32" != 0 ] && [ "$rc32" != 22 ]; then
-      case "$rc32:$out32" in
-        52:*|56:*|28:*|*:*reset*|*:*timed\ out*|*:*EOF*)
-          printf 'T16\t%s\t%s\t%s\t%s\tdetected\t%s\n' "$idx" "$provider" "$ip" "$port" "32KB"
-          idx=$((idx + 1))
-          continue ;;
-      esac
+    done
+    if [ -n "$hit" ]; then
+      printf 'T16\t%s\t%s\t%s\t%s\tdetected\t%s\n' "$idx" "$provider" "$ip" "$port" "$hit"
+      idx=$((idx + 1))
+      continue
     fi
 
     local ms
@@ -916,14 +906,22 @@ Quad9|9.9.9.9|https://dns.quad9.net/dns-query
 AdGuard|94.140.14.14|https://dns.adguard-dns.com/dns-query
 Yandex|77.88.8.8|https://common.dot.dns.yandex.net/dns-query"
 
+  # nslookup — системный или из busybox менеджера (на части прошивок его нет)
+  local ns_cmd="" b
+  if command -v nslookup >/dev/null 2>&1; then ns_cmd=nslookup
+  else
+    for b in /data/adb/ksu/bin/busybox /data/adb/ap/bin/busybox /data/adb/magisk/busybox "$(command -v busybox 2>/dev/null)"; do
+      [ -n "$b" ] && [ -x "$b" ] && "$b" nslookup --help >/dev/null 2>&1 && { ns_cmd="$b nslookup"; break; }
+    done
+  fi
   local idx=0
   printf '%s\n' "$servers" | while IFS='|' read -r name ip doh; do
     [ -z "$name" ] || [ -z "$ip" ] && continue
-    local udp_status="ok" doh_status="none" hijacked="no" detail="OK"
+    local udp_status="none" doh_status="none" hijacked="no" detail="OK"
 
-    if command -v nslookup >/dev/null 2>&1; then
+    if [ -n "$ns_cmd" ]; then
       local ns_out
-      ns_out=$($to nslookup vk.ru "$ip" 2>&1)
+      ns_out=$($to $ns_cmd vk.ru "$ip" 2>&1)
       if [ $? != 0 ] || printf '%s\n' "$ns_out" | grep -qi -e 'timed out' -e 'no answer' -e 'connection refused'; then
         udp_status="fail"
       else
@@ -931,11 +929,15 @@ Yandex|77.88.8.8|https://common.dot.dns.yandex.net/dns-query"
       fi
 
       local ns_chk blocked_ip
-      ns_chk=$($to nslookup rutracker.org "$ip" 2>&1)
-      blocked_ip=$(printf '%s\n' "$ns_chk" | awk '/^Address: / {ip=$2} /Address 1: / {ip=$3} END {print ip}')
+      ns_chk=$($to $ns_cmd rutracker.org "$ip" 2>&1)
+      # адрес — только из ответа (после Name:), не адрес самого DNS-сервера
+      blocked_ip=$(printf '%s\n' "$ns_chk" | awk '/^Name:/ { seen = 1 } seen && /^Address( 1)?: / { ip = $NF } END { print ip }')
       case "$blocked_ip" in
+        # 198.18.0.0/15 — «фейковые» адреса VPN-клиентов в режиме fake-ip
+        198.18.*|198.19.*)
+          hijacked="yes"; detail="Fake-IP ($blocked_ip)" ;;
         127.0.0.1|0.0.0.0|10.*|192.168.*|195.82.146.214|82.202.164.12)
-          hijacked="yes"; detail="Заглушка ($blocked_ip)" ;;
+          hijacked="yes"; detail="$(M Заглушка Stub) ($blocked_ip)" ;;
       esac
     fi
 
@@ -947,6 +949,12 @@ Yandex|77.88.8.8|https://common.dot.dns.yandex.net/dns-query"
       else
         doh_status="fail"
       fi
+    elif [ -z "$doh" ] && [ "$kind" = "curl" ]; then
+      # без DoH — хотя бы открывается ли DoT (TLS на 853); ответ на TLS-запрос
+      # без DNS-поверх-него — сброс или обрыв, это тоже «порт открыт»
+      local rc_dot
+      $to "$bin" -s -k -m 4 --connect-timeout 3 -o /dev/null "https://$ip:853/" >/dev/null 2>&1; rc_dot=$?
+      case "$rc_dot" in 0|35|52|56) doh_status="dot_ok" ;; esac
     fi
 
     printf 'DNS\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$idx" "$name" "$ip" "$udp_status" "$doh_status" "$hijacked" "$detail"
@@ -964,7 +972,7 @@ cmd_probe_cancel() {
     fi
     rm -f "$STATE_DIR/probe.pid"
   fi
-  cleanup_probe_app_rule
+  # правило для root снимает ловушка EXIT самой проверки: здесь его не знают
   echo OK
 }
 
@@ -976,7 +984,9 @@ cmd_probe_dpi() {
   mkdir -p "$STATE_DIR"
   echo "$$" > "$STATE_DIR/probe.pid"
   setup_probe_app_rule
-  trap 'rm -f "$STATE_DIR/probe.pid"; cleanup_probe_app_rule' EXIT INT TERM
+  # INT/TERM (кнопка «Стоп» шлёт TERM) — выйти, а не идти к следующему этапу
+  trap 'rm -f "$STATE_DIR/probe.pid"; cleanup_probe_app_rule' EXIT
+  trap 'exit 143' INT TERM
 
   case "$mode" in
     web) cmd_probe_all_inner "$kind" "$bin" ;;
@@ -999,7 +1009,15 @@ cmd_probe_dpi() {
 # Файлом — ссылкой file:// на настоящий путь: root-проводник (MT Manager и
 # др.) откроет его на месте; текстом — содержимое в EXTRA_TEXT, для чатов.
 # Только файлы модуля: конфиг и файлы hosts.
-share_file_ok() { case "$1" in "$CONFFILE"|"$CONFDIR"/hosts/*.txt) [ -f "$1" ] ;; *) return 1 ;; esac; }
+share_file_ok() {
+  case "$1" in
+    */../*) return 1 ;;   # «*» в шаблоне пропускает и «/» с «..»
+    "$CONFFILE") ;;
+    "$CONFDIR"/hosts/*.txt) case "${1#"$CONFDIR"/hosts/}" in */*) return 1 ;; esac ;;
+    *) return 1 ;;
+  esac
+  [ -f "$1" ]
+}
 cmd_share() { # <file|text> <путь>
   share_file_ok "$2" || { echo "Этим файлом делиться нельзя" >&2; return 1; }
   local out
@@ -1081,7 +1099,8 @@ cmd_domain_check() {
 
   [ "$kind" = none ] && { echo done; return 0; }
   setup_probe_app_rule
-  trap 'cleanup_probe_app_rule' EXIT INT TERM
+  trap 'cleanup_probe_app_rule' EXIT
+  trap 'exit 143' INT TERM
   for k in 1 2 3; do ( printf 'R\t%s\t%s\n' "$k" "$(probe_attempt "$kind" "$bin" "$d")" ) & done
   wait
   cleanup_probe_app_rule
@@ -1174,8 +1193,8 @@ case "$1" in
         rm -f "$t" "$test_conf"
         exit 1
       fi
-      rm -f "$test_conf"
     fi
+    rm -f "$test_conf"
     case "$n" in
       imp:*) dst="$IMPORTS_DIR/${n#imp:}.conf" ;;
       *) dst="$USER_STRATEGIES_DIR/$n.conf"
@@ -1230,8 +1249,11 @@ case "$1" in
     chmod 0644 "$f"
     # Пользователь сам привёл список к новой версии — предлагать её больше незачем.
     cmp -s "$f" "$LISTS_PENDING_DIR/${f##*/}" 2>/dev/null && rm -f "$LISTS_PENDING_DIR/${f##*/}"
-    if [ "$2" = "apps" ]; then cmd_apply_apps; exit $?; fi
-    if [ "$2" = "home" ]; then sh "$SERVICE" home_check >/dev/null 2>&1; echo OK; exit 0; fi
+    # имя списка — короткое или с .list: list_file принимает оба
+    case "$2" in
+      apps|apps.list) cmd_apply_apps; exit $? ;;
+      home|home_wifi.list) sh "$SERVICE" home_check >/dev/null 2>&1; echo OK; exit 0 ;;
+    esac
     reload_after_change; echo OK ;;
   list-update) cmd_list_update "$2" ;;
   add-domain)
@@ -1241,7 +1263,7 @@ case "$1" in
     # echo >> склеил бы новый домен с последней строкой, если файл не заканчивается переводом:
     # портились обе записи, и проверка дедупликации ниже тоже переставала срабатывать.
     if [ -s "$ul" ] && [ -n "$(tail -c 1 "$ul")" ]; then printf '\n' >> "$ul"; fi
-    if ! grep -qx "$d" "$ul" 2>/dev/null; then
+    if ! grep -qxF -- "$d" "$ul" 2>/dev/null; then
       printf '%s\n' "$d" >> "$ul" || { echo "Не удалось записать ${ul##*/}" >&2; exit 1; }
     fi
     reload_after_change; echo "Добавлено: $d" ;;
@@ -1262,7 +1284,7 @@ case "$1" in
 
   set)
     case "$2" in
-      BLOCK_QUIC|AUTOSTART|WATCHDOG|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|VPN_PAUSE|ENABLE_HOTSPOT|DOH_BYPASS|META_QUIC_REJECT) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
+      BLOCK_QUIC|AUTOSTART|WATCHDOG|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|VPN_PAUSE|ENABLE_HOTSPOT|DOH_BYPASS|META_QUIC_REJECT|CALLS_BYPASS) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
       PKT_LIMIT_OUT|PKT_LIMIT_IN) case "$3" in [1-9]|1[0-5]) ;; *) echo "Допустимо 1..15" >&2; exit 1 ;; esac ;;
       APP_MODE) case "$3" in off|include|exclude) ;; *) echo "off|include|exclude" >&2; exit 1 ;; esac ;;
       *) echo "Параметр $2 нельзя менять этой командой" >&2; exit 1 ;;
@@ -1295,7 +1317,7 @@ case "$1" in
   backup-list) cmd_backup_list ;;
   backup-restore) cmd_backup_restore "$2" ;;
   backup-restore-b64) cmd_backup_restore_b64 "$2" ;;
-  # upload <метка> <кусок base64> — дописать кусок; heredoc, без внешних команд
+  # upload <метка> <кусок base64> — дописать кусок; heredoc: кусок не идёт аргументом внешней команды
   upload)
     f=$(upload_file "@up:$2") || { echo "Неверная метка" >&2; exit 1; }
     mkdir -p "$UPLOAD_DIR" || exit 1
@@ -1320,5 +1342,6 @@ EOF
     echo "         import-add-b64 list-imports get-import-merged-b64 rename-import delete-import" >&2
     echo "         get-list save-list-b64 list-update add-domain clear-auto reset-lists set set-mode list-apps" >&2
     echo "         get-logs export-logs clear-logs wifi-ssid backup-create backup-list backup-restore backup-restore-b64 probe-dpi probe-cancel net-info" >&2
+    echo "         home-pause upload domain-check share changelog dns-* hosts-*" >&2
     exit 1 ;;
 esac

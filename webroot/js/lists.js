@@ -87,7 +87,7 @@ async function addDom(){
 }
 async function resetLists(){
   const ok = await mdConfirm(t('Вернуть стандартные списки?'),
-    t('Правки в user, exclude, ipset и probe_hosts будут удалены.'), {ok: t('Вернуть'), danger: true});
+    t('Правки в user, exclude, ipset, ipset_exclude и probe_hosts будут удалены.'), {ok: t('Вернуть'), danger: true});
   if(!ok) return;
   const r = await withBusy(['reset-lists']);
   toast(r.code ? errText(r, 'Не удалось вернуть списки') : t('Списки возвращены к стандартным'));

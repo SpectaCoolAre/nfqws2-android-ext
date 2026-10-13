@@ -8,7 +8,7 @@
    ══════════════════════════════════════════════════════════════════════════ */
 const MOD = '/data/adb/modules/nfqws2-android-ext', CTL = MOD + '/bin/nfqws2-ctl';
 const $ = id => document.getElementById(id);
-let S = {}, seq = 0, pkgs = [], currentEditorTarget = '';
+let S = {}, seq = 0, pkgs = [];
 const q = s => "'" + String(s).replace(/'/g, "'\\''") + "'";
 const b64 = s => btoa(unescape(encodeURIComponent(s)));
 const unb64 = s => { try { return decodeURIComponent(escape(atob(s))); } catch(e) { return atob(s); } };
@@ -93,7 +93,9 @@ async function exportBlobFile(blob, filename, mimeType, localFilePath, targetDir
     const dir = normSaveDir(targetDir);
     const targetFile = dir + '/' + filename;
     // file:// в ACTION_SEND с Android 7 запрещён: отдаём content:// из MediaStore
-    const safUri = 'content://com.android.externalstorage.documents/document/primary%3ADownload%2F' + encodeURIComponent(filename);
+    // запасной адрес — на тот файл, который и правда скопирован (в папку назначения)
+    const safUri = 'content://com.android.externalstorage.documents/document/primary%3A' +
+      encodeURIComponent(targetFile.replace(/^\/(sdcard|storage\/emulated\/0)\//, ''));
     try {
       await sh('f=' + q(localFilePath) + '; tf=' + q(targetFile) + '; mkdir -p ' + q(dir) + ' 2>/dev/null; ' +
         'if [ "$f" != "$tf" ]; then cp -f "$f" "$tf" 2>/dev/null; chmod 666 "$tf" 2>/dev/null; fi; ' +
@@ -126,6 +128,20 @@ const store = {
   set(k, v){ try { localStorage.setItem(k, v); } catch(e) {} },
   del(k){ try { localStorage.removeItem(k); } catch(e) {} }
 };
+/* Страницы прокручиваются в #scroller, а не в окне (см. base.css: корень
+   неподвижен, чтобы WebView не растягивал шапку и навигацию) */
+const scroller = document.getElementById('scroller');
+const scrollPos = () => scroller.scrollTop;
+const scrollToY = y => { scroller.scrollTop = y; };
+/* Слепок экрана: последний ответ *-state хранится и при следующем открытии
+   показывается сразу, пока идёт свежий запрос, — без кадра «всё по нулям».
+   Пока на экране слепок, он не принимает нажатий (данные могли устареть). */
+const snapGet = k => store.get('nfq_snap_' + k);
+const snapSet = (k, v) => store.set('nfq_snap_' + k, v);
+function snapLock(page, on){
+  const el = document.querySelector('.page[data-page="' + page + '"]');
+  if(el) el.inert = !!on;
+}
 
 /* ── Язык интерфейса ──────────────────────────────────────────────────────
    Ключ перевода — сама русская строка: разметка и код остаются читаемыми,
@@ -157,8 +173,7 @@ const fmtCount = n => Number(n).toLocaleString(LANG === 'en' ? 'en-US' : 'ru-RU'
 
 /* ── Ripple: pointerdown на любой .state, делегирование переживает innerHTML ── */
 document.addEventListener('pointerdown', e => {
-  let el = e.target.closest && e.target.closest('.state, .nav-dest');
-  if(el && el.classList.contains('nav-dest')) el = el.querySelector('.nav-ind');
+  let el = e.target.closest && e.target.closest('.state');
   if(!el || el.classList.contains('is-disabled') || el.disabled) return;
   const r = el.getBoundingClientRect();
   const size = Math.max(r.width, r.height) * 2.2;
@@ -507,24 +522,24 @@ $('dialog-wrap').addEventListener('keydown', e => {
 });
 
 /* ══ Навигация: Navigation bar + дочерние экраны ═════════════════════════
-   Разделы верхнего уровня — в Navigation bar, переход между ними fade through.
-   Настройки — дочерний экран за кнопкой-шестерёнкой; из них открываются
-   следующие уровни (приложения, проверка, диагностика, домашняя Wi‑Fi):
-   shared axis X вперёд/назад, стрелка «Назад», панель навигации скрыта. */
+   Разделы верхнего уровня — в Navigation bar (состояние, списки, настройки,
+   конфиг), переход между ними fade through. Журналы — дочерний экран за
+   кнопкой в верхней панели; из настроек открываются следующие уровни
+   (приложения, проверка, диагностика, DNS, hosts): shared axis X вперёд/назад,
+   стрелка «Назад», панель навигации скрыта. */
 const PAGE_META = {
   control:  {title: 'Состояние', init: () => { renderStatus(); stat(); initStrategySelector(); }},
   lists:    {title: 'Списки', init: () => { renderMode(); renderListFiles(); stat(); }},
-  logs:     {title: 'Журналы', init: () => loadLog(),
-             actions: [{icon: 'refresh', label: 'Обновить журнал', fn: () => loadLog()}]},
+  settings: {title: 'Настройки', init: () => renderSettings()},
   config:   {title: 'Конфиг', init: () => confInit()},
-  settings: {title: 'Настройки', child: true, init: () => renderSettings()},
+  logs:     {title: 'Журналы', child: true, init: () => loadLog()},
   wifi:     {title: 'Отключать на Wi‑Fi', child: true, parent: 'settings', init: () => wifiInit()},
   apps:     {title: 'Фильтр приложений', child: true, parent: 'settings', init: () => appsInit(),
              actions: [{icon: 'refresh', label: 'Обновить список приложений', fn: () => loadPk()}]},
   test:     {title: 'Проверка доступности', child: true, parent: 'settings', init: () => testInit()},
   diag:     {title: 'Диагностика', child: true, parent: 'settings', init: () => diagInit(),
              actions: [{icon: 'refresh', label: 'Проверить снова', fn: () => diagInit()}]},
-  dns:      {title: 'DNS по профилям', child: true, parent: 'settings', init: () => dnsInit(),
+  dns:      {title: 'DNS профили', child: true, parent: 'settings', init: () => dnsInit(),
              actions: [{icon: 'refresh', label: 'Обновить состояние', fn: () => dnsInit()}]},
   dnsprof:  {title: 'Профиль DNS', child: true, parent: 'dns', init: () => dnsProfInit()},
   hosts:    {title: 'Редактор hosts', child: true, parent: 'settings', init: () => hostsInit(),
@@ -536,9 +551,12 @@ const pageDepth = p => { const m = PAGE_META[p]; return !m.child ? 0 : (m.parent
 function renderAppBar(page, animate){
   const m = PAGE_META[page];
   $('back-btn').hidden = !m.child;
-  $('settings-btn').hidden = !!m.child;
+  $('logs-btn').hidden = !!m.child;
+  // Верхний уровень — название модуля слева, как у Telegram: раздел и так
+  // подписан в нижней панели. Дочерние экраны — свой заголовок у стрелки
+  $('app-bar').classList.toggle('top', !m.child);
   const tEl = $('app-title');
-  tEl.textContent = t(m.title);
+  tEl.textContent = m.child ? t(m.title) : 'nfqws2-android-ext';
   if(animate !== false){ tEl.classList.remove('swap'); void tEl.offsetWidth; tEl.classList.add('swap'); }
   fillBarActions(m.actions);
 }
@@ -572,12 +590,14 @@ function renderNavBar(page){
 /* Прокрутка экранов: уходя, экран запоминает её; вперёд (в дочерний экран)
    открываем с начала, а назад и по вкладкам — там, где пользователь был. */
 const pageScroll = {};
-function showPage(page, mode){
+function showPage(page, mode, slide){
   if(transitionCleanup) transitionCleanup();
   const from = document.querySelector('.page.active');
   const to = document.querySelector('.page[data-page="' + page + '"]');
   if(!to || from === to) return;
   const animate = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if(mode === 'slide' && from && animate) return slidePages(from, to, slide);
+  if(mode === 'slide') mode = 'fade';
   if(from){
     if(animate){
       const r = from.getBoundingClientRect();
@@ -589,8 +609,8 @@ function showPage(page, mode){
   to.classList.add('active');
   if(animate) to.classList.add('enter-' + mode);
   const y = mode === 'forward' ? 0 : (pageScroll[page] || 0);
-  scrollTo(0, y);
-  $('app-bar').classList.toggle('scrolled', scrollY > 8);
+  scrollToY(y);
+  $('app-bar').classList.toggle('scrolled', scrollPos() > 8);
   let timer = 0;
   const onEnd = e => { if(e.target === to && e.animationName === 'fade-in') cleanup(); };
   const cleanup = () => {
@@ -604,21 +624,186 @@ function showPage(page, mode){
   if(animate){ to.addEventListener('animationend', onEnd); timer = setTimeout(cleanup, 1200); }
   else cleanup();
 }
+/* ── Вкладки листаются по горизонтали, как в Telegram ─────────────────────
+   Порядок — как в нижней панели. Уходящая страница закрепляется fixed на
+   своём месте и уезжает в сторону, новая — в потоке, со своей прокруткой,
+   въезжает с другой стороны. dx — откуда начать (палец уже сдвинул пару
+   страниц), v — скорость отпускания: от неё зависит длительность доводки. */
+const TOP_PAGES = ['control', 'lists', 'settings', 'config'];
+const SLIDE_EASE = 'cubic-bezier(.2, .8, .2, 1)';
+function pageBox(el){
+  const r = el.getBoundingClientRect();
+  return {top: r.top, left: r.left, width: r.width};
+}
+function slideDuration(dist, v){
+  const W = innerWidth || 1;
+  let ms = 300 * Math.min(1, Math.abs(dist) / W) + 40;
+  if(v) ms = Math.min(ms, Math.abs(dist) / Math.abs(v) * 1.6);
+  return Math.max(140, Math.min(320, ms));
+}
+function slidePages(from, to, opt){
+  const dir = opt.dir, W = innerWidth, dx = opt.dx || 0;
+  const box = opt.box || pageBox(from);
+  to.classList.remove('peek');
+  to.style.cssText = '';
+  from.style.cssText = 'position:fixed;top:' + box.top + 'px;left:' + box.left + 'px;width:' + box.width + 'px;transform:translateX(' + dx + 'px)';
+  from.classList.add('leaving');
+  from.classList.remove('active');
+  to.classList.add('active');
+  scrollToY(pageScroll[to.dataset.page] || 0);
+  $('app-bar').classList.toggle('scrolled', scrollPos() > 8);
+  const ms = slideDuration(W - Math.abs(dx), opt.v);
+  const timing = {duration: ms, easing: SLIDE_EASE, fill: 'forwards'};
+  const a1 = from.animate([{transform: 'translateX(' + dx + 'px)'}, {transform: 'translateX(' + (-dir * W) + 'px)'}], timing);
+  const a2 = to.animate([{transform: 'translateX(' + (dx + dir * W) + 'px)'}, {transform: 'none'}], timing);
+  const cleanup = () => {
+    a1.cancel(); a2.cancel();
+    from.classList.remove('leaving');
+    from.style.cssText = '';
+    if(transitionCleanup === cleanup) transitionCleanup = null;
+  };
+  transitionCleanup = cleanup;
+  a2.onfinish = cleanup;
+}
+
+/* Свайп влево-вправо по странице. Вертикальная прокрутка главнее: на
+   .content стоит touch-action: pan-y, и браузер сам забирает жест, который
+   начался вертикально (тогда приходит pointercancel). Горизонталь
+   захватывается, только когда палец ушёл вбок на 16 px и угол к горизонту
+   меньше ~27° (|dx| > 2|dy|), а по вертикали — не больше 24 px. Края экрана
+   (жест «Назад» Android), поле в фокусе, ползунки и всё, что само листается
+   вбок, свайп не трогает. Отпускание: дальше трети ширины или быстрый бросок — переход,
+   иначе страницы возвращаются на место. На крайних вкладках — упругий
+   отказ. */
+const swipe = {st: 0}, pageInited = new Set(['control']);   // «Состояние» готовит init.js
+function swipeBlocked(t){
+  if(!t || !t.closest || !t.closest('#content') || t.closest('.no-swipe')) return true;
+  // поле в фокусе — там двигают курсор и выделяют текст; ползунок тянут вбок
+  const ed = t.closest('input, textarea, select, [contenteditable="true"]');
+  if(ed && (ed === document.activeElement || ed.type === 'range')) return true;
+  for(let el = t; el && el.id !== 'content'; el = el.parentElement){
+    if(el.scrollWidth > el.clientWidth + 1){
+      const ox = getComputedStyle(el).overflowX;
+      if(ox === 'auto' || ox === 'scroll') return true;
+    }
+  }
+  return false;
+}
+function swipeAllowed(){
+  return !PAGE_META[currentPage].child && TOP_PAGES.includes(currentPage) && !openSheetId && !openMenuEntry &&
+    !editorCtx && !$('dialog-wrap').classList.contains('open') &&
+    !document.documentElement.classList.contains('scroll-locked') && !transitionCleanup &&
+    !matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+function swipePeek(dir){
+  const i = TOP_PAGES.indexOf(currentPage) + dir;
+  if(swipe.peek){ swipe.peek.classList.remove('peek'); swipe.peek.style.cssText = ''; swipe.peek = null; }
+  swipe.peekDir = dir;
+  if(i < 0 || i >= TOP_PAGES.length) return;
+  const el = document.querySelector('.page[data-page="' + TOP_PAGES[i] + '"]');
+  const b = swipe.box, top = b.top + scrollPos() - (pageScroll[TOP_PAGES[i]] || 0);
+  el.style.cssText = 'top:' + top + 'px;left:' + b.left + 'px;width:' + b.width + 'px';
+  el.classList.add('peek');
+  swipe.peek = el;
+  // вкладку ещё не открывали — данные грузятся, пока её тянут
+  const pg = TOP_PAGES[i];
+  if(!pageInited.has(pg)){ pageInited.add(pg); Promise.resolve(PAGE_META[pg].init()).catch(() => {}); }
+}
+function swipeMove(dx){
+  if(!swipe.peek) dx = Math.sign(dx) * Math.min(Math.abs(dx) * .25, 64);   // крайняя вкладка: упругость
+  swipe.dx = dx;
+  swipe.from.style.transform = 'translateX(' + dx + 'px)';
+  if(swipe.peek) swipe.peek.style.transform = 'translateX(' + (dx + swipe.peekDir * innerWidth) + 'px)';
+}
+function swipeEnd(commit, v){
+  const from = swipe.from, peek = swipe.peek, dx = swipe.dx, dir = swipe.peekDir;
+  document.body.classList.remove('swiping');
+  swipe.st = 0; swipe.from = swipe.peek = null;
+  if(commit && peek){
+    navigate(peek.dataset.page, {dir, dx, v, box: swipe.box});
+    return;
+  }
+  const timing = {duration: slideDuration(dx), easing: SLIDE_EASE};
+  const back = [{transform: 'translateX(' + dx + 'px)'}, {transform: 'none'}];
+  from.style.transform = '';
+  from.animate(back, timing);
+  if(peek){
+    const a = peek.animate([{transform: 'translateX(' + (dx + dir * innerWidth) + 'px)'},
+                            {transform: 'translateX(' + dir * innerWidth + 'px)'}], timing);
+    a.onfinish = () => { if(swipe.peek !== peek){ peek.classList.remove('peek'); peek.style.cssText = ''; } };
+  }
+}
+document.addEventListener('pointerdown', e => {
+  if(swipe.st || !e.isPrimary || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  if(!swipeAllowed() || inGestureZone(e.clientX, e.clientY) || swipeBlocked(e.target)) return;
+  swipe.st = 1; swipe.id = e.pointerId;
+  swipe.x0 = e.clientX; swipe.y0 = e.clientY;
+  swipe.trail = [[e.timeStamp, e.clientX]];
+});
+document.addEventListener('pointermove', e => {
+  if(!swipe.st || e.pointerId !== swipe.id) return;
+  const dx = e.clientX - swipe.x0, dy = e.clientY - swipe.y0;
+  if(swipe.st === 1){
+    if(Math.abs(dy) > 24 || (Math.abs(dy) > 8 && Math.abs(dy) * 2 >= Math.abs(dx))){ swipe.st = 0; return; }
+    if(Math.abs(dx) < 16 || Math.abs(dx) <= Math.abs(dy) * 2) return;
+    swipe.st = 2;
+    swipe.from = document.querySelector('.page.active');
+    swipe.box = pageBox(swipe.from);
+    swipe.slop = Math.sign(dx) * 16;
+    swipe.peekDir = 0;
+    document.body.classList.add('swiping');
+    document.querySelectorAll('.ripple').forEach(r => r.remove());
+  }
+  const d = dx - swipe.slop;
+  const dir = d < 0 ? 1 : -1;
+  if(dir !== swipe.peekDir) swipePeek(dir);
+  swipeMove(d);
+  swipe.trail.push([e.timeStamp, e.clientX]);
+  if(swipe.trail.length > 6) swipe.trail.shift();
+});
+function swipeRelease(e, cancel){
+  if(!swipe.st || e.pointerId !== swipe.id) return;
+  if(swipe.st === 1){ swipe.st = 0; return; }
+  const tr = swipe.trail, a = tr[0], b = tr[tr.length - 1];
+  const v = b[0] > a[0] ? (b[1] - a[1]) / (b[0] - a[0]) : 0;       // px/ms, по последним точкам
+  const dx = swipe.dx, W = innerWidth;
+  const fling = Math.abs(v) > .4 && Math.sign(v) === Math.sign(dx) && Math.abs(dx) > 24;
+  swipeEnd(!cancel && (Math.abs(dx) > W / 3 || fling), fling ? v : 0);
+  // после перетаскивания мышью click не должен нажать то, что под курсором.
+  // Отсекаем по времени самого события, а не таймером: пока грузится новая
+  // вкладка, таймер опаздывал и съедал следующее настоящее нажатие
+  swipe.clickGuard = e.timeStamp + 60;
+}
+document.addEventListener('click', ev => {
+  if(swipe.clickGuard && ev.timeStamp <= swipe.clickGuard){ ev.stopPropagation(); ev.preventDefault(); }
+  swipe.clickGuard = 0;
+}, true);
+/* Пока страницу тянут вбок, touchmove гасится: иначе браузер ведёт свой
+   (отфильтрованный touch-action) жест с инерцией, и следующее касание
+   уходит на её остановку — нажатие не засчитывается */
+document.addEventListener('touchmove', e => { if(swipe.st === 2 && e.cancelable) e.preventDefault(); }, {passive: false});
+document.addEventListener('pointerup', e => swipeRelease(e, false));
+document.addEventListener('pointercancel', e => swipeRelease(e, true));
+
 /* Данные экрана грузятся после того, как анимация пошла: два кадра, чтобы
    стиль нового экрана точно ушёл в композитор. Без spawn первый вызов ещё и
    ждёт конца анимации — синхронный exec иначе заморозил бы её первый кадр. */
 function afterTransition(fn){
   requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(fn, spawnOK ? 0 : 320)));
 }
-function navigate(page){
+function navigate(page, slide){
   if(page === currentPage){
-    if(!PAGE_META[page].child) scrollTo({top: 0, behavior: 'smooth'});
+    if(!PAGE_META[page].child) scroller.scrollTo({top: 0, behavior: 'smooth'});
     return;
   }
   closeMenu();
   const d0 = pageDepth(currentPage), d1 = pageDepth(page);
-  const mode = d1 > d0 ? 'forward' : (d1 < d0 ? 'back' : 'fade');
-  pageScroll[currentPage] = scrollY;
+  // Между вкладками — сдвиг, как в Telegram: соседняя страница въезжает
+  // сбоку, промежуточные пропускаются (1 → 3 выглядит как 1 → 2)
+  const ti0 = TOP_PAGES.indexOf(currentPage), ti1 = TOP_PAGES.indexOf(page);
+  const mode = ti0 >= 0 && ti1 >= 0 ? 'slide' : (d1 > d0 ? 'forward' : (d1 < d0 ? 'back' : 'fade'));
+  if(mode === 'slide') slide = Object.assign({dir: ti1 > ti0 ? 1 : -1, dx: 0}, slide);
+  pageScroll[currentPage] = scrollPos();
   // Выбор профилей DNS живёт только на своём экране
   dnsLongCancel();
   if(dnsSel){ dnsSel = null; if(currentPage === 'dns') renderDns(); }
@@ -626,16 +811,17 @@ function navigate(page){
   currentPage = page;
   if(!PAGE_META[page].child) lastTop = page;
   renderNavBar(page);
-  renderAppBar(page);
-  showPage(page, mode);
+  renderAppBar(page, mode !== 'slide');
+  showPage(page, mode, slide);
   const target = page;
   afterTransition(() => {
     if(currentPage !== target) return;
     // Экран мог быть короче до загрузки данных — тогда прокрутка упёрлась
     // в его конец; дотягиваем, если пользователь за это время не листал.
-    const want = pageScroll[target] || 0, had = scrollY;
+    const want = pageScroll[target] || 0, had = scrollPos();
+    pageInited.add(target);
     Promise.resolve(PAGE_META[target].init()).then(() => {
-      if(currentPage === target && want > had && scrollY === had) scrollTo(0, want);
+      if(currentPage === target && want > had && scrollPos() === had) scrollToY(want);
     }).catch(() => {});
   });
   scheduleSync();
@@ -644,16 +830,41 @@ function goBack(){
   if(dnsSel && currentPage === 'dns') return dnsSelExit();
   navigate(PAGE_META[currentPage].parent || lastTop);
 }
-document.querySelectorAll('.nav-dest').forEach(b => { b.onclick = () => navigate(b.dataset.page); });
+/* Нажатие на вкладку засчитывается по pointerup, а не по click: после
+   свайпа браузер считает следующее касание остановкой инерции и click не
+   присылает (pointerdown и pointerup при этом приходят) — нажатие терялось.
+   click остаётся для клавиатуры; если касание уже обработано, он гасится. */
+function bindNavTap(b, go){
+  let down = null, handled = 0;
+  b.addEventListener('pointerdown', e => { down = {id: e.pointerId, x: e.clientX, y: e.clientY}; });
+  b.addEventListener('pointercancel', () => { down = null; });
+  b.addEventListener('pointerup', e => {
+    const d = down; down = null;
+    if(!d || d.id !== e.pointerId || e.button > 0) return;
+    if(Math.abs(e.clientX - d.x) > 12 || Math.abs(e.clientY - d.y) > 12) return;
+    handled = e.timeStamp;
+    go();
+  });
+  b.addEventListener('click', e => {
+    const h = handled; handled = 0;
+    if(h && e.timeStamp - h < 800) return;
+    go();
+  });
+}
+// «Настройки» — свой обработчик ниже (долгое нажатие)
+document.querySelectorAll('.nav-dest:not([data-page="settings"])').forEach(b => bindNavTap(b, () => navigate(b.dataset.page)));
 
-/* ── Режим разработчика: долгое нажатие на кнопку настроек ───────────────
-   Показывает на главном экране служебные переключатели, которые обычному
-   пользователю не нужны (контроль работы, лимиты пакетов).
+$('logs-btn').onclick = () => navigate('logs');
+
+/* ── Режим разработчика: долгое нажатие на вкладку «Настройки» ───────────
+   Показывает в настройках блок «Для разработчиков» — то, что обычному
+   пользователю не нужно (контроль работы, лимиты пакетов).
    Обычное нажатие по-прежнему открывает настройки; после долгого нажатия
    следующий click гасится, чтобы настройки не открылись вдобавок. */
 let devMode = store.get('nfq_dev') === '1';
 (function bindSettingsPress(){
-  const b = $('settings-btn');
+  const b = $('nav-settings');
+  if(!b) return;
   let tm = 0, fired = false;
   const cancel = () => { clearTimeout(tm); tm = 0; };
   b.addEventListener('pointerdown', () => {
@@ -669,7 +880,7 @@ let devMode = store.get('nfq_dev') === '1';
   });
   ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => b.addEventListener(ev, cancel));
   b.addEventListener('contextmenu', e => e.preventDefault());
-  b.addEventListener('click', () => { if(fired){ fired = false; return; } navigate('settings'); });
+  bindNavTap(b, () => { if(fired){ fired = false; return; } navigate('settings'); });
 })();
 
 /* Зоны системных жестов Android: полоска внизу (домой, недавние) и края
@@ -687,8 +898,99 @@ function inGestureZone(x, y){
   return y > innerHeight - Math.max(32, inset + 8) || x < 24 || x > innerWidth - 24;
 }
 
+/* ── Растяжение при упоре в край, как в Android 12+ ───────────────────────
+   Системное отключено (html: overscroll-behavior), чтобы не тянуть шапку и
+   капсулу навигации. Тянется только текущая страница: палец уже в начале
+   (или в конце) прокрутки и продолжает тянуть — страница растягивается по
+   вертикали от упора, с затуханием, отпустил — возвращается. Пока тянем
+   мы, touchmove гасится, чтобы браузер не передал упор WebView. */
+const stretch = {el: null, pull: 0, y: 0};
+function stretchApply(){
+  const el = stretch.el, p = stretch.pull;
+  if(!el) return;
+  const k = 1 + .06 * (1 - Math.exp(-Math.abs(p) / 450));
+  // точка упора: верх страницы или нижний край экрана в её координатах
+  const oy = p > 0 ? 0 : scroller.clientHeight - el.getBoundingClientRect().top;
+  el.style.transformOrigin = '50% ' + oy + 'px';
+  el.style.transform = 'scaleY(' + k + ')';
+}
+function stretchRelease(){
+  const el = stretch.el;
+  stretch.el = null; stretch.pull = 0;
+  if(!el || !el.classList.contains('stretch')) return;
+  el.classList.add('stretch-release');
+  el.style.transform = '';
+  const done = () => { el.classList.remove('stretch', 'stretch-release'); el.style.transformOrigin = ''; };
+  el.addEventListener('transitionend', done, {once: true});
+  setTimeout(done, 500);
+}
+document.addEventListener('touchstart', e => {
+  stretchRelease();
+  if(e.touches.length !== 1 || !e.target.closest || !e.target.closest('#content')) return;
+  if(openSheetId || editorCtx || transitionCleanup || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  // внутри своей прокрутки (журнал, редактор, листаемые блоки) — не наше
+  for(let el = e.target; el && el.id !== 'content'; el = el.parentElement){
+    if(el.scrollHeight > el.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(el).overflowY)) return;
+  }
+  stretch.el = document.querySelector('.page.active');
+  stretch.y = e.touches[0].clientY;
+  stretch.pull = 0;
+}, {passive: true});
+document.addEventListener('touchmove', e => {
+  const el = stretch.el;
+  if(!el || e.touches.length !== 1) return;
+  if(swipe.st === 2){ stretchRelease(); return; }        // страницу тянут вбок
+  const y = e.touches[0].clientY, dy = y - stretch.y;
+  stretch.y = y;
+  const maxY = scroller.scrollHeight - scroller.clientHeight;
+  const atTop = scrollPos() <= 0, atBottom = scrollPos() >= maxY - 1;
+  let p = stretch.pull;
+  if(p > 0 || (p === 0 && dy > 0 && atTop)) p = Math.max(0, p + dy);
+  else if(p < 0 || (p === 0 && dy < 0 && atBottom)) p = Math.min(0, p + dy);
+  // упор тянем сами: браузер это касание не получает и не запускает
+  // системное растяжение WebView (оно двигало шапку и навигацию)
+  if(p !== 0 && e.cancelable) e.preventDefault();
+  if(p === stretch.pull) return;
+  stretch.pull = p;
+  if(p === 0){ el.classList.remove('stretch'); el.style.transform = ''; el.style.transformOrigin = ''; return; }
+  el.classList.add('stretch');
+  el.classList.remove('stretch-release');
+  stretchApply();
+}, {passive: false});
+document.addEventListener('touchend', e => { if(!e.touches.length) stretchRelease(); }, {passive: true});
+
+/* Отскок на инерции: прокрутка с разгона влетела в край, когда палец уже
+   отпущен, — страница коротко растягивается от края пропорционально
+   скорости и возвращается (как EdgeEffect.onAbsorb в Android). Системный
+   отскок WebView отключён (он двигал шапку и навигацию), это его замена. */
+const fling = {top: 0, t: 0, v: 0, touching: 0, last: 0};
+document.addEventListener('touchstart', e => { fling.touching = e.touches.length; }, {passive: true, capture: true});
+document.addEventListener('touchend', e => { fling.touching = e.touches.length; }, {passive: true, capture: true});
+document.addEventListener('touchcancel', () => { fling.touching = 0; }, {passive: true, capture: true});
+function stretchAbsorb(fromTop, v){
+  const el = document.querySelector('.page.active');
+  if(!el || stretch.el || transitionCleanup || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const k = 1 + Math.min(.05, .012 + Math.abs(v) * .008);    // v — px/мс
+  const oy = fromTop ? 0 : scroller.clientHeight - el.getBoundingClientRect().top;
+  el.style.transformOrigin = '50% ' + oy + 'px';
+  const a = el.animate([{transform: 'none'}, {transform: 'scaleY(' + k + ')', offset: .3}, {transform: 'none'}],
+    {duration: 420, easing: 'cubic-bezier(.2, .8, .3, 1)'});
+  a.onfinish = a.oncancel = () => { if(!el.classList.contains('stretch')) el.style.transformOrigin = ''; };
+}
+scroller.addEventListener('scroll', () => {
+  const now = performance.now(), top = scrollPos(), dt = now - fling.t;
+  if(dt > 0 && dt < 100) fling.v = .5 * fling.v + .5 * (top - fling.top) / dt;
+  else fling.v = 0;
+  fling.top = top; fling.t = now;
+  if(fling.touching || now - fling.last < 500) return;
+  const max = scroller.scrollHeight - scroller.clientHeight;
+  if(top <= 0 && fling.v < -.3){ fling.last = now; stretchAbsorb(true, fling.v); }
+  else if(top >= max - 1 && fling.v > .3){ fling.last = now; stretchAbsorb(false, fling.v); }
+}, {passive: true});
+document.addEventListener('touchcancel', stretchRelease, {passive: true});
+
 /* elevation on scroll: surface → surface-container */
-addEventListener('scroll', () => $('app-bar').classList.toggle('scrolled', scrollY > 8), {passive: true});
+scroller.addEventListener('scroll', () => $('app-bar').classList.toggle('scrolled', scrollPos() > 8), {passive: true});
 
 /* ── Modal bottom sheets: один scrim на все листы ──────────────────────── */
 let openSheetId = null, sheetReturnFocus = null;

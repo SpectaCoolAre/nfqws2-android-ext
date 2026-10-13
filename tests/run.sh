@@ -187,8 +187,10 @@ else
 
   if [ "$FAST" = 1 ]; then
     queue_skip "webui: rendered geometry" "--fast"
+    queue_skip "webui: tab paging" "--fast"
   else
     queue_suite "webui: rendered geometry" "$NODE_BIN" "$HERE/webui/test_layout.js"
+    queue_suite "webui: tab paging" "$NODE_BIN" "$HERE/webui/test_swipe.js"
     [ -f "$REPO_DIR/webroot/js/dns.js" ] && queue_suite "webui: DNS profiles (extended)" "$NODE_BIN" "$HERE/webui/test_dns.js"
   fi
 fi

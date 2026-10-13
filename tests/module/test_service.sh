@@ -101,6 +101,9 @@ assert_no_file "$CONFDIR/state/nfqws2.pid" "no pidfile is left behind"
 
 section "start: preflight dry-run rejection"
 : > "$SERVICE_LOG"
+# аргументы прошлого успешного запуска запомнены — проверка при старте их
+# пропустила бы; здесь нужен именно неизвестный набор
+rm -f "$CONFDIR/state/dryrun.ok"
 MOCK_NFQWS_DRY_RUN_FAIL=2
 export MOCK_NFQWS_DRY_RUN_FAIL
 svc start
@@ -245,7 +248,8 @@ load_conf >/dev/null 2>&1
 ipt_reset
 firewall_start >/dev/null 2>&1
 snap=$(ipt_snapshot)
-assert_contains "$snap" "-p udp --dport 443 -d 157.240.0.0/16 -j REJECT --reject-with icmp-port-unreachable" "on by default: QUIC to Meta gets an ICMP reject"
+assert_contains "$snap" "-p udp --dport 443 -d 157.240.0.0/16,31.13.24.0/21," "on by default: QUIC to Meta gets an ICMP reject, all nets in one call"
+assert_contains "$snap" "-j REJECT --reject-with icmp-port-unreachable" "with a port-unreachable reject"
 assert_contains "$snap" "2a03:2880::/32 -j REJECT --reject-with icmp6-port-unreachable" "and over IPv6"
 assert_eq "1" "$(grep -c nfqws_mquic "$MOCK_IPT_STORE/iptables/filter/OUTPUT" 2>/dev/null)" "for the phone's own traffic"
 assert_eq "1" "$(grep -c nfqws_mquic "$MOCK_IPT_STORE/iptables/filter/FORWARD" 2>/dev/null)" "and for hotspot clients"
@@ -270,6 +274,63 @@ load_conf >/dev/null 2>&1
 ipt_reset
 firewall_start >/dev/null 2>&1
 assert_contains "$(ipt_snapshot)" "853" "on: DoT traffic goes to the queue"
+
+section "start skips a dry-run the same arguments already passed"
+conf_reset
+printf 'WATCHDOG=0\n' >> "$CONFFILE"   # без наблюдателей: они пережили бы секцию
+load_conf >/dev/null 2>&1
+svc stop >/dev/null 2>&1
+rm -f "$CONFDIR/state/dryrun.ok"
+svc start >/dev/null 2>&1
+assert_file "$CONFDIR/state/dryrun.ok" "a passed dry-run is remembered"
+svc stop >/dev/null 2>&1
+MOCK_NFQWS_DRY_RUN_FAIL=2; export MOCK_NFQWS_DRY_RUN_FAIL
+svc start >/dev/null 2>&1
+assert_rc 0 "$svc_rc" "the same arguments start without a second dry-run"
+unset MOCK_NFQWS_DRY_RUN_FAIL
+svc stop >/dev/null 2>&1
+printf 'BLOCK_QUIC=1\n' >> "$CONFFILE"
+load_conf >/dev/null 2>&1
+MOCK_NFQWS_DRY_RUN_FAIL=2; export MOCK_NFQWS_DRY_RUN_FAIL
+svc start >/dev/null 2>&1
+assert_rc 1 "$svc_rc" "changed arguments are checked again"
+unset MOCK_NFQWS_DRY_RUN_FAIL
+conf_reset
+load_conf >/dev/null 2>&1
+
+section "stopping the rules: one save/restore per table"
+ipt_reset
+firewall_start >/dev/null 2>&1
+iptables -w -t nat -N nfqws_dns 2>/dev/null; iptables -w -t nat -A OUTPUT -j nfqws_dns
+firewall_stop >/dev/null 2>&1
+snap=$(ipt_snapshot)
+assert_not_contains "$snap" "nfqws_post" "the bypass chains are gone"
+assert_not_contains "$snap" "nfqws_nat" "NAT fix included"
+assert_contains "$(iptables -w -t nat -S OUTPUT)" "-j nfqws_dns" "the DNS interception is left alone"
+firewall_ok; assert_rc 1 $? "firewall_ok sees no rules"
+iptables -w -t nat -D OUTPUT -j nfqws_dns; iptables -w -t nat -X nfqws_dns
+ipt_reset
+firewall_start >/dev/null 2>&1
+MOCK_IPT_SAVE_FAIL=1; export MOCK_IPT_SAVE_FAIL
+firewall_stop >/dev/null 2>&1
+unset MOCK_IPT_SAVE_FAIL
+assert_not_contains "$(ipt_snapshot)" "nfqws_post" "without iptables-save the rule-by-rule path still clears everything"
+
+section "call bypass queues the call ports"
+conf_reset
+load_conf >/dev/null 2>&1
+ipt_reset
+firewall_start >/dev/null 2>&1
+assert_not_contains "$(ipt_snapshot)" "3478:3482" "off: the usual UDP ports"
+firewall_stop >/dev/null 2>&1
+printf 'CALLS_BYPASS=1\n' >> "$CONFFILE"
+load_conf >/dev/null 2>&1
+ipt_reset
+firewall_start >/dev/null 2>&1
+snap=$(ipt_snapshot)
+assert_contains "$snap" "590:1400" "on: Telegram relay ports are queued"
+assert_contains "$snap" "3478:3482" "and the WhatsApp ones up to 3482"
+firewall_stop >/dev/null 2>&1
 
 section "watchdog and netwatch helpers"
 

@@ -5,15 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#1c1b1f">
 <title>nfqws2</title>
-<link rel="icon" type="image/svg+xml" href="icon.svg?v=2.0.5">
-<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=2.0.5">
-<link rel="apple-touch-icon" href="icon.png?v=2.0.5">
+<link rel="icon" type="image/svg+xml" href="icon.svg?v=2.0.8">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=2.0.8">
+<link rel="apple-touch-icon" href="icon.png?v=2.0.8">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="nfqws2">
 <!-- Вставки KSU грузятся асинхронно: без сети mui.kernelsu.org не задерживает первый кадр,
-     а инsets и цвета имеют локальные фолбэки ниже по CSS. -->
+     а insets и цвета имеют локальные фолбэки ниже по CSS. -->
 <link rel="stylesheet" href="https://mui.kernelsu.org/internal/insets.css" media="print" onload="this.media='all'">
 <link rel="stylesheet" href="https://mui.kernelsu.org/internal/colors.css" media="print" onload="this.media='all'">
 <!-- Стили и скрипты лежат в css/ и js/: правки разных экранов попадают в разные
@@ -31,7 +31,6 @@
      Это глифы, а не штриховые иконки: рисуются заливкой (fill:currentColor),
      поэтому stroke-свойства в CSS не нужны. Сеть не требуется. -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
-<symbol id="i-menu" viewBox="0 -960 960 960"><path d="M120-240v-80h720v80H120Zm0-200v-80h720v80H120Zm0-200v-80h720v80H120Z"/></symbol>
 <symbol id="i-close" viewBox="0 -960 960 960"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></symbol>
 <symbol id="i-check" viewBox="0 -960 960 960"><path d="M382-240 154-468l57-57 171 171 367-367 57 57-424 424Z"/></symbol>
 <symbol id="i-play" viewBox="0 -960 960 960"><path d="M320-200v-560l440 280-440 280Zm80-280Zm0 134 210-134-210-134v268Z"/></symbol>
@@ -84,29 +83,32 @@
   <button class="icon-btn state tone-on" id="back-btn" aria-label="Назад" data-ta="aria-label" hidden onclick="goBack()">
     <svg aria-hidden="true" class="icon"><use href="#i-back"/></svg>
   </button>
-  <h1 class="title truncate" id="app-title" data-t>Состояние</h1>
+  <h1 class="title truncate" id="app-title">nfqws2-android-ext</h1>
+  <!-- Логотип модуля в кружке рядом с названием — на экранах верхнего уровня, в цветах темы -->
+  <span class="brand-logo" id="brand-logo" aria-hidden="true"><svg aria-hidden="true" class="icon"><use href="#i-n2"/></svg></span>
   <div class="bar-actions" id="bar-actions"></div>
-  <button class="icon-btn state" id="settings-btn" aria-label="Настройки" data-ta="aria-label,title" title="Настройки">
-    <svg aria-hidden="true" class="icon"><use href="#i-settings"/></svg>
+  <button class="icon-btn state" id="logs-btn" aria-label="Журналы" data-ta="aria-label,title" title="Журналы">
+    <svg aria-hidden="true" class="icon"><use href="#i-logs"/></svg>
   </button>
 </header>
 
 <div class="progress-top" id="progress-top" hidden><div class="progress-linear" role="progressbar"
      aria-label="Выполняется запрос к службе" data-ta="aria-label" aria-busy="true"><div class="bar"></div></div></div>
 
+<div class="scroller" id="scroller">
 <main class="content" id="content">
   <!-- ═══ СОСТОЯНИЕ ═══════════════════════════════════════════════════════ -->
   <section class="page split active" data-page="control" aria-label="Состояние" data-ta="aria-label">
     <div class="pcol">
       <div class="hero" id="hero-status">
         <div class="hero-head">
-          <span class="hero-icon" aria-hidden="true"><svg aria-hidden="true" class="icon"><use href="#i-n2"/></svg></span>
+          <span class="hero-icon" aria-hidden="true"><svg aria-hidden="true" class="icon"><use id="hero-ic" href="#i-status"/></svg></span>
           <div class="hero-titles">
             <div class="hero-state" id="st" aria-live="polite">Опрос службы…</div>
             <div class="hero-sub" id="sub"></div>
           </div>
         </div>
-        <div class="hero-stats">
+        <div class="hero-stats" id="hero-stats">
           <div class="hstat"><span class="hstat-label" data-t>Время работы</span><span class="hstat-value" id="upt">—</span></div>
         </div>
         <div class="hero-actions">
@@ -209,6 +211,9 @@
           <svg aria-hidden="true" class="icon s18"><use href="#i-download"/></svg><span data-t>Экспорт логов</span>
         </button>
         <button class="btn text danger state" onclick="clearLogs()"><span data-t>Очистить журналы</span></button>
+        <button class="icon-btn state" onclick="loadLog()" aria-label="Обновить журнал" title="Обновить журнал" data-ta="aria-label,title">
+          <svg aria-hidden="true" class="icon"><use href="#i-refresh"/></svg>
+        </button>
       </div>
       <div class="list">
         <label class="list-item two-line clickable state">
@@ -528,24 +533,25 @@
     <pre class="code-block" id="args">—</pre>
   </section>
 </main>
+</div>
 
 <!-- ═══ Navigation bar: 4 раздела верхнего уровня ═════════════════════════ -->
 <nav class="nav-bar" id="nav-bar" aria-label="Разделы" data-ta="aria-label">
   <div class="nav-bar-inner">
-    <button class="nav-dest" data-page="control" aria-current="page">
-      <span class="nav-ind state"><svg aria-hidden="true" class="icon"><use href="#i-status"/></svg></span>
+    <button class="nav-dest state" data-page="control" aria-current="page">
+      <span class="nav-ind"><svg aria-hidden="true" class="icon"><use href="#i-status"/></svg></span>
       <span class="nav-label" data-t>Состояние</span>
     </button>
-    <button class="nav-dest" data-page="lists">
-      <span class="nav-ind state"><svg aria-hidden="true" class="icon"><use href="#i-list"/></svg></span>
+    <button class="nav-dest state" data-page="lists">
+      <span class="nav-ind"><svg aria-hidden="true" class="icon"><use href="#i-list"/></svg></span>
       <span class="nav-label" data-t>Списки</span>
     </button>
-    <button class="nav-dest" data-page="logs">
-      <span class="nav-ind state"><svg aria-hidden="true" class="icon"><use href="#i-logs"/></svg></span>
-      <span class="nav-label" data-t>Журналы</span>
+    <button class="nav-dest state" id="nav-settings" data-page="settings">
+      <span class="nav-ind"><svg aria-hidden="true" class="icon"><use href="#i-settings"/></svg></span>
+      <span class="nav-label" data-t>Настройки</span>
     </button>
-    <button class="nav-dest" data-page="config">
-      <span class="nav-ind state"><svg aria-hidden="true" class="icon"><use href="#i-config"/></svg></span>
+    <button class="nav-dest state" data-page="config">
+      <span class="nav-ind"><svg aria-hidden="true" class="icon"><use href="#i-config"/></svg></span>
       <span class="nav-label" data-t>Конфиг</span>
     </button>
   </div>
@@ -734,8 +740,8 @@
       <label for="d-input" id="d-label"></label>
     </div>
     <div class="d-actions">
-      <button class="btn text state" id="d-cancel" aria-label="Отмена" onclick="dialogResolve(false)"></button>
-      <button class="btn text state" id="d-ok" aria-label="ОК"></button>
+      <button class="btn text state" id="d-cancel" onclick="dialogResolve(false)" data-t>Отмена</button>
+      <button class="btn text state" id="d-ok" data-t>ОК</button>
     </div>
   </div>
 </div>
@@ -747,7 +753,7 @@
 <!-- ═══ Snackbar: над Navigation bar ═══════════════════════════════════════ -->
 <div class="snackbar" id="prompt-container" role="status" aria-live="polite">
   <span class="snack-msg" id="prompt-msg"></span>
-  <button class="btn text sm state" id="prompt-action" aria-label="Действие" hidden></button>
+  <button class="btn text sm state" id="prompt-action" hidden data-t>Повторить</button>
 </div>
 <script src="js/core.js"></script>
 <script src="js/status.js"></script>

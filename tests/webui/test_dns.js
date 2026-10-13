@@ -81,7 +81,6 @@ window.__presets = ${JSON.stringify(PRESETS)};
       case 'dns-save-b64': try { st.profiles[a[1]] = norm(dec(a[2])); return [0, 'OK']; } catch (e) { return [1, '', String(e)]; }
       case 'dns-profile-enable': st.profiles[a[1]] = st.profiles[a[1]].replace(/ENABLED=\\d/, 'ENABLED=' + a[2]); return [0, 'OK'];
       case 'dns-delete': a.slice(1).forEach(id => { delete st.profiles[id]; if (st.def === id) st.def = 'net'; }); return [0, 'OK'];
-      case 'dns-test': return [0, '57.144.154.34\\t' + (Object.keys(st.profiles).find(id => st.profiles[id].includes('DOMAIN=' + a[1])) || '')];
     }
     return [1, '', 'unknown'];
   }
@@ -95,7 +94,9 @@ window.__presets = ${JSON.stringify(PRESETS)};
     else if (cmd.indexOf('get-strategy') >= 0) out = 'default';
     else if (cmd.indexOf("'dns-") >= 0) { const a = args(cmd); const r = dns(a.slice(a.findIndex(x => x.startsWith('dns-'))));
       rc = r[0]; out = r[1] || ''; err = r[2] || ''; }
-    setTimeout(function(){ if (window[id]) window[id](rc, out, err); }, 0);
+    // __dnsSlow: медленный ответ dns-state — проверка слепка экрана
+    var slow = cmd.indexOf("'dns-state'") >= 0 && window.__dnsSlow;
+    setTimeout(function(){ if (window[id]) window[id](rc, out, err); }, slow ? 1500 : 0);
     return 'job';
   }};
 })();
@@ -271,7 +272,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     eq(2, await page.$$eval('#dns-profiles .list-item.selected', r => r.length), 'a tap adds a profile to the selection');
     await page.click('#bar-actions .icon-btn:nth-child(2)'); await idle();
     eq(0, await page.$$eval('#dns-profiles .checkbox', r => r.length), 'cancel brings the switches back');
-    eq('DNS по профилям', await page.textContent('#app-title'), 'and the title');
+    eq('DNS профили', await page.textContent('#app-title'), 'and the title');
     await longPress('#dns-profiles .list-item:has-text("Alpha")');
     await page.click('#bar-actions .icon-btn:nth-child(1)'); await idle();
     eq(total, await page.$$eval('#dns-profiles .list-item.selected', r => r.length), 'select all selects every profile');
@@ -301,14 +302,35 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     await page.evaluate(() => navigate('dns')); await idle();
     eq(0, await page.$$eval('#dns-profiles .checkbox', r => r.length), 'and restores the switches');
 
+    sect(`${mode}: snapshot while loading`);
+    {
+      // свежая страница (кэш экрана в памяти пуст), ответ dns-state задерживается
+      const p2 = await ctx.newPage();
+      await p2.goto(INDEX, { waitUntil: 'load' });
+      // localStorage между вкладками Chromium синхронизирует асинхронно и под
+      // нагрузкой может не успеть: слепок первой вкладки переносится явно
+      const snapDns = await page.evaluate(() => snapGet('dns'));
+      truthy(!!snapDns, 'the DNS screen left a snapshot behind');
+      await p2.evaluate(v => snapSet('dns', v), snapDns);
+      await p2.evaluate(() => { window.__dnsSlow = 1; navigate('dns'); });
+      await p2.waitForTimeout(500);
+      const early = await p2.evaluate(() => ({ count: document.querySelectorAll('#dns-profiles .list-item').length,
+        on: $('dns-toggle').checked, locked: document.querySelector('.page[data-page="dns"]').inert }));
+      truthy(early.count > 0, 'before the answer the last seen profiles are already on screen: ' + early.count);
+      truthy(early.locked, 'the snapshot takes no taps until fresh data arrive');
+      await p2.waitForTimeout(1600);
+      truthy(await p2.evaluate(() => !document.querySelector('.page[data-page="dns"]').inert), 'fresh data unlock the screen');
+      await p2.close();
+    }
+
     sect(`${mode}: scroll position`);
-    await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight)); await idle();
-    const y0 = await page.evaluate(() => scrollY);
+    await page.evaluate(() => scrollToY(scroller.scrollHeight)); await idle();
+    const y0 = await page.evaluate(() => scrollPos());
     truthy(y0 > 0, 'the DNS screen is scrolled down');
     await page.evaluate(() => openDnsProfile(dnsSt.profiles[0].id)); await page.waitForTimeout(900);
-    eq(0, await page.evaluate(() => scrollY), 'a profile opens from the top');
+    eq(0, await page.evaluate(() => scrollPos()), 'a profile opens from the top');
     await page.evaluate(() => goBack()); await page.waitForTimeout(900);
-    eq(y0, await page.evaluate(() => scrollY), 'back returns to the same place in the list');
+    eq(y0, await page.evaluate(() => scrollPos()), 'back returns to the same place in the list');
     await page.evaluate(() => goBack()); await page.waitForTimeout(900);
     eq('settings', await page.evaluate(() => currentPage), 'back to settings');
     await page.evaluate(() => navigate('dns')); await page.waitForTimeout(900);

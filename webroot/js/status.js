@@ -160,8 +160,11 @@ const SW = [
   ['AUTOSTART', 'Автозапуск при загрузке', 'autostart'],
   ['IPV6_ENABLED', 'Обрабатывать IPv6', 'ipv6'],
   ['BLOCK_QUIC', 'Блокировать QUIC', 'block_quic'],
-  ['ENABLE_HOTSPOT', 'Точка доступа с nfqws2', 'enable_hotspot']
+  ['ENABLE_HOTSPOT', 'Точка доступа с nfqws2', 'enable_hotspot'],
+  ['CALLS_BYPASS', 'Обход звонков', 'calls_bypass']
 ];
+// Меняют аргументы nfqws2 — служба перезапускается сама, без вопроса
+const RESTART_KEYS = {CALLS_BYPASS: 1};
 const DEV_SW = [
   ['WATCHDOG', 'Watchdog', 'watchdog'],
   ['META_QUIC_REJECT', 'Отказ QUIC для Instagram', 'meta_quic']
@@ -223,13 +226,15 @@ function renderStatus(){
   const paused = !j.running && !!j.paused;
   if(j.strategy) currentStrategy = j.strategy;
   $('hero-status').className = 'hero' + (j.running ? ' running' : (paused ? ' paused' : ''));
+  heroIcon(j.running ? 'shield' : (paused ? 'pause' : 'stop'));
+  // На паузе времени работы нет — строка с прочерком только занимала место
+  $('hero-stats').hidden = paused;
   $('st').textContent = j.running ? t('Служба работает') : (paused ? t('Пауза') : t('Служба остановлена'));
   // Вместо лимита (он зависит от ядра и виден в «Диагностике») — состояние DNS
   const dns = j.dns_available == 1 ? ' · ' + (j.dns_enabled == 1 ? t('DNS включён') : t('DNS выключен')) : '';
-  // Одна строка в любом состоянии: карточка не меняет высоту при паузе.
-  // Подробности паузы — в title (долгое нажатие) и в журнале службы.
+  // Подпись — одна строка; подробности паузы — в title (долгое нажатие).
   const sub = paused
-    ? (j.paused === '@vpn' ? t('Включён VPN') : t('Домашняя Wi‑Fi «{0}»', j.paused)) + dns
+    ? (j.paused === '@vpn' ? t('Включён VPN') : t('Домашняя Wi‑Fi')) + dns
     : t('Режим') + ' ' + (j.mode || '—') + dns;
   $('sub').textContent = sub;
   $('sub').title = paused ? (j.paused === '@vpn' ? t('Включён VPN. Обход возобновится, когда VPN отключится.')
@@ -245,6 +250,9 @@ function renderStatus(){
   setHTML('warn', w, false);
 }
 
+/* Значок в карточке: щит — обход работает, пауза, стоп, ошибка связи */
+function heroIcon(name){ const u = $('hero-ic'); if(u) u.setAttribute('href', '#i-' + name); }
+
 let statPending = null;
 async function stat(quiet){
   if(statPending) return statPending;
@@ -257,6 +265,8 @@ async function stat(quiet){
     if(!j){
       if(quiet) return;
       $('hero-status').className = 'hero offline';
+      heroIcon('error');
+      $('hero-stats').hidden = false;
       $('st').textContent = t('Нет связи с модулем');
       $('sub').textContent = t('Проверьте root-доступ и наличие {0}', CTL);
       stopUptTimer();
@@ -304,7 +314,9 @@ async function statPoll(){
   sigBusy = true;
   try {
     // «Списки» и счётчики меняются без смены подписи — раз в 5 с полный статус
-    if(currentPage !== 'control' || statSig === null || Date.now() - lastFull >= 5000){ await fullStat(); return; }
+    const due = Date.now() - lastFull >= 5000;
+    if(currentPage !== 'control'){ if(due) await fullStat(); return; }
+    if(statSig === null || due){ await fullStat(); return; }
     const sig = await readSig();
     if(sig !== null && sig !== statSig && pollIdle()){ await fullStat(); return; }
   } finally { sigBusy = false; }
@@ -316,6 +328,14 @@ document.addEventListener('visibilitychange', () => {
 
 async function setp(k, v){
   const r = await withBusy(['set', k, String(v)]);
+  // не сохранилось — S прежний, разметка та же, и setHTML не вернул бы
+  // переключатель на место: сбрасываем его кэш
+  if(r.code) ['sws', 'dev-sws'].forEach(id => { const el = $(id); if(el) el._html = ''; });
+  if(!r.code && RESTART_KEYS[k] && S.running){
+    const rr = await withBusy(['restart'], 60000);
+    toast(rr.code ? errText(rr, 'Не удалось перезапустить службу') : t('Сохранено, служба перезапущена'));
+    return stat();
+  }
   const needRestart = !r.code && S.running && /перезапуск/i.test(r.out);
   toast(r.code ? errText(r, 'Не удалось сохранить') : (needRestart ? t('Применится после перезапуска службы') : t('Сохранено')),
     needRestart ? {label: t('Перезапустить'), fn: restartSvc} : null);

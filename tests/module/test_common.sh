@@ -258,6 +258,33 @@ assert_not_contains "$args" "#" "without the comments of its file"
 pre=${args%%--filter-tcp=443,853*}
 assert_not_contains "$pre" "--new" "before every strategy profile"
 
+section "_startup_args: call bypass"
+conf_reset
+unset DOH_BYPASS   # осталась из прошлой секции: set_defaults не сбрасывает заданное
+reload_conf
+args=$(_startup_args)
+assert_not_contains "$args" "calls_stun" "off by default"
+printf 'CALLS_BYPASS=1\n' >> "$CONFFILE"
+reload_conf
+args=$(_startup_args)
+assert_contains "$args" "--blob=calls_stun:@$BLOBS_DIR/stun.bin" "on: the STUN blob is loaded"
+assert_contains "$args" "--filter-udp=590-1400,3478-3482 --filter-l7=stun" "STUN on call ports is faked"
+assert_contains "$args" "157.240.0.0/16" "the Meta networks are filled in"
+assert_contains "$args" "149.154.160.0/20" "and the Telegram ones"
+assert_contains "$args" "2001:67c:4e8::/48" "IPv6 included"
+assert_not_contains "$args" "@META@" "no placeholder is left"
+assert_contains "$args" "--hostlist-domains=whatsapp.net" "the WhatsApp TLS channel has its profile"
+assert_not_contains "$args" "#" "without the comments of its file"
+pre=${args%%--filter-udp=590-1400*}
+assert_not_contains "$pre" "--new" "before every strategy profile"
+
+section "port_list_add"
+assert_eq "443,5349,19294:19344,49152:65535,590:1400,3478:3482" \
+  "$(port_list_add 443,590:600,1400,3478:3481,5349,19294:19344,49152:65535 590:1400 3478:3482)" \
+  "ranges absorb the ports they cover, so multiport keeps under 15"
+assert_eq "80,443,5222" "$(port_list_add 80,443,5222 5222)" "a port already there stays once"
+assert_eq "80,443,5222" "$(port_list_add 80,443 5222)" "a missing one is appended"
+
 # ── render_import_merged ──────────────────────────────────────────────────────
 section "render_import_merged"
 

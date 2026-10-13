@@ -118,7 +118,7 @@ html[data-mode="dark"] { --tk-keyword: #569cd6; --tk-string: #ce9178; --tk-strin
 @media (orientation: landscape) and (min-width: 700px) {
   :root { --content-max: 1200px; }
   .sheet { max-width: 760px; }
-  .page.split.active, .page.split.leaving {
+  .page.split.active, .page.split.leaving, .page.split.peek {
     display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 24px; align-items: start; }
   .page.split > .pcol { display: flex; flex-direction: column; gap: var(--gap); min-width: 0; }
   .logs-page.split.active, .logs-page.split.leaving { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
@@ -128,12 +128,12 @@ html[data-mode="dark"] { --tk-keyword: #569cd6; --tk-string: #ce9178; --tk-strin
 }
 
 /* ── Фон под открытыми листами, диалогами и меню не прокручивается ────── */
-html.scroll-locked, html.scroll-locked body { overflow: hidden; }
+html.scroll-locked .scroller { overflow-y: hidden; }
 .sheet, .sheet-scroll, .fs-body, .code-edit > textarea, .log-view, .menu { overscroll-behavior: contain; }
 .scrim, .dialog-scrim, .menu-back { touch-action: none; }
 
-/* ── AMOLED: навигационный бар отделён тонким разделителем ────────────── */
-html[data-amoled="true"] .nav-bar { box-shadow: inset 0 1px 0 color-mix(in srgb, var(--md-sys-color-outline-variant) 70%, transparent); }
+/* ── AMOLED: капсула навигации обведена тонкой линией ────────────── */
+html[data-amoled="true"] .nav-bar { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--md-sys-color-outline-variant) 70%, transparent); }
 
 /* ── Лист темы ───────────────────────────────────────────────────────── */
 .theme-sheet { gap: 14px; }
