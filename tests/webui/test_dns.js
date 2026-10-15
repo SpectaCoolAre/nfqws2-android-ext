@@ -302,6 +302,28 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     await page.evaluate(() => navigate('dns')); await idle();
     eq(0, await page.$$eval('#dns-profiles .checkbox', r => r.length), 'and restores the switches');
 
+    sect(`${mode}: IPv6 note only when a working profile has an IPv6 server`);
+    {
+      const v6note = await page.evaluate(() => {
+        const keep = {status: dnsSt.status, profiles: dnsSt.profiles};
+        const run = profiles => { dnsSt.status = {enabled: '1', ipv6: 'none', rules: 'on', default: 'net'}; dnsSt.profiles = profiles; return /IPv6/.test(dnsWarnings()); };
+        const r = {
+          v4only: run([{id: 'a', enabled: true, servers: ['1.1.1.1', 'tls://one.one.one.one'], domains: []}]),
+          v6on: run([{id: 'a', enabled: true, servers: ['1.1.1.1', '2606:4700::1111'], domains: []}]),
+          v6off: run([{id: 'a', enabled: false, servers: ['tls://[2606:4700::1111]'], domains: []}])
+        };
+        dnsSt.status = {enabled: '1', ipv6: 'none', rules: 'on', default: 'a'};
+        dnsSt.profiles = [{id: 'a', enabled: false, servers: ['[2001:db8::1]:53'], domains: []}];
+        r.v6default = /IPv6/.test(dnsWarnings());
+        dnsSt.status = keep.status; dnsSt.profiles = keep.profiles;
+        return r;
+      });
+      eq(false, v6note.v4only, 'no IPv6 servers in the profiles — no IPv6 note');
+      eq(true, v6note.v6on, 'an enabled profile with an IPv6 server — the note is shown');
+      eq(false, v6note.v6off, 'an IPv6 server only in a disabled profile does not count');
+      eq(true, v6note.v6default, 'the default profile counts even when not switched on');
+    }
+
     sect(`${mode}: snapshot while loading`);
     {
       // свежая страница (кэш экрана в памяти пуст), ответ dns-state задерживается

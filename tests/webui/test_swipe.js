@@ -184,6 +184,16 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   eq('', await page.evaluate(() => document.querySelector('.page.active').style.transform), 'the page springs back on release');
   eq('control', await cur(), 'and the tab is the same');
 
+  sect('pull to refresh');
+  await page.evaluate(() => { window.__rc = 0; const o = window.ksu.exec; window.ksu.exec = function(c){ if (c.indexOf('net-recheck') >= 0) window.__rc++; return o.apply(this, arguments); }; });
+  await touch(line(190, 200, 190, 260, 8));
+  eq(0, await page.evaluate(() => __rc), 'a short pull on the status screen does not refresh');
+  let ptrMid = '';
+  await touch(line(190, 200, 190, 440, 12), { mid: async () => { ptrMid = await page.evaluate(() => [$('ptr').style.opacity, $('ptr').classList.contains('ready')].join()); } });
+  eq('1,true', ptrMid, 'a long pull shows the refresh mark, ready to fire');
+  eq(1, await page.evaluate(() => __rc), 'and releasing it asks the service to recheck network, VPN and DNS');
+  eq('0', await page.evaluate(() => $('ptr').style.opacity), 'the mark goes away when done');
+
   sect('fling into an edge');
   // Системный отскок WebView отключён (двигал шапку и навигацию), поэтому
   // удар инерции о край — свой: короткое растяжение страницы
@@ -198,12 +208,29 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await page.waitForTimeout(1500);
   };
-  await page.evaluate(() => scrollToY(Math.max(0, scroller.scrollHeight - scroller.clientHeight - 120)));
-  await page.waitForTimeout(100);
-  await flick(400, 290);
-  eq('bottom', await page.evaluate(() => __abs.join()), 'a fling that runs into the bottom bounces the page');
-  await flick(160, 420);
-  eq('bottom,top', await page.evaluate(() => __abs.join()), 'and one into the top bounces it too');
+  // Бросок через CDP: под нагрузкой (тесты идут параллельно) он бывает слабым и
+  // не доезжает до края — тогда повторяем. Падение — только если инерция
+  // довела до края, а отскока не было.
+  async function flingInto(edge) {
+    for (let i = 0; i < 4; i++) {
+      await page.evaluate(e => { __abs.length = 0; window.__hit = 0;
+        const max = scroller.scrollHeight - scroller.clientHeight;
+        scrollToY(e === 'bottom' ? Math.max(0, max - 250) : Math.min(max, 250));
+        scroller.addEventListener('scroll', function f(){
+          const m = scroller.scrollHeight - scroller.clientHeight, top = scrollPos();
+          // до края доехала инерция и быстро: тут отскок обязан быть (медленный подъезд — без него)
+          if (!fling.touching && (e === 'bottom' ? top >= m - 1 : top <= 0)) { window.__hit = Math.abs(fling.v) > .3 ? 1 : 0; scroller.removeEventListener('scroll', f); }
+        });
+      }, edge);
+      await page.waitForTimeout(100);
+      if (edge === 'bottom') await flick(460, 280); else await flick(240, 420);
+      const r = await page.evaluate(() => [__abs.join(), window.__hit]);
+      if (r[0] || r[1]) return r[0];
+    }
+    return 'never reached';
+  }
+  eq('bottom', await flingInto('bottom'), 'a fling that runs into the bottom bounces the page');
+  eq('top', await flingInto('top'), 'and one into the top bounces it too');
   eq(navF, await navGeo(), 'the navigation bar does not move');
 
   sect('child screens');

@@ -428,6 +428,54 @@ $('prompt-action').onclick = () => {
   if(a && a.fn) a.fn();
 };
 
+/* ── Долгое нажатие ────────────────────────────────────────────────────────
+   Дополнительные действия спрятаны за удержанием (500 мс без сдвига пальца):
+   обычное нажатие остаётся простым, продвинутое — под рукой. Делегирование:
+   root слушает, sel выбирает элемент (без sel — сам root). Click, который
+   приходит после срабатывания, гасится на уровне документа — до onclick
+   элемента и до переключения radio в label (и до подложки открытого меню). Касание у края экрана — жест
+   системы Android, его не считаем; свернули WebView или увели экран — отмена. */
+let longGuard = null;
+document.addEventListener('click', e => {
+  const g = longGuard;
+  if(!g) return;
+  longGuard = null;
+  // после удержания под пальцем уже может быть открытое меню или его подложка:
+  // гасим click того же касания, где бы он ни пришёлся
+  if(performance.now() - g.at < 1500){ e.stopPropagation(); e.preventDefault(); }
+}, true);
+// новое касание — новый жест: старая защита ему не мешает
+document.addEventListener('pointerdown', () => { longGuard = null; }, true);
+const longCancels = [];
+['blur', 'pagehide'].forEach(ev => addEventListener(ev, () => longCancels.forEach(c => c())));
+document.addEventListener('visibilitychange', () => longCancels.forEach(c => c()));
+function onLongPress(root, sel, fn){
+  if(!root) return;
+  let tm = 0, x0 = 0, y0 = 0;
+  const cancel = () => { clearTimeout(tm); tm = 0; };
+  longCancels.push(cancel);
+  root.addEventListener('pointerdown', e => {
+    cancel();
+    longGuard = null;
+    if(e.pointerType === 'mouse' && e.button !== 0) return;
+    const el = sel ? e.target.closest(sel) : root;
+    if(!el || !root.contains(el)) return;
+    if(e.pointerType !== 'mouse' && inGestureZone(e.clientX, e.clientY)) return;
+    x0 = e.clientX; y0 = e.clientY;
+    const page = currentPage;
+    tm = setTimeout(() => {
+      tm = 0;
+      if(!el.isConnected || currentPage !== page || document.hidden) return;
+      longGuard = {el, at: performance.now()};
+      document.querySelectorAll('.ripple').forEach(r => r.remove());
+      fn(el);
+    }, 500);
+  });
+  root.addEventListener('pointermove', e => { if(tm && Math.hypot(e.clientX - x0, e.clientY - y0) > 10) cancel(); });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => root.addEventListener(ev, cancel));
+  root.addEventListener('contextmenu', e => { if(!sel || e.target.closest(sel)) e.preventDefault(); });
+}
+
 /* ── Индикатор занятости (linear progress под app bar) ─────────────────── */
 let busyCount = 0;
 function busy(on){
@@ -532,10 +580,10 @@ const PAGE_META = {
   lists:    {title: 'Списки', init: () => { renderMode(); renderListFiles(); stat(); }},
   settings: {title: 'Настройки', init: () => renderSettings()},
   config:   {title: 'Конфиг', init: () => confInit()},
-  logs:     {title: 'Журналы', child: true, init: () => loadLog()},
+  logs:     {title: 'Журналы', child: true, init: () => { renderLogsLong(); loadLog(); }},
   wifi:     {title: 'Отключать на Wi‑Fi', child: true, parent: 'settings', init: () => wifiInit()},
   apps:     {title: 'Фильтр приложений', child: true, parent: 'settings', init: () => appsInit(),
-             actions: [{icon: 'refresh', label: 'Обновить список приложений', fn: () => loadPk()}]},
+             actions: [{icon: 'refresh', label: 'Обновить список приложений', fn: () => loadPk(true)}]},
   test:     {title: 'Проверка доступности', child: true, parent: 'settings', init: () => testInit()},
   diag:     {title: 'Диагностика', child: true, parent: 'settings', init: () => diagInit(),
              actions: [{icon: 'refresh', label: 'Проверить снова', fn: () => diagInit()}]},
@@ -809,7 +857,7 @@ function navigate(page, slide){
   if(dnsSel){ dnsSel = null; if(currentPage === 'dns') renderDns(); }
   if(mode === 'forward') delete pageScroll[page];
   currentPage = page;
-  if(!PAGE_META[page].child) lastTop = page;
+  if(!PAGE_META[page].child){ lastTop = page; backOverride = null; }
   renderNavBar(page);
   renderAppBar(page, mode !== 'slide');
   showPage(page, mode, slide);
@@ -826,8 +874,17 @@ function navigate(page, slide){
   });
   scheduleSync();
 }
+/* Экран, открытый не со своего родителя (DNS — долгим нажатием на карточке
+   состояния), возвращает «назад» туда, откуда открыт */
+let backOverride = null;
+function openFrom(page){
+  backOverride = {page, to: currentPage};
+  navigate(page);
+}
 function goBack(){
   if(dnsSel && currentPage === 'dns') return dnsSelExit();
+  const o = backOverride;
+  if(o && o.page === currentPage){ backOverride = null; return navigate(o.to); }
   navigate(PAGE_META[currentPage].parent || lastTop);
 }
 /* Нажатие на вкладку засчитывается по pointerup, а не по click: после
@@ -856,32 +913,21 @@ document.querySelectorAll('.nav-dest:not([data-page="settings"])').forEach(b => 
 
 $('logs-btn').onclick = () => navigate('logs');
 
-/* ── Режим разработчика: долгое нажатие на вкладку «Настройки» ───────────
-   Показывает в настройках блок «Для разработчиков» — то, что обычному
-   пользователю не нужно (контроль работы, лимиты пакетов).
-   Обычное нажатие по-прежнему открывает настройки; после долгого нажатия
-   следующий click гасится, чтобы настройки не открылись вдобавок. */
+/* ── Режим разработчика: долгое нажатие на название модуля или его значок в
+   шапке. Показывает в настройках блок «Для разработчиков» — то, что обычному
+   пользователю не нужно (контроль работы, лимиты пакетов). */
 let devMode = store.get('nfq_dev') === '1';
-(function bindSettingsPress(){
-  const b = $('nav-settings');
-  if(!b) return;
-  let tm = 0, fired = false;
-  const cancel = () => { clearTimeout(tm); tm = 0; };
-  b.addEventListener('pointerdown', () => {
-    cancel(); fired = false;
-    tm = setTimeout(() => {
-      tm = 0; fired = true;
-      devMode = !devMode;
-      store.set('nfq_dev', devMode ? '1' : '0');
-      renderParams(S);
-      if(currentPage === 'settings') renderSettings();
-      toast(devMode ? t('Режим разработчика включён') : t('Режим разработчика выключен'));
-    }, 650);
-  });
-  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => b.addEventListener(ev, cancel));
-  b.addEventListener('contextmenu', e => e.preventDefault());
-  bindNavTap(b, () => { if(fired){ fired = false; return; } navigate('settings'); });
-})();
+function toggleDevMode(){
+  devMode = !devMode;
+  store.set('nfq_dev', devMode ? '1' : '0');
+  renderParams(S);
+  if(currentPage === 'settings') renderSettings();
+  toast(devMode ? t('Режим разработчика включён') : t('Режим разработчика выключен'));
+}
+['app-title', 'brand-logo'].forEach(id => onLongPress($(id), null, () => {
+  if($('app-bar').classList.contains('top')) toggleDevMode();
+}));
+bindNavTap($('nav-settings'), () => navigate('settings'));
 
 /* Зоны системных жестов Android: полоска внизу (домой, недавние) и края
    слева/справа («назад»). Касание оттуда — жест системы, а не нажатие на
@@ -913,9 +959,44 @@ function stretchApply(){
   const oy = p > 0 ? 0 : scroller.clientHeight - el.getBoundingClientRect().top;
   el.style.transformOrigin = '50% ' + oy + 'px';
   el.style.transform = 'scaleY(' + k + ')';
+  if(currentPage === 'control' && !ptrBusy) p > 0 ? ptrShow(p) : ptrHide();
+}
+/* «Состояние»: оттянуть от верха дальше порога и отпустить — обновить.
+   Служба заново смотрит на сеть, VPN и DNS (net-recheck), потом страница
+   перечитывает статус — на случай, если смену сети что-то пропустило */
+const PTR_PULL = 110;
+let ptrBusy = false;
+function ptrShow(p){
+  const el = $('ptr'), k = Math.min(1, p / PTR_PULL);
+  el.classList.remove('hide');
+  el.style.opacity = k;
+  el.style.transform = 'translateY(' + Math.round(k * 24) + 'px) rotate(' + Math.round(k * 270) + 'deg) scale(' + (.6 + .4 * k) + ')';
+  el.classList.toggle('ready', k >= 1);
+}
+function ptrHide(){
+  const el = $('ptr');
+  el.classList.add('hide');
+  el.classList.remove('ready', 'spin');
+  el.style.opacity = 0;
+  el.style.transform = '';
+}
+async function refreshStatusPage(){
+  if(ptrBusy) return;
+  ptrBusy = true;
+  const el = $('ptr');
+  el.classList.add('spin');
+  el.style.transform = 'translateY(24px)';
+  try {
+    await ctlx(['net-recheck'], 30000);
+    statSig = null;
+    await Promise.all([fullStat(), initStrategySelector()]);
+  } finally { ptrBusy = false; ptrHide(); }
 }
 function stretchRelease(){
-  const el = stretch.el;
+  const el = stretch.el, pulled = stretch.pull;
+  if(el && currentPage === 'control' && !ptrBusy){
+    if(pulled >= PTR_PULL) refreshStatusPage(); else ptrHide();
+  }
   stretch.el = null; stretch.pull = 0;
   if(!el || !el.classList.contains('stretch')) return;
   el.classList.add('stretch-release');
@@ -952,7 +1033,11 @@ document.addEventListener('touchmove', e => {
   if(p !== 0 && e.cancelable) e.preventDefault();
   if(p === stretch.pull) return;
   stretch.pull = p;
-  if(p === 0){ el.classList.remove('stretch'); el.style.transform = ''; el.style.transformOrigin = ''; return; }
+  if(p === 0){
+    el.classList.remove('stretch'); el.style.transform = ''; el.style.transformOrigin = '';
+    if(currentPage === 'control' && !ptrBusy) ptrHide();
+    return;
+  }
   el.classList.add('stretch');
   el.classList.remove('stretch-release');
   stretchApply();

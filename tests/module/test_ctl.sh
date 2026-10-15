@@ -428,6 +428,17 @@ ctl share text "$CONFFILE"
 assert_contains "$(cat "$MOCK_DIR/am.log")" "android.intent.extra.TEXT" "or as text"
 ctl share file /etc/passwd
 assert_rc 1 "$ctl_rc" "other files cannot be shared"
+ctl strategy-path alt
+sp=$ctl_out
+assert_eq "$STRATEGIES_DIR/alt.conf" "$sp" "strategy-path gives the built-in file of a strategy"
+ctl share text "$sp"
+assert_rc 0 "$ctl_rc" "a strategy can be shared from its menu"
+ctl strategy-path default
+assert_eq "$MODDIR/defaults/nfqws2.conf" "$ctl_out" "and the default one"
+ctl share file "$STRATEGIES_DIR/../service.sh"
+assert_rc 1 "$ctl_rc" "but not a path that climbs out of the strategies"
+ctl strategy-path nosuch
+assert_rc 1 "$ctl_rc" "an unknown strategy has no path"
 rm -f "$MOCKBIN/am"
 
 # ── doctor / status ───────────────────────────────────────────────────────────
@@ -517,5 +528,29 @@ assert_eq "$(cat "$MODDIR/strategies/hardcorp74.conf")" "$(cat "$CONFFILE")" "an
 ctl conf-modified
 assert_eq "0" "$ctl_out" "which reads as unmodified"
 conf_reset; rm -f "$CONFDIR/state/active_strategy"
+
+# ── list-apps (из оригинала, 0badd3d) ──────────────────────────────────────────
+section "list-apps"
+mkdir -p "$STATE_DIR"
+cat > "$STATE_DIR/apps_cache.json" <<'JSON'
+[{"pkg":"com.example.test","name":"Test App","icon":"","system":false}]
+JSON
+ctl list-apps
+assert_rc 0 "$ctl_rc" "list-apps answers from the cache"
+assert_contains "$ctl_out" "com.example.test" "with the cached names and icons"
+ctl list-apps refresh
+assert_rc 0 "$ctl_rc" "a refresh without the generator still succeeds"
+assert_contains "$ctl_out" "com.example.test" "and keeps the rich cache instead of bare package names"
+rm -f "$STATE_DIR/apps_cache.json"
+cat > "$MOCKBIN/pm" <<'PM'
+#!/bin/sh
+echo "package:com.fallback.one"
+echo "package:com.fallback.two"
+PM
+chmod 0755 "$MOCKBIN/pm"
+ctl list-apps
+assert_rc 0 "$ctl_rc" "without a cache and generator pm is the fallback"
+assert_contains "$ctl_out" "com.fallback.one" "package names without the prefix"
+rm -f "$MOCKBIN/pm"
 
 harness_finish

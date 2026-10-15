@@ -95,6 +95,8 @@
 <div class="progress-top" id="progress-top" hidden><div class="progress-linear" role="progressbar"
      aria-label="Выполняется запрос к службе" data-ta="aria-label" aria-busy="true"><div class="bar"></div></div></div>
 
+<!-- «Состояние»: оттянуть вниз — обновить (служба заново проверяет сеть, VPN и DNS) -->
+<div class="ptr" id="ptr" aria-hidden="true"><svg class="icon s24"><use href="#i-refresh"/></svg></div>
 <div class="scroller" id="scroller">
 <main class="content" id="content">
   <!-- ═══ СОСТОЯНИЕ ═══════════════════════════════════════════════════════ -->
@@ -116,7 +118,7 @@
             <span data-t>Запустить</span>
           </button>
           <button class="icon-btn hero-restart state" id="bt-pause" onclick="pauseHome()" hidden
-                  aria-label="Вернуть паузу в домашней Wi‑Fi" title="Вернуть паузу в домашней Wi‑Fi" data-ta="aria-label,title">
+                  aria-label="Вернуть паузу в домашнем Wi‑Fi" title="Вернуть паузу в домашнем Wi‑Fi" data-ta="aria-label,title">
             <svg aria-hidden="true" class="icon"><use href="#i-pause"/></svg>
           </button>
           <button class="icon-btn hero-restart state" id="bt-restart" onclick="restartSvc()" hidden
@@ -216,6 +218,13 @@
         </button>
       </div>
       <div class="list">
+        <div class="list-item two-line clickable state" role="button" tabindex="0" aria-haspopup="menu" onclick="pickLogsLong(this)">
+          <span class="li-text">
+            <span class="li-primary" data-t>Долгий тап по значку</span>
+            <span class="li-secondary" id="logs-long-value">Экспорт логов</span>
+          </span>
+          <span class="li-trail"><svg aria-hidden="true" class="icon s24"><use href="#i-caret"/></svg></span>
+        </div>
         <label class="list-item two-line clickable state">
           <span class="li-text">
             <span class="li-primary" data-t>Подробный журнал отладки</span>
@@ -285,10 +294,10 @@
   </section>
 
   <!-- ═══ ДОМАШНЯЯ WI-FI (дочерний экран настроек) ═══════════════════════ -->
-  <section class="page" data-page="wifi" aria-label="Домашняя Wi‑Fi" data-ta="aria-label">
+  <section class="page" data-page="wifi" aria-label="Домашний Wi‑Fi" data-ta="aria-label">
     <label class="main-switch state" id="wifi-main">
-      <span class="grow" data-t>Пауза в домашней Wi‑Fi</span>
-      <input type="checkbox" class="switch" role="switch" id="wifi-toggle" aria-label="Пауза в домашней Wi‑Fi" data-ta="aria-label"
+      <span class="grow" data-t>Пауза в домашнем Wi‑Fi</span>
+      <input type="checkbox" class="switch" role="switch" id="wifi-toggle" aria-label="Пауза в домашнем Wi‑Fi" data-ta="aria-label"
              onchange="setHomeWifi(this.checked)">
     </label>
     <div class="helper" data-t>В сетях из списка обход ставится на паузу и сам возобновляется, когда телефон из них уходит. Запустить службу вручную можно в любой момент — до смены сети она останется включённой.</div>
@@ -612,6 +621,7 @@
   <button type="button" class="sheet-drag" aria-label="Закрыть" data-ta="aria-label"><span class="handle"></span></button>
   <div class="sheet-title" id="strategy-sheet-title" data-t>Стратегия обхода</div>
   <div class="sheet-desc" data-t>Выбранная стратегия заменит nfqws2.conf, прежний сохранится как .bak. Ваши переключатели, режим списков и фильтр приложений сохранятся.</div>
+  <div class="sheet-hint"><svg aria-hidden="true" class="icon s18"><use href="#i-info"/></svg><span data-t>Удерживайте стратегию, чтобы изменить её, поделиться или скопировать</span></div>
   <div class="sheet-scroll" id="strategy-list" role="radiogroup" aria-label="Стратегии" data-ta="aria-label"></div>
   <div class="sheet-actions">
     <button class="btn text state" onclick="closeSheet()"><span data-t>Отмена</span></button>

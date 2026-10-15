@@ -1,4 +1,4 @@
-/* nfqws2 WebUI · settings.js — настройки, домашняя Wi‑Fi, резервная копия
+/* nfqws2 WebUI · settings.js — настройки, домашний Wi‑Fi, резервная копия
    Скрипты подключаются из index.html обычными <script> по порядку и делят одну
    глобальную область: функции и let/const одного файла видны в остальных. */
 
@@ -15,8 +15,9 @@ function settingsRow(o){
         ' onchange="' + o.on + '"></span>' +
     '</label>';
   }
-  return '<div class="list-item' + (o.sub ? ' two-line' : '') + (o.on ? ' clickable state" role="button" tabindex="0"' +
-      (o.menu ? ' aria-haspopup="menu"' : '') + ' onclick="' + o.on + '"' : '"') + '>' +
+  return '<div class="list-item' + (o.sub ? ' two-line' : '') + (o.on ? ' clickable state' : '') + '"' +
+    (o.long ? ' data-long="' + o.long + '"' : '') +
+    (o.on ? ' role="button" tabindex="0"' + (o.menu ? ' aria-haspopup="menu"' : '') + ' onclick="' + o.on + '"' : '') + '>' +
     '<span class="li-icon">' + icon(o.icon, 's24') + '</span>' +
     '<span class="li-text"><span class="li-primary">' + esc(t(o.title)) + '</span>' +
       (o.sub ? '<span class="li-secondary">' + esc(o.sub) + '</span>' : '') + '</span>' +
@@ -33,7 +34,7 @@ function renderSettings(){
     ]],
     ['Инструменты', (S.dns_available == 1 ? [
       // только если в модуле есть dnsproxy
-      {icon: 'dns', title: 'DNS профили', sub: t('Свои DoH, DoT и DNS-серверы для выбранных доменов'), on: "navigate('dns')", chevron: true}
+      {icon: 'dns', title: 'DNS профили', sub: t('Свои DoH, DoT и DNS-серверы для выбранных доменов'), on: "navigate('dns')", chevron: true, long: 'dns'}
     ] : []).concat([
       {icon: 'edit', title: 'Редактор hosts', sub: t('Обход ограничений и блокировка рекламы — без перезагрузки'), on: "navigate('hosts')", chevron: true},
       {icon: 'apps', title: 'Фильтр приложений', sub: t('Обход только для выбранных приложений или для всех, кроме них'), on: "navigate('apps')", chevron: true},
@@ -47,11 +48,10 @@ function renderSettings(){
     ['Оформление', [
       {icon: 'palette', title: 'Тема оформления', sub: t('Светлая, тёмная, AMOLED и цвет акцента'), on: 'openMonetModal()'},
       {icon: 'apps', title: 'Ярлык на рабочий стол', sub: t('Добавить на главный экран телефона'), on: 'addDesktopShortcut()'},
-      {icon: 'translate', title: 'Язык', sub: LANG === 'en' ? 'English' : 'Русский', on: 'pickLanguage(this)', menu: true}
+      {icon: 'translate', title: 'Язык', sub: LANG === 'en' ? 'English' : 'Русский', on: 'pickLanguage(this)', menu: true, long: 'lang'}
     ]],
     ['О модуле', [
-      {icon: 'info', title: 'nfqws2-android-ext', sub: t('Версия {0}', S.version || '—'), on: 'openUrl(' + jsArg(GITHUB_URL) + ')', chevron: true},
-      {icon: 'list', title: 'Что нового', sub: t('Изменения в этой версии'), on: 'openWhatsNew()'}
+      {icon: 'info', title: 'nfqws2-android-ext', sub: t('Версия {0}', S.version || '—'), on: 'openUrl(' + jsArg(GITHUB_URL) + ')', chevron: true, long: 'ver'}
     ]]
   ];
   let devHtml = '';
@@ -74,6 +74,25 @@ function renderSettings(){
     devHtml, false);
 }
 const GITHUB_URL = 'https://github.com/SpectaCoolAre/nfqws2-android-ext';
+
+/* Долгое нажатие на строки настроек: быстрые действия для тех, кто знает */
+const SETTINGS_LONG = {
+  // версия — список изменений (раньше — отдельный пункт «Что нового»)
+  ver: () => openWhatsNew(),
+  // язык — сразу на другой из двух
+  lang: () => {
+    setLanguage(LANG === 'en' ? 'ru' : 'en');
+    toast(t('Язык переключён: {0}', LANG === 'en' ? 'English' : 'Русский'));
+  },
+  // DNS профили — перезапуск DNS: как выключить и включить, но быстрее
+  dns: () => restartDns()
+};
+onLongPress($('settings-body'), '[data-long]', el => { const f = SETTINGS_LONG[el.dataset.long]; if(f) f(); });
+async function restartDns(){
+  const r = await withBusy(['dns-restart'], 40000);
+  toast(r.code ? errText(r, 'Не удалось перезапустить DNS') : t('DNS перезапущен'));
+  if(!r.code && currentPage === 'dns') dnsInit();
+}
 
 let deferredInstallPrompt = null;
 if(typeof window !== 'undefined'){
@@ -128,7 +147,7 @@ function rerenderAll(){
   renderStatus();
   renderStrategyRow();
   renderMode(); renderListFiles();
-  renderLogChips();
+  renderLogChips(); renderLogsLong();
   drawThemeUI();
   if(currentPage === 'settings') renderSettings();
   if(currentPage === 'apps'){ renderAppModes(); drawPk(false); }
@@ -172,7 +191,7 @@ function renderWifi(){
         icon('trash', 's20') + '</button>' +
     '</div>').join('')
     : '<div class="empty"><span class="empty-icon">' + icon('home', 's24') + '</span><span>' +
-      esc(t('Домашних сетей пока нет. Подключитесь к своей Wi‑Fi — модуль сам предложит её добавить.')) + '</span></div>', false);
+      esc(t('Домашних сетей пока нет. Подключитесь к своему Wi‑Fi — модуль сам предложит его добавить.')) + '</span></div>', false);
 }
 async function saveHomeList(list){
   const r = await withBusy(['save-list-b64', 'home', b64(list.join('\n') + (list.length ? '\n' : ''))], 30000);

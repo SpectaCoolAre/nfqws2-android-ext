@@ -368,7 +368,8 @@ dns_kill_strays() {
 # недоступный сервер — на каждый запрос: журнал за минуты забивался
 # одинаковыми строками. Первая строка «response received» отбрасывается,
 # одинаковая ошибка (сервер + текст без чисел) показывается раз в 5 минут,
-# а следующая за окном — со счётчиком пропущенных. С LOG_LEVEL=1 — всё как есть.
+# а следующая за окном — со счётчиком пропущенных. Недоставленные ответы на
+# сменившийся адрес телефона — одна строка на адрес. С LOG_LEVEL=1 — всё как есть.
 DNS_LOG_FILTER='
 function tsec(t,   a) { split(t, a, ":"); return a[1] * 3600 + a[2] * 60 + int(a[3]) }
 {
@@ -386,6 +387,21 @@ function tsec(t,   a) { split(t, a, ":"); return a[1] * 3600 + a[2] * 60 + int(a
     if ((k in last) && now - last[k] < 300) { cnt[k]++; next }
     if (cnt[k] > 0) printf "%s %s INFO nfqws2: ошибка сервера %s повторялась, скрыто повторов за 5 мин: %d\n", $1, $2, up, cnt[k]
     cnt[k] = 0; last[k] = now
+  }
+  # Ответ на адрес, которого у телефона уже нет: сеть переподключилась и
+  # сменила адрес, пока запросы были в пути. Таких строк — десятки за
+  # миллисекунду; оставляем первую с пояснением, повторы на тот же адрес — нет
+  if (index($0, " ERROR responding request ") && index($0, "network is unreachable")) {
+    ip = ""; if (match($0, /->[0-9.]+:/)) ip = substr($0, RSTART + 2, RLENGTH - 3)
+    now = tsec($2) + day * 86400
+    if (now < prev) { day++; now += 86400 }
+    prev = now
+    if ((ip in gone) && now - gone[ip] < 300) next
+    gone[ip] = now
+    print
+    printf "%s %s INFO nfqws2: ответ не доставлен на %s — у телефона сменился адрес (сеть переподключилась), повторы скрыты\n", $1, $2, ip
+    fflush()
+    next
   }
   print
   fflush()
@@ -521,7 +537,7 @@ dns_boot_reset() {
 }
 
 # Нужен ли перехват сейчас. DNS работает независимо от службы обхода:
-# остановка службы, пауза в домашней Wi‑Fi или при VPN его не трогают —
+# остановка службы, пауза в домашнем Wi‑Fi или при VPN его не трогают —
 # выключить его можно только главным переключателем на экране DNS. Есть ли
 # что применять, решает dns_build.
 dns_wanted() { dns_enabled; }
@@ -550,12 +566,23 @@ dns_start() {
   [ "$rc" = 2 ] && { dns_log "запуск (${1:-запрос}) пропущен: другой запуск DNS не завершился за 15 с"; return 1; }
   return "$rc"
 }
-_dns_start() {
+_dns_start() { # <причина> [force — перезапуск dnsproxy и при том же конфиге]
   local why="${1:-запрос}"
   dns_init
   if ! dns_wanted; then _dns_stop "$why: не нужен"; return 0; fi
   if ! dns_build; then _dns_stop "$why: применять нечего — DNS сети и нет включённых профилей"; return 0; fi
   mkdir -p "$DNS_RUN_DIR"
+  if [ "$2" = force ] && dns_pid >/dev/null && dns_rules_ok; then
+    # Сеть или VPN сменились: соединения dnsproxy к серверам привязаны к старой
+    # сети. Правила перехвата не снимаем — на время перезапуска (доли секунды)
+    # запросы получают отказ и повторяются, но к DNS оператора не уходят
+    dns_log "$why: сеть или VPN сменились — перезапуск dnsproxy"
+    dns_describe
+    dns_proxy_stop
+    if ! dns_proxy_start; then dns_rules_del; return 1; fi
+    rm -f "$DNS_RUN_DIR/error"
+    return 0
+  fi
   if dns_pid >/dev/null && cmp -s "$DNS_RUN_DIR/upstreams.txt" "$DNS_RUN_DIR/running.upstreams" &&
      cmp -s "$DNS_RUN_DIR/args" "$DNS_RUN_DIR/running.args"; then
     if ! dns_rules_ok; then
@@ -727,6 +754,13 @@ dns_ctl() {
       # Наблюдатели нужны DNS для смены сети; home_check поднимает их по нужде
       sh "$MODDIR/service.sh" home_check >/dev/null 2>&1
       dns_apply_now; echo OK ;;
+    dns-restart) # долгое нажатие на «DNS профили»: как выключить и включить, но без смены настроек
+      dns_init
+      dns_wanted || { echo "DNS выключен" >&2; return 1; }
+      dns_stop "перезапуск по запросу" || { echo "Другой запуск DNS не завершился" >&2; return 1; }
+      dns_start "перезапуск по запросу" || { echo "DNS не запустился — подробности в журнале DNS" >&2; return 1; }
+      dns_pid >/dev/null || { echo "DNS не запустился — подробности в журнале DNS" >&2; return 1; }
+      echo OK ;;
     dns-set-default)
       dns_init
       if [ "$1" != net ]; then dns_id_ok "$1" && [ -f "$DNS_PROFILES_DIR/$1.conf" ] || { echo "Профиль не найден" >&2; return 1; }; fi

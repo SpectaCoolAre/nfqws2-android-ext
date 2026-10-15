@@ -657,11 +657,14 @@ _firewall_start_restore() {
   FW_FAMILY=""
 
   # строки «таблица|правило» -> блоки *таблица ... COMMIT
+  # Правила одной таблицы — одним блоком, даже если в буфере таблицы
+  # чередуются (из оригинала, 00c1a16): иначе одна таблица шла бы
+  # несколькими секциями *table … COMMIT подряд
   printf '%s' "$FW_BATCH_BUF" | awk '
     { i = index($0, "|"); t = substr($0, 1, i - 1)
-      if (t != cur) { if (cur != "") print "COMMIT"; cur = t; print "*" t }
-      print substr($0, i + 1) }
-    END { if (cur != "") print "COMMIT" }' > "$rules"
+      if (!(t in seen)) { order[++n] = t; seen[t] = 1 }
+      buf[t] = buf[t] substr($0, i + 1) "\n" }
+    END { for (j = 1; j <= n; j++) { print "*" order[j]; printf "%s", buf[order[j]]; print "COMMIT" } }' > "$rules"
   FW_BATCH_BUF=""
 
   "${CMD}-restore" --noflush < "$rules"
@@ -1216,7 +1219,7 @@ update_description() { # running | stopped | paused <ssid>
       strat=$(cat "$ACTIVE_FILE" 2>/dev/null); strat="${strat#imp:}"
       mode=$(current_mode)
       d="✅ Работает · ${strat:-default}${mode:+ · $mode}" ;;
-    paused) if [ "$2" = "@vpn" ]; then d="⏸ Пауза: включён VPN"; else d="⏸ Пауза: домашняя Wi-Fi «$2»"; fi ;;
+    paused) if [ "$2" = "@vpn" ]; then d="⏸ Пауза: включён VPN"; else d="⏸ Пауза: домашний Wi-Fi «$2»"; fi ;;
     *)      d="⛔ Остановлено" ;;
   esac
   d=$(printf '%s' "$d | $DESC_BASE" | tr -d '\n\r')

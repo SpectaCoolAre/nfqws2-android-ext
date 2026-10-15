@@ -230,6 +230,18 @@ assert_contains "$flt" "x.ru" "a different server's error still shows"
 assert_contains "$flt" "скрыто повторов за 5 мин: 1" "after the window the skipped repeats are counted"
 assert_contains "$flt" "dnsproxy starting" "other lines pass through"
 
+# Сеть переподключилась, адрес телефона сменился: десятки недоставленных ответов
+flt=$(awk "$DNS_LOG_FILTER" <<'EOF'
+2026/10/14 10:25:23.947137 ERROR responding request prefix=dnsproxy proto=udp err="writing message: write udp 127.0.0.1:15353->100.107.161.52:42201: sendmsg: network is unreachable"
+2026/10/14 10:25:23.947229 ERROR responding request prefix=dnsproxy proto=udp err="writing message: write udp 127.0.0.1:15353->100.107.161.52:22087: sendmsg: network is unreachable"
+2026/10/14 10:25:23.948183 ERROR responding request prefix=dnsproxy proto=udp err="writing message: write udp 127.0.0.1:15353->100.107.161.52:35724: sendmsg: network is unreachable"
+2026/10/14 10:29:00.749415 ERROR responding request prefix=dnsproxy proto=udp err="writing message: write udp 127.0.0.1:15353->100.127.249.142:48182: sendmsg: network is unreachable"
+EOF
+)
+assert_eq 2 "$(printf '%s\n' "$flt" | grep -c 'ERROR responding request')" "one undelivered-answer line per vanished address, not one per query"
+assert_contains "$flt" "ответ не доставлен на 100.107.161.52" "explained once"
+assert_contains "$flt" "ответ не доставлен на 100.127.249.142" "and again for the next address"
+
 ctl get-logs dns 300
 assert_contains "$ctl_out" "лишний dnsproxy" "nfqws2-ctl get-logs dns shows the DNS log"
 
@@ -257,9 +269,24 @@ pid=$(cat "$DNS_PIDFILE"); kill "$pid"; sleep 0.3
 dns_check
 [ -f "$DNS_PIDFILE" ] && [ "$(cat "$DNS_PIDFILE")" != "$pid" ]
 assert_rc 0 $? "the watchdog check restarts it without the service"
+pid=$(cat "$DNS_PIDFILE")
+ctl dns-restart
+assert_rc 0 "$ctl_rc" "dns-restart (long press on «DNS профили») succeeds"
+[ -f "$DNS_PIDFILE" ] && [ "$(cat "$DNS_PIDFILE")" != "$pid" ]
+assert_rc 0 $? "and runs a new dnsproxy"
+assert_contains "$(ipt_rules OUTPUT nat)" "-j nfqws_dns" "with the interception back in place"
+pid=$(cat "$DNS_PIDFILE")
+dns_start "смена сети" force
+[ -f "$DNS_PIDFILE" ] && [ "$(cat "$DNS_PIDFILE")" != "$pid" ]
+assert_rc 0 $? "a network or VPN change restarts dnsproxy even with the same config"
+assert_contains "$(ipt_rules OUTPUT nat)" "-j nfqws_dns" "keeping the interception, so nothing leaks to the carrier DNS meanwhile"
+assert_contains "$(cat "$DNS_LOG")" "сеть или VPN сменились" "and says why"
 ctl dns-set-enabled 0
 assert_no_file "$DNS_PIDFILE" "the main switch is what turns it off"
 assert_eq "" "$(ipt_rules OUTPUT nat | grep nfqws_dns)" "interception included"
+ctl dns-restart
+assert_rc 1 "$ctl_rc" "dns-restart refuses while DNS is off"
+assert_no_file "$DNS_PIDFILE" "and does not start it"
 ctl dns-set-enabled 1
 assert_file "$DNS_PIDFILE" "switching back on restarts it without the service"
 svc dns_stop

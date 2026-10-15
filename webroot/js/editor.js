@@ -362,7 +362,7 @@ async function openEditorWith(o){
   editorCtx = o;
   const ta = $('panel-editor-text');
   $('panel-title-text').textContent = o.title;
-  $('panel-hint').textContent = o.hint;
+  $('panel-hint').textContent = o.hint || '';
   $('panel-hint').className = 'helper';
   $('panel-save-btn').disabled = !!o.load;
   $('panel-save-btn').textContent = o.saveLabel || t('Сохранить');

@@ -133,6 +133,21 @@ html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
   -webkit-overflow-scrolling: touch;
 }
 .page.stretch { will-change: transform; }
+/* Значок «оттянуть, чтобы обновить» на «Состоянии»: проявляется и
+   поворачивается по мере оттягивания, за порогом — в цвет акцента,
+   после отпускания крутится, пока идёт проверка */
+.ptr {
+  position: fixed; left: 50%; top: calc(var(--top-inset) + var(--appbar-height) + 4px); z-index: 24;
+  width: 40px; height: 40px; margin-left: -20px; border-radius: 50%;
+  display: grid; place-items: center; pointer-events: none; opacity: 0;
+  background: var(--md-sys-color-surface-container-high); color: var(--md-sys-color-on-surface-variant);
+  box-shadow: 0 1px 3px rgb(0 0 0 / .2);
+}
+.ptr.ready { color: var(--md-sys-color-primary); }
+.ptr.spin { opacity: 1 !important; color: var(--md-sys-color-primary); }
+.ptr.spin .icon { animation: ptr-spin .8s linear infinite; }
+.ptr.hide { transition: opacity var(--dur-short) var(--standard), transform var(--dur-short) var(--standard); }
+@keyframes ptr-spin { to { transform: rotate(360deg); } }
 .page.stretch-release { transition: transform var(--dur-medium) var(--emphasized-decelerate); }
 /* Как в приложении: подписи, пункты и пояснения не выделяются долгим
    нажатием. Выделяется только то, что имеет смысл копировать: поля ввода,
@@ -862,6 +877,13 @@ label.list-item { cursor: pointer; }
 .sheet.list-sheet { overflow: hidden; }
 .sheet-desc { margin-top: -8px; font-size: var(--ts-body-medium); line-height: var(--lh-body-medium);
   color: var(--md-sys-color-on-surface-variant); }
+/* у редактора стратегии пояснения нет — пустая строка места не занимает */
+#panel-hint:empty { display: none; }
+/* подсказка о дополнительных действиях на удержание */
+.sheet-hint { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--shape-medium);
+  background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container);
+  font-size: var(--ts-body-small); line-height: var(--lh-body-small); }
+.sheet-hint .icon { flex: none; }
 .sheet-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 /* строки не сжимаются: прокручивается список, а не схлопываются элементы */
 .sheet-scroll > * { flex-shrink: 0; }

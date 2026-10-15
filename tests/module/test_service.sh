@@ -376,6 +376,44 @@ svc start >/dev/null 2>&1
 assert_eq "$wd" "$(cat "$WD_PIDFILE" 2>/dev/null)" "a running watchdog is not spawned twice"
 
 kill "$wd" 2>/dev/null
+rm -f "$WD_PIDFILE"
+
+# С ip netwatch обязан подниматься вместе с watchdog. В v2.1.0 объявление
+# ensure_netwatch затёрла правка соседнего кода, и netwatch не запускался
+# вовсе: смену сети и VPN служба замечала только через watchdog, за 20–60 с.
+# Песочница без ip этого не видела — здесь ip подставлен.
+: > "$MOCK_DIR/ipmon"
+cat > "$MOCKBIN/ip" <<EOF
+#!/bin/sh
+case "\$1 \$2" in
+  "monitor "*) exec tail -n 0 -f "$MOCK_DIR/ipmon" ;;
+  "route get") echo "1.1.1.1 via 10.0.0.1 dev wlan0 src 10.0.0.2 uid 0" ;;
+esac
+exit 0
+EOF
+chmod 0755 "$MOCKBIN/ip"
+out=$(sh "$MODDIR/service.sh" status 2>&1)
+assert_not_contains "$out" "not found" "service.sh loads without «command not found» (a mangled function line would show here)"
+svc stop >/dev/null 2>&1
+svc start >/dev/null 2>&1
+wait_for_file "$WN_PIDFILE" 8
+assert_file "$WN_PIDFILE" "with ip present netwatch is spawned alongside the watchdog"
+
+# Событие ip monitor будит netwatch сразу — без опроса раз в секунду
+sleep 1
+echo "2: wlan0: <BROADCAST,MULTICAST,UP> state UP" >> "$MOCK_DIR/ipmon"
+i=0; while [ "$i" -lt 8 ] && ! grep -q "netwatch: сеть изменилась" "$SERVICE_LOG" 2>/dev/null; do sleep 0.5; i=$((i + 1)); done
+assert_contains "$(cat "$SERVICE_LOG")" "netwatch: сеть изменилась" "a network event is acted on within seconds"
+assert_rc 0 "$([ "$i" -le 6 ] && echo 0 || echo 1)" "about a second after the burst ends ($((i * 5 / 10)) s)"
+# Спит в wait: никакого цикла с sleep 1 в фоне
+nw=$(cat "$WN_PIDFILE" 2>/dev/null)
+kids=$(ps -o pid= -o comm= --ppid "$nw" 2>/dev/null | grep -c " sleep$")
+assert_eq 1 "$kids" "netwatch idles on one long sleep, not a once-a-second poll"
+kill "$nw" "$(cat "$WD_PIDFILE" 2>/dev/null)" 2>/dev/null
+sleep 0.5
+assert_eq "" "$(pgrep -f "tail -n 0 -f $MOCK_DIR/ipmon" 2>/dev/null)" "a stopped netwatch takes ip monitor with it"
+assert_no_file "$STATE_DIR/netwatch.fifo" "and removes its FIFO"
+rm -f "$MOCKBIN/ip" "$WN_PIDFILE" "$WD_PIDFILE"
 
 # ── pause while a VPN is on ──────────────────────────────────────────────────
 section "VPN pause"
@@ -417,7 +455,7 @@ svc stop >/dev/null 2>&1
 # Хук ждёт, пока service.sh закончит загрузочный запуск (метка boot_done)
 : > "$CONFDIR/state/boot_done"
 
-# На паузе в домашней Wi‑Fi хук службу не поднимает
+# На паузе в домашнем Wi‑Fi хук службу не поднимает
 printf 'AUTOSTART=1\n' >> "$CONFFILE"
 printf 'Home' > "$HOME_PAUSED_FILE"
 sh "$MODDIR/boot-completed.sh" >/dev/null 2>&1

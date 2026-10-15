@@ -5,7 +5,7 @@
    Как в Keenetic: профиль — это DNS-серверы (DoH, DoT, DoQ, обычные) и домены;
    запросы к доменам профиля и их поддоменам идут на его серверы, остальные —
    на DNS по умолчанию. Всё сохраняется сразу, без кнопки «Сохранить»: так же
-   устроены экраны домашней Wi‑Fi и фильтра приложений. Модуль проверяет ввод
+   устроены экраны домашнем Wi‑Fi и фильтра приложений. Модуль проверяет ввод
    ещё раз (lib/dns.sh), здесь — только чтобы подсказать раньше. */
 
 /* Типы серверов: схема адреса в синтаксисе dnsproxy */
@@ -194,12 +194,19 @@ function dnsDefaultLabel(){
   return p ? p.name : t('DNS сети');
 }
 
+/* IPv6-адрес среди серверов профилей, которые сейчас работают (включённые и
+   профиль по умолчанию): 2606:4700::1111, [2001:db8::1]:53, tls://[…] */
+function dnsActiveV6(){
+  const def = dnsSt.status.default;
+  const v6 = a => /\[[0-9a-f]*:[0-9a-f:.]*\]/i.test(a) || /^[0-9a-f]*:[0-9a-f]*:[0-9a-f:.]*$/i.test(a);
+  return dnsSt.profiles.some(p => (p.enabled || p.id === def) && p.servers.some(v6));
+}
 /* Что сейчас мешает или о чём стоит знать — баннеры над списком */
 function dnsWarnings(){
   const s = dnsSt.status, w = [];
   if(s.enabled !== '1') return '';
   if(s.private === 'hostname')
-    // как предложение на экране домашней Wi‑Fi: текст и кнопка, которая не сжимается
+    // как предложение на экране домашнем Wi‑Fi: текст и кнопка, которая не сжимается
     w.push('<div class="suggest">' + icon('warn', 's24') + '<span class="grow">' +
       esc(t('В Android включён «Частный DNS» ({0}): запросы идут мимо модуля, и профили не применяются, пока он не выключен.', s.private_host || '—')) +
       '</span><button class="btn tonal sm state" onclick="openPrivateDnsSettings()">' + esc(t('Открыть')) + '</button></div>');
@@ -207,7 +214,8 @@ function dnsWarnings(){
     w.push(banner('danger', 'error', t('В модуле нет dnsproxy. Переустановите модуль из архива релиза.')));
   else if(s.error)
     w.push(banner('danger', 'error', t('Ошибка: {0}', s.error)));
-  if(s.ipv6 === 'none' && s.rules === 'on')
+  // Только когда это кого-то касается: в активных профилях есть IPv6-сервер
+  if(s.ipv6 === 'none' && s.rules === 'on' && dnsActiveV6())
     w.push(banner('warn', 'warn', t('Запросы к IPv6-серверам DNS идут мимо: в ядре нет ip6tables nat, а у сети нет IPv4-серверов.')));
   return w.join('');
 }

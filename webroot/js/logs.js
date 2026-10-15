@@ -36,6 +36,31 @@ function pickLogLines(anchor){
   })));
 }
 function toggleLogErrors(){ logErrors = !logErrors; loadLog(); }
+
+/* Долгое нажатие на значок журналов в шапке — действие на выбор (настройка
+   на экране «Журналы»): экспорт или очистка без вопросов */
+const LOGS_LONG = [['export', 'Экспорт логов'], ['clear', 'Очистка журналов']];
+let logsLong = store.get('nfq_logs_long') === 'clear' ? 'clear' : 'export';
+function renderLogsLong(){
+  $('logs-long-value').textContent = t((LOGS_LONG.find(x => x[0] === logsLong) || LOGS_LONG[0])[1]);
+}
+function pickLogsLong(anchor){
+  openMenu(anchor, LOGS_LONG.map(([k, label]) => ({
+    label: t(label), icon: k === logsLong ? 'check' : '',
+    onClick: () => { logsLong = k; store.set('nfq_logs_long', k); renderLogsLong(); }
+  })));
+}
+async function logsLongAction(){
+  if(logsLong === 'clear'){
+    const r = await withBusy(['clear-logs']);
+    toast(r.code ? errText(r, 'Не удалось очистить журналы') : t('Журналы очищены (долгое нажатие на значок журналов)'));
+    if(currentPage === 'logs') loadLog();
+  } else {
+    toast(t('Экспорт журналов (долгое нажатие на значок журналов)'));
+    exportLogs();
+  }
+}
+onLongPress($('logs-btn'), null, logsLongAction);
 const STATUS_MAP = {ok: ['ok', 'check'], warn: ['warn', 'warn'], fail: ['bad', 'error'], info: ['info', 'info']};
 function statusRows(text){
   return text.trim().split('\n').filter(Boolean).map(l => l.split('\t')).map(([s, n, d]) => {

@@ -10,7 +10,19 @@ const APP_MODES = [
 ];
 async function appsInit(){
   renderAppModes();
-  if(pkgs.length) drawPk(); else loadPk();
+  if(pkgs.length){
+    drawPk();
+    // Тихая сверка: ставили или удаляли приложения — модуль пересоберёт
+    // список сам, и экран обновится без спиннера (из оригинала, 0badd3d)
+    ctlx(['list-apps']).then(r => {
+      const raw = (r.out || '').trim();
+      if(r.code || !raw.startsWith('[')) return;
+      try {
+        const next = JSON.parse(raw);
+        if(JSON.stringify(next) !== JSON.stringify(pkgs)){ pkgs = next; drawPk(false); }
+      } catch(_) {}
+    });
+  } else loadPk();
   await stat(true);
   renderAppModes();
 }
@@ -42,7 +54,7 @@ async function loadPk(force){
   $('pk')._html = null;
   const r = force ? await ctlx(['list-apps', 'refresh'], 30000) : await ctlx(['list-apps'], 30000);
   if(r.code){
-    pkgs = [];
+    // уже показанный список (с названиями и иконками) не теряем
     toast(errText(r, 'Не удалось получить список приложений'));
   } else {
     const raw = (r.out || '').trim();

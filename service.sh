@@ -214,11 +214,8 @@ ensure_watchdog() {
   ensure_netwatch
 }
 
-# Rebuild rules on events, not on a timer. Routers use a netfilter.d firmware
-# hook for this; ip monitor is the Android equivalent. Watchdog is the
-# fallback where ip monitor is unsupported.
-ensure_# Перечитать конфиг, только если он менялся с прошлого раза. netwatch опрашивает
-# раз в 2 с всю ночь: load_conf каждый тик — это лишние awk и чтение файлов.
+# Перечитать конфиг, только если он менялся с прошлого раза. netwatch опрашивает
+# раз в секунду всю ночь: load_conf каждый тик — это лишние awk и чтение файлов.
 # Метка — свой файл у каждого процесса; -nt есть в dash, mksh и bash
 conf_refresh() {
   local st="$STATE_DIR/conf_seen.$$"
@@ -228,9 +225,21 @@ conf_refresh() {
   fi
 }
 
-netwatch() { # зовётся только из ensure_watchdog, после watchers_wanted
+# Rebuild rules on events, not on a timer. Routers use a netfilter.d firmware
+# hook for this; ip monitor is the Android equivalent. Watchdog is the
+# fallback where ip monitor is unsupported.
+ensure_netwatch() { # зовётся только из ensure_watchdog, после watchers_wanted
   ensure_helper "$WN_PIDFILE" netwatch command -v ip
   return 0
+}
+
+# Подпись сети: через какой интерфейс идёт трафик наружу и есть ли VPN. Смена —
+# повод сразу перезапустить dnsproxy: его соединения к DoH/DoT-серверам остались
+# привязаны к прежней сети, и запросы ждали бы, пока они отвалятся по таймауту.
+net_signature() {
+  local dev
+  dev=$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
+  if vpn_active; then printf '%s|vpn' "$dev"; else printf '%s|' "$dev"; fi
 }
 
 netwatch() {
@@ -238,79 +247,86 @@ netwatch() {
   protect_process
   command -v ip >/dev/null 2>&1 || { rm -f "$WN_PIDFILE"; return 0; }
 
-  EVFILE="$STATE_DIR/netwatch_events"
-  rm -f "$EVFILE"
-  local prev="" acted="" backoff=2 saw=0 sz mon="" up recheck
-  # убитый извне (uninstall, остановка наблюдателей) — забрать и ip monitor,
-  # иначе он остался бы сиротой и дописывал в удалённый файл
-  trap 'kill -TERM "$mon" 2>/dev/null; rm -f "$WN_PIDFILE" "$EVFILE" "$STATE_DIR/conf_seen.$$"; exit 0' TERM INT HUP
+  # Без опроса: процесс спит в wait, пока ip monitor не сообщит о смене
+  # маршрутов или интерфейсов. Читатель событий шлёт USR1, сон прерывается,
+  # и через секунду тишины (одна смена сети — пачка событий) правила, DNS и
+  # пауза пересчитываются. Без событий — пробуждение раз в минуту: перечитать
+  # конфиг, выйти, если наблюдатели больше не нужны, поднять упавший ip
+  # monitor. Раньше файл событий проверялся каждую секунду — два запуска
+  # внешних программ в секунду, 170 тысяч в сутки, и процессор не засыпал.
+  local wake=0 mon="" reader="" sp="" netsig sig recheck=0 backoff=2 started up me=$$
+  local fifo="$STATE_DIR/netwatch.fifo"
+  netsig=$(net_signature)
+  trap 'wake=1' USR1
+  # ip monitor и читатель — свои PID (через FIFO, не конвейер в подоболочке):
+  # убитый извне netwatch забирает их с собой, сирот не остаётся
+  trap 'kill -TERM "$mon" "$reader" "$sp" 2>/dev/null; rm -f "$WN_PIDFILE" "$fifo" "$STATE_DIR/conf_seen.$$"; exit 0' TERM INT HUP
   # Первая перепроверка — через 30 с после старта: при загрузке сеть ещё
   # устанавливается, и её смена до запуска ip monitor не дала бы события
   read -r up _ < /proc/uptime; recheck=$(( ${up%.*} + 30 ))
-  # The monitor writes events to a file, reaction is on its size changing.
-  # A file, not a pipe, so kill -TERM reaps ip monitor itself instead of a
-  # wrapper that would leave an orphan. Poll every 2s to spare battery
-  # through the night.
   while :; do
-    ip monitor route link 2>/dev/null >> "$EVFILE" &
-    mon=$!
-    saw=0
-    while :; do
-      sleep 2
-      conf_refresh
-      watchers_wanted || break 2
-      if ! kill -0 "$mon" 2>/dev/null; then
-        # died on its own. If it never wrote a byte, ip monitor is unsupported
-        # here: grow the pause instead of restarting it in a loop.
-        if [ "$saw" = 0 ]; then
-          sleep "$backoff"
-          [ "$backoff" -lt 60 ] && backoff=$((backoff * 2))
-        else
-          backoff=2
-        fi
-        break
+    if [ -z "$mon" ] || ! kill -0 "$mon" 2>/dev/null; then
+      # ip monitor упал или не поддерживается: не перезапускать в цикле
+      if [ -n "$mon" ]; then
+        kill -TERM "$reader" 2>/dev/null
+        read -r up _ < /proc/uptime
+        if [ $(( ${up%.*} - started )) -lt 10 ]; then
+          sleep "$backoff"; [ "$backoff" -lt 60 ] && backoff=$((backoff * 2))
+        else backoff=2; fi
       fi
-      # Контрольная перепроверка через 30 с после смены сети: в момент события
-      # Wi‑Fi бывает ещё в переходном состоянии (отключается, переподключается),
-      # и решение о паузе, принятое по нему, могло остаться неверным.
-      if [ "$recheck" -gt 0 ]; then
-        read -r up _ < /proc/uptime; up=${up%.*}
-        if [ "$up" -ge "$recheck" ]; then
-          recheck=0
-          home_check
-        fi
+      rm -f "$fifo"; mkfifo "$fifo" 2>/dev/null || { sleep 60; continue; }
+      while IFS= read -r _; do kill -USR1 "$me" 2>/dev/null || exit 0; done < "$fifo" &
+      reader=$!
+      ip monitor route link > "$fifo" 2>/dev/null &
+      mon=$!
+      read -r up _ < /proc/uptime; started=${up%.*}
+    fi
+    if [ "$wake" = 0 ]; then
+      # Сон до события или до минуты. Сигнал, пришедший между проверкой и
+      # wait, ловится сразу после запуска sleep — trap выполняется между командами
+      sleep 60 & sp=$!
+      [ "$wake" = 1 ] || wait "$sp"
+      kill "$sp" 2>/dev/null; sp=""
+    fi
+    conf_refresh
+    watchers_wanted || break
+    if [ "$wake" = 1 ]; then
+      # пачка событий одной смены сети: ждём секунду тишины
+      while [ "$wake" = 1 ]; do wake=0; sleep 1; done
+      # DNS — первым: пока он перезапускается, правила перехвата на месте, и
+      # запросы не уходят к DNS оператора. Сеть или VPN сменились — dnsproxy
+      # перезапускается целиком (или останавливается на время VPN), иначе —
+      # только сверка конфига (DNS сети)
+      sig=$(net_signature)
+      if dns_enabled; then
+        if [ "$sig" != "$netsig" ]; then dns_start "смена сети" force
+        else dns_start "смена сети"; fi
       fi
-      sz=$(wc -c < "$EVFILE" 2>/dev/null)
-      case "$sz" in ''|*[!0-9]*) sz=0 ;; esac
-      if [ "$sz" != "$prev" ]; then
-        # events still arriving; wait one quiet tick so a burst from a single
-        # network change does not rebuild the rules per packet
-        prev="$sz"
-        saw=1
-        continue
+      netsig="$sig"
+      if [ -f "$DESIRED_FILE" ] && is_running; then
+        log_msg "netwatch: сеть изменилась (ip monitor) — пересобираю правила"
+        firewall_start
       fi
-      if [ "$sz" != "$acted" ] && [ "$sz" != 0 ]; then
-        if [ -f "$DESIRED_FILE" ] && is_running; then
-          log_msg "netwatch: сеть изменилась (ip monitor) — пересобираю правила"
-          firewall_start
-        fi
-        home_check
-        # DNS сети сменился вместе с сетью; работает и без службы
-        dns_enabled && dns_start "смена сети"
-        acted="$sz"
-        read -r up _ < /proc/uptime; recheck=$(( ${up%.*} + 30 ))
-      fi
-      [ "$sz" -gt 262144 ] && { kill -TERM "$mon" 2>/dev/null; : > "$EVFILE"; prev=""; acted=""; }
-    done
-    kill -TERM "$mon" 2>/dev/null
-    wait "$mon" 2>/dev/null
+      home_check
+      read -r up _ < /proc/uptime; recheck=$(( ${up%.*} + 30 ))
+      continue
+    fi
+    # Контрольная перепроверка через 30 с после смены сети: в момент события
+    # Wi‑Fi бывает ещё в переходном состоянии, и решение о паузе могло
+    # остаться неверным. Сон до минуты её не задерживает дольше 60 с
+    if [ "$recheck" -gt 0 ]; then
+      read -r up _ < /proc/uptime
+      if [ "${up%.*}" -ge "$recheck" ]; then recheck=0; home_check; fi
+    fi
   done
-  kill -TERM "$mon" 2>/dev/null
-  rm -f "$WN_PIDFILE" "$EVFILE" "$STATE_DIR/conf_seen.$$"
+  kill -TERM "$mon" "$reader" 2>/dev/null
+  rm -f "$WN_PIDFILE" "$fifo" "$STATE_DIR/conf_seen.$$"
 }
 
 watchdog() {
   echo $$ > "$WD_PIDFILE"
+  # убитый извне — без PID-файла, иначе следующий запуск верил бы мёртвому PID (оригинал, 00c1a16)
+  trap 'rm -f "$WD_PIDFILE"; exit 0' INT TERM
   protect_process
   local fails=0 tick=0 dpid
   while :; do
@@ -365,7 +381,7 @@ home_check() {
   # than two minutes is residue from a killed process
   [ -n "$(find "$STATE_DIR/home.lock" -maxdepth 0 -mmin +2 2>/dev/null)" ] && rmdir "$STATE_DIR/home.lock" 2>/dev/null
   mkdir "$STATE_DIR/home.lock" 2>/dev/null || return 0
-  # Пауза — домашняя Wi‑Fi (в файле SSID) или VPN (метка @vpn). Ручной запуск
+  # Пауза — домашний Wi‑Fi (в файле SSID) или VPN (метка @vpn). Ручной запуск
   # оставляет то же значение в override: оно действует, пока причина не уйдёт.
   local ssid="" vpn=0 ovr="" want=""
   [ "$HOME_WIFI" = "1" ] && ssid=$(active_ssid)
@@ -384,7 +400,7 @@ home_check() {
   if [ -n "$want" ]; then
     if is_running && [ ! -f "$HOME_PAUSED_FILE" ]; then
       if [ "$want" = "@vpn" ]; then log_msg "Включён VPN — обход приостановлен"
-      else log_msg "Домашняя Wi-Fi «$want» — обход приостановлен"; fi
+      else log_msg "Домашний Wi-Fi «$want» — обход приостановлен"; fi
       stop >/dev/null 2>&1
       printf '%s' "$want" > "$HOME_PAUSED_FILE"
       update_description paused "$want"
@@ -395,7 +411,7 @@ home_check() {
     fi
   elif [ -f "$HOME_PAUSED_FILE" ]; then
     if [ "$(cat "$HOME_PAUSED_FILE" 2>/dev/null)" = "@vpn" ]; then log_msg "VPN выключен — обход возобновлён"
-    else log_msg "Домашняя Wi-Fi больше не активна — обход возобновлён"; fi
+    else log_msg "Домашний Wi-Fi больше не активен — обход возобновлён"; fi
     rm -f "$HOME_PAUSED_FILE"
     start >/dev/null 2>&1 || log_msg "Не удалось возобновить обход после паузы"
   fi
@@ -428,6 +444,8 @@ case "$1" in
   start)              manual_start ;;
   stop)               rm -f "$HOME_PAUSED_FILE" "$HOME_OVERRIDE_FILE"; stop ;;
   home_check)         home_check; ensure_watchdog ;;
+  # «Состояние» → оттянуть вниз: сеть, VPN и DNS — заново, наблюдатели — на месте
+  net_recheck)        dns_enabled && dns_start "проверка сети по запросу"; home_check; ensure_watchdog ;;
   restart)            stop; start ;;
   reload)             reload_lists ;;
   status)             status_service ;;
@@ -469,7 +487,7 @@ case "$1" in
         update_description paused "@vpn"
       # SSID — только когда пауза дома включена: это два вызова Java на загрузке
       elif [ "$HOME_WIFI" = "1" ] && ssid=$(active_ssid) && ssid_is_home "$ssid"; then
-        log_msg "Домашняя Wi-Fi «$ssid» — автозапуск отложен до выхода из неё"
+        log_msg "Домашний Wi-Fi «$ssid» — автозапуск отложен до выхода из него"
         printf '%s' "$ssid" > "$HOME_PAUSED_FILE"
         update_description paused "$ssid"
       else

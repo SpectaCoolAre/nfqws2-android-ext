@@ -77,9 +77,6 @@ function strategyItem(s){
       (s.mod ? '<button type="button" class="icon-btn sm state" data-act="reset" data-s="' + esc(s.name) + '"' +
         ' aria-label="' + esc(t('Сбросить «{0}» к исходнику', strategyName(s.name))) + '" title="' + esc(t('Сбросить к исходнику')) + '">' +
         icon('restart', 's20') + '</button>' : '') +
-      (s.name !== 'default' ? '<button type="button" class="icon-btn sm state" data-act="edit" data-s="' + esc(s.name) + '"' +
-        ' aria-label="' + esc(t('Редактировать «{0}»', strategyName(s.name))) + '" title="' + esc(t('Редактировать')) + '">' +
-        icon('edit', 's20') + '</button>' : '') +
     '</span></label>';
 }
 function renderStrategyList(animate){
@@ -102,11 +99,41 @@ function renderStrategyList(animate){
   box.querySelectorAll('button[data-act]').forEach(b => {
     b.onclick = e => {
       e.preventDefault(); e.stopPropagation();
-      if(b.dataset.act === 'edit') editStrategy(b.dataset.s);
-      else resetStrategy(b.dataset.s);
+      resetStrategy(b.dataset.s);
     };
   });
 }
+/* Долгое нажатие на стратегию — меню: изменить, поделиться, скопировать.
+   Карандаш в строке убран: список остаётся простым выбором для всех, а
+   правка — для тех, кто знает про удержание (подсказка — над списком). */
+function strategyMenu(row){
+  const name = row.querySelector('input.radio').value;
+  openMenu(row, [
+    {label: t('Изменить'), icon: 'edit', onClick: () => {
+      if(name === 'default'){ closeSheet(); navigate('config'); toast(t('Стандартная стратегия — это nfqws2.conf во вкладке «Конфиг»')); }
+      else editStrategy(name);
+    }},
+    {label: t('Поделиться'), icon: 'share', onClick: () => shareStrategy(name)},
+    {label: t('Скопировать'), sub: t('Как текст'), icon: 'copy', onClick: () => copyStrategy(name)}
+  ]);
+}
+/* Сразу файлом: текстом стратегию и так можно взять — «Скопировать» */
+async function shareStrategy(name){
+  const r = await ctlx(['strategy-path', name]);
+  if(r.code){ toast(errText(r, 'Не удалось поделиться')); return; }
+  shareFile('file', r.out.trim());
+}
+async function copyStrategy(name){
+  const r = await ctlx(['strategy-get-b64', name]);
+  if(r.code){ toast(errText(r, 'Не удалось прочитать стратегию')); return; }
+  toast(await copyText(unb64(r.out.trim())) ? t('Стратегия «{0}» скопирована', strategyName(name)) : t('Не удалось скопировать'));
+}
+onLongPress($('strategy-list'), '.list-item', strategyMenu);
+
+/* Долгое нажатие на части строки состояния: «DNS …» — экран DNS, «Домашний
+   Wi‑Fi» — его настройки; «назад» вернёт на главную */
+onLongPress($('sub'), '[data-go]', el => openFrom(el.dataset.go));
+
 async function openStrategySheet(){
   pendingStrategy = currentStrategy;
   renderStrategyList(false);
@@ -135,8 +162,9 @@ async function applyStrategy(val){
   else { toast(t('Стратегия «{0}» применится при следующем запуске', strategyName(val))); stat(); }
 }
 function editStrategy(name){
+  // без пояснения внизу: с клавиатурой оно ехало вверх; что правку можно
+  // откатить, видно по кнопке сброса, которая появится у стратегии
   openEditorWith({target: 'strategy', key: name, title: strategyName(name) + '.conf', lang: 'conf', b64: true,
-    hint: t('Правка сохраняется отдельно от встроенной стратегии: исходник можно вернуть кнопкой сброса.'),
     load: ['strategy-get-b64', name]});
 }
 async function resetStrategy(name){
@@ -160,14 +188,14 @@ const SW = [
   ['AUTOSTART', 'Автозапуск при загрузке', 'autostart'],
   ['IPV6_ENABLED', 'Обрабатывать IPv6', 'ipv6'],
   ['BLOCK_QUIC', 'Блокировать QUIC', 'block_quic'],
-  ['ENABLE_HOTSPOT', 'Точка доступа с nfqws2', 'enable_hotspot'],
-  ['CALLS_BYPASS', 'Обход звонков', 'calls_bypass']
+  ['ENABLE_HOTSPOT', 'Точка доступа с nfqws2', 'enable_hotspot']
 ];
 // Меняют аргументы nfqws2 — служба перезапускается сама, без вопроса
 const RESTART_KEYS = {CALLS_BYPASS: 1};
 const DEV_SW = [
   ['WATCHDOG', 'Watchdog', 'watchdog'],
-  ['META_QUIC_REJECT', 'Отказ QUIC для Instagram', 'meta_quic']
+  ['META_QUIC_REJECT', 'Отказ QUIC для Instagram', 'meta_quic'],
+  ['CALLS_BYPASS', 'Обход звонков (не тестировалось)', 'calls_bypass']
 ];
 const LIMITS = [
   ['PKT_LIMIT_OUT', 'Исходящие пакеты', 'Сколько первых пакетов соединения обрабатывать', 'pkt_limit_out'],
@@ -231,14 +259,17 @@ function renderStatus(){
   $('hero-stats').hidden = paused;
   $('st').textContent = j.running ? t('Служба работает') : (paused ? t('Пауза') : t('Служба остановлена'));
   // Вместо лимита (он зависит от ядра и виден в «Диагностике») — состояние DNS
-  const dns = j.dns_available == 1 ? ' · ' + (j.dns_enabled == 1 ? t('DNS включён') : t('DNS выключен')) : '';
-  // Подпись — одна строка; подробности паузы — в title (долгое нажатие).
+  // Части подписи с data-go открываются долгим нажатием: DNS — экран DNS,
+  // «Домашний Wi‑Fi» — его настройки
+  const part = (text, go) => go ? '<span data-go="' + go + '">' + esc(text) + '</span>' : esc(text);
+  const dns = j.dns_available == 1 ? ' · ' + part(j.dns_enabled == 1 ? t('DNS включён') : t('DNS выключен'), 'dns') : '';
+  // Подпись — одна строка; подробности паузы — в title.
   const sub = paused
-    ? (j.paused === '@vpn' ? t('Включён VPN') : t('Домашняя Wi‑Fi')) + dns
-    : t('Режим') + ' ' + (j.mode || '—') + dns;
-  $('sub').textContent = sub;
+    ? (j.paused === '@vpn' ? esc(t('Включён VPN')) : part(t('Домашний Wi‑Fi'), 'wifi')) + dns
+    : esc(t('Режим') + ' ' + (j.mode || '—')) + dns;
+  setHTML('sub', sub, false);
   $('sub').title = paused ? (j.paused === '@vpn' ? t('Включён VPN. Обход возобновится, когда VPN отключится.')
-    : t('Домашняя Wi‑Fi «{0}». Обход возобновится, когда телефон уйдёт из этой сети.', j.paused)) : '';
+    : t('Домашний Wi‑Fi «{0}». Обход возобновится, когда телефон уйдёт из этой сети.', j.paused)) : '';
   if(j.running) startUptTimer(j.uptime || 0); else stopUptTimer();
   renderHeroActions();
   renderParams(j);
@@ -355,7 +386,7 @@ async function act(a){
   const r = await withBusy([a], 40000);
   svcBusy = '';
   const ok = {start: 'Служба запущена', stop: 'Служба остановлена', restart: 'Служба перезапущена',
-    'home-pause': 'Обход на паузе в домашней Wi‑Fi'}[a];
+    'home-pause': 'Обход на паузе в домашнем Wi‑Fi'}[a];
   toast(r.code ? errText(r, 'Команда не выполнена') : t(ok));
   await stat();
 }

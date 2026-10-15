@@ -240,9 +240,9 @@ const VIEWPORTS = [
       eq('16,16,4,4', geo.swsFirstRadius.join(','), 'the first list row has 16dp outer corners');
       eq('4,4,16,16', geo.swsLastRadius.join(','), 'the last list row has 16dp outer corners');
       eq('4,4,4,4', geo.swsMiddleRadius.join(','), 'the middle list rows use 4dp inner corners');
-      // #sws holds the five switches. The conventions are about the switches.
-      eq(5, geo.swsRows, 'the list holds the five switches');
-      eq(5, geo.swsSwitchRows, 'all five of those rows are switches');
+      // #sws holds the four switches (calls bypass moved to developer settings). The conventions are about the switches.
+      eq(4, geo.swsRows, 'the list holds the four switches');
+      eq(4, geo.swsSwitchRows, 'all four of those rows are switches');
       eq(false, geo.swsHasIcons, 'switch rows carry no leading icons');
       eq(0, geo.swsSwitchWithSecondary, 'switch rows carry no descriptions');
       eq(56, geo.swsHeight, 'switch rows are single-line (56dp)');

@@ -106,8 +106,11 @@ list_strategies() {
   done
 }
 
+# первая строка без \r (файл, сохранённый в Windows); пустой файл — стандартная (оригинал, 00c1a16)
 get_current_strategy() {
-  cat "$ACTIVE_FILE" 2>/dev/null || echo "default"
+  local s
+  s=$(head -n 1 "$ACTIVE_FILE" 2>/dev/null | tr -d '\r\n')
+  if [ -n "$s" ]; then printf '%s\n' "$s"; else echo "default"; fi
 }
 
 # Готовый nfqws2.conf для стратегии: её текст плюс настройки пользователя из
@@ -329,7 +332,7 @@ cmd_doctor() {
     row info process "$(M 'пауза: включён VPN' 'paused: VPN is on')"
     row info "$(M 'ОЗУ' 'RAM')" "$(M 'пауза' 'paused')"
   elif [ -f "$HOME_PAUSED_FILE" ]; then
-    row info process "$(M "пауза: домашняя Wi-Fi «$(cat "$HOME_PAUSED_FILE")»" "paused: home Wi-Fi “$(cat "$HOME_PAUSED_FILE")”")"
+    row info process "$(M "пауза: домашний Wi-Fi «$(cat "$HOME_PAUSED_FILE")»" "paused: home Wi-Fi “$(cat "$HOME_PAUSED_FILE")”")"
     row info "$(M 'ОЗУ' 'RAM')" "$(M 'пауза' 'paused')"
   else
     row info process "$(M 'не запущен' 'not running')"
@@ -474,7 +477,7 @@ cmd_log_summary() {
       END {
         if (last_ev == "start") printf "ok\t%s\t%s\n", T("nfqws2 запущен", "nfqws2 started"), last_start (pid != "" ? " · " pid : "")
         else if (last_ev == "stop") printf "info\t%s\t%s\n", T("nfqws2 остановлен", "nfqws2 stopped"), last_stop
-        else if (last_ev == "pause") printf "info\t%s\t%s\n", (pmsg ~ /VPN/ ? T("Пауза: включён VPN", "Paused: VPN is on") : T("Пауза в домашней Wi-Fi", "Paused on home Wi-Fi")), last_pause
+        else if (last_ev == "pause") printf "info\t%s\t%s\n", (pmsg ~ /VPN/ ? T("Пауза: включён VPN", "Paused: VPN is on") : T("Пауза в домашнем Wi-Fi", "Paused on home Wi-Fi")), last_pause
         if (crash) printf "warn\t%s\t%s\n", T("Автоперезапусков: ", "Automatic restarts: ") crash, T("последний ", "last ") last_crash
         if (net) printf "info\t%s\t%s\n", T("Пересборок правил при смене сети: ", "Rule rebuilds on network change: ") net, ""
         if (lost) printf "info\t%s\t%s\n", T("Правила восстановлены после сброса системой: ", "Rules restored after a system reset: ") lost, ""
@@ -553,10 +556,14 @@ cmd_list_apps() {
   case "${1:-}" in refresh|--refresh|-f) refresh=1 ;; esac
   [ -f "$cache" ] || refresh=1
 
-  # Быстрый возврат из кэша (0-2 мс)
+  # Кэш — пока на телефоне не ставили и не удаляли приложения: списки пакетов
+  # системы новее кэша — собираем заново (из оригинала, 0badd3d)
   if [ "$refresh" = "0" ] && [ -s "$cache" ]; then
-    cat "$cache"
-    return 0
+    local ref
+    for ref in /data/system/packages.list /data/system/packages.xml /data/app; do
+      if [ -e "$ref" ] && [ "$ref" -nt "$cache" ]; then refresh=1; break; fi
+    done
+    if [ "$refresh" = "0" ]; then cat "$cache"; return 0; fi
   fi
 
   local target="$MODDIR/bin/pkglist.jar"
@@ -566,17 +573,25 @@ cmd_list_apps() {
 
   if [ -f "$target" ] && command -v app_process >/dev/null 2>&1; then
     mkdir -p "$STATE_DIR" 2>/dev/null
-    local out
-    out=$(CLASSPATH="$target" app_process /system/bin com.deathwatcher.PkgList --out "$cache" --apps-list "$CONFDIR/apps.list" 2>/dev/null)
-    if [ -s "$cache" ]; then
+    # во временный файл: сбой посреди записи не портит прежний кэш
+    local out tmp="$cache.tmp.$$"
+    out=$(CLASSPATH="$target" app_process /system/bin com.deathwatcher.PkgList --out "$tmp" --apps-list "$CONFDIR/apps.list" 2>/dev/null)
+    if [ -s "$tmp" ] && grep -q '^\[' "$tmp" 2>/dev/null; then
+      mv -f "$tmp" "$cache"
       cat "$cache"
       return 0
-    elif [ -n "$out" ] && [ "${out#\[}" != "$out" ]; then
+    fi
+    rm -f "$tmp"
+    if [ -n "$out" ] && [ "${out#\[}" != "$out" ]; then
       printf '%s\n' "$out"
       printf '%s\n' "$out" > "$cache" 2>/dev/null
       return 0
     fi
   fi
+
+  # Пересобрать не вышло, а прежний кэш есть — он, с названиями и иконками,
+  # лучше голых имён пакетов от pm (оригинал, 0badd3d)
+  if [ -s "$cache" ]; then cat "$cache"; return 0; fi
 
   # Резервный вариант через pm (без названий и иконок)
   local PM=pm
@@ -1014,6 +1029,11 @@ share_file_ok() {
     */../*) return 1 ;;   # «*» в шаблоне пропускает и «/» с «..»
     "$CONFFILE") ;;
     "$CONFDIR"/hosts/*.txt) case "${1#"$CONFDIR"/hosts/}" in */*) return 1 ;; esac ;;
+    # файлы стратегий — «Поделиться» из меню стратегии (путь даёт strategy-path)
+    "$MODDIR/defaults/nfqws2.conf") ;;
+    "$STRATEGIES_DIR"/*.conf) case "${1#"$STRATEGIES_DIR"/}" in */*) return 1 ;; esac ;;
+    "$USER_STRATEGIES_DIR"/*.conf) case "${1#"$USER_STRATEGIES_DIR"/}" in */*) return 1 ;; esac ;;
+    "$IMPORTS_DIR"/*.conf) case "${1#"$IMPORTS_DIR"/}" in */*) return 1 ;; esac ;;
     *) return 1 ;;
   esac
   [ -f "$1" ]
@@ -1178,6 +1198,10 @@ case "$1" in
     # в редактор он попадает уже приведённым к виду встроенной стратегии.
     case "$2" in imp:*) normalize_import "$f" ;; *) cat "$f" ;; esac \
       | b64e ;;
+  strategy-path) # файл, который действует для стратегии: правка пользователя или встроенный
+    case "$2" in default) f="$MODDIR/defaults/nfqws2.conf" ;; *) f=$(strategy_file "$2") ;; esac
+    [ -n "$f" ] && [ -f "$f" ] || { echo "Стратегия не найдена" >&2; exit 1; }
+    echo "$f" ;;
   strategy-save-b64)
     n="$2"; t="$STATE_DIR/strat_save.tmp"
     case "$n" in default|'') echo "Стандартную стратегию редактируйте во вкладке «Конфиг»" >&2; exit 1 ;; esac
@@ -1313,6 +1337,8 @@ case "$1" in
     rm -f "$HOME_OVERRIDE_FILE"
     sh "$SERVICE" home_check >/dev/null 2>&1
     [ -f "$HOME_PAUSED_FILE" ] && echo OK || { echo "$(M 'Причины для паузы больше нет: телефон не в домашней сети и VPN выключен' 'Nothing to pause for: not on home Wi‑Fi and VPN is off')" >&2; exit 1; } ;;
+  # оттягивание «Состояния» вниз: служба заново смотрит на сеть, VPN и DNS
+  net-recheck) sh "$SERVICE" net_recheck >/dev/null 2>&1; echo OK ;;
   backup-create) cmd_backup_create "$2" ;;
   backup-list) cmd_backup_list ;;
   backup-restore) cmd_backup_restore "$2" ;;
@@ -1338,10 +1364,10 @@ EOF
   clear-logs) : > "$SERVICE_LOG"; : > "$NFQWS_LOG"; rm -f "$LOG_DIR/nfqws2-debug.log" "$LOG_DIR/auto.log"; [ -f "$LOG_DIR/dns.log" ] && : > "$LOG_DIR/dns.log"; echo OK ;;
   *)
     echo "Команды: status json-status is-running check dry-run start stop restart reload doctor get-conf save-conf-b64 reset-conf conf-modified" >&2
-    echo "         list-strategies get-strategy set-strategy strategy-get-b64 strategy-save-b64 strategy-reset" >&2
+    echo "         list-strategies get-strategy set-strategy strategy-get-b64 strategy-path strategy-save-b64 strategy-reset" >&2
     echo "         import-add-b64 list-imports get-import-merged-b64 rename-import delete-import" >&2
     echo "         get-list save-list-b64 list-update add-domain clear-auto reset-lists set set-mode list-apps" >&2
     echo "         get-logs export-logs clear-logs wifi-ssid backup-create backup-list backup-restore backup-restore-b64 probe-dpi probe-cancel net-info" >&2
-    echo "         home-pause upload domain-check share changelog dns-* hosts-*" >&2
+    echo "         home-pause net-recheck upload domain-check share changelog dns-* hosts-*" >&2
     exit 1 ;;
 esac
