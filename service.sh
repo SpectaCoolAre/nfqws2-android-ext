@@ -7,6 +7,7 @@ umask 077
 load_conf
 
 STARTED_FILE="$STATE_DIR/started_at"
+STARTED_CS_FILE="$STATE_DIR/started_cs"
 
 wait_for_process() { # <pid> <expected state: up|down> <timeout in 50 ms ticks>
   local pid="$1" want="$2" ticks="${3:-24}" i=0 alive
@@ -125,6 +126,9 @@ _start() {
   echo "$pid" > "$PIDFILE"
   protect_process "$pid"
   date +%s > "$STARTED_FILE"
+  # Время работы считается по часам с загрузки (/proc/uptime): перевод часов
+  # и смена часового пояса его не трогают
+  awk '{ printf "%d\n", $1 * 100 }' /proc/uptime > "$STARTED_CS_FILE" 2>/dev/null
 
   # firewall_start can return 0 with no rule in place; without the POSTROUTING
   # jump the daemon runs but nothing reaches NFQUEUE
@@ -147,7 +151,7 @@ _start() {
 }
 
 stop() {
-  rm -f "$DESIRED_FILE" "$STARTED_FILE"
+  rm -f "$DESIRED_FILE" "$STARTED_FILE" "$STARTED_CS_FILE"
   release_wakelock
   firewall_stop
   if [ -f "$PIDFILE" ]; then
@@ -239,7 +243,8 @@ ensure_netwatch() { # зовётся только из ensure_watchdog, посл
 net_signature() {
   local dev
   dev=$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
-  if vpn_active; then printf '%s|vpn' "$dev"; else printf '%s|' "$dev"; fi
+  # Wi‑Fi или мобильная сеть под VPN: маршрут один (tun), а сеть под ним разная
+  printf '%s|%s|%s' "$dev" "$(vpn_active && echo vpn)" "$(on_wifi && echo wifi)"
 }
 
 netwatch() {
@@ -303,6 +308,7 @@ netwatch() {
         else dns_start "смена сети"; fi
       fi
       netsig="$sig"
+      vpn_active && vpn_learn_uids
       if [ -f "$DESIRED_FILE" ] && is_running; then
         log_msg "netwatch: сеть изменилась (ip monitor) — пересобираю правила"
         firewall_start
@@ -468,7 +474,7 @@ case "$1" in
     # служба «уже запущена», наблюдатель «уже работает», а stop убил бы чужое.
     # desired — «служба должна работать»: без сброса boot-completed поднимал бы
     # её и при выключенном автозапуске
-    rm -f "$PIDFILE" "$WD_PIDFILE" "$WN_PIDFILE" "$DESIRED_FILE" "$STARTED_FILE"
+    rm -f "$PIDFILE" "$WD_PIDFILE" "$WN_PIDFILE" "$DESIRED_FILE" "$STARTED_FILE" "$STARTED_CS_FILE"
     rm -f "$STATE_DIR"/conf_seen.*
     rmdir "$STATE_DIR/start.lock" 2>/dev/null
     until [ "$(getprop sys.boot_completed 2>/dev/null)" = "1" ]; do sleep 3; done

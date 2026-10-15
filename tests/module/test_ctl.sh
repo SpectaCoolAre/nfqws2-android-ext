@@ -115,9 +115,19 @@ printf '%s' "$(( $(date +%s) - 42 ))" > "$CONFDIR/state/started_at"
 ctl json-status
 assert_match "$ctl_out" '"uptime":4[0-9]' "a valid started_at still yields the real uptime"
 
+# Часы с загрузки важнее date: перевод часов время работы не трогает
+printf '%s' "$(( $(date +%s) + 7200 ))" > "$CONFDIR/state/started_at"
+awk '{ printf "%d\n", $1 * 100 - 4250 }' /proc/uptime > "$CONFDIR/state/started_cs"
+ctl json-status
+assert_match "$ctl_out" '"uptime":4[0-9],' "the boot clock wins over a moved wall clock"
+assert_match "$ctl_out" '"uptime_ms":4[0-9]{4},' "and gives milliseconds for an even tick"
+printf 'x' > "$CONFDIR/state/started_cs"
+ctl json-status
+assert_contains "$ctl_out" '"uptime_ms":0' "a broken mark degrades to the wall clock (here: in the future, so 0)"
+
 kill "$BROKEN_PID" 2>/dev/null
 wait "$BROKEN_PID" 2>/dev/null
-rm -f "$CONFDIR/state/nfqws2.pid" "$CONFDIR/state/started_at"
+rm -f "$CONFDIR/state/nfqws2.pid" "$CONFDIR/state/started_at" "$CONFDIR/state/started_cs"
 
 # ── set ───────────────────────────────────────────────────────────────────────
 section "set: value validation"

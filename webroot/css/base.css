@@ -211,6 +211,16 @@ svg.icon.s24 { width: 24px; height: 24px; }
   transition: background-color var(--dur-medium) var(--standard), box-shadow var(--dur-medium) var(--standard);
 }
 .app-bar.scrolled { background: var(--md-sys-color-surface-container); }
+/* Прокрутили — под шапкой проезжает страница: шапка полупрозрачная, с тем же
+   размытием, что у нижней капсулы. Без backdrop-filter остаётся сплошной */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .app-bar { transition: background-color var(--dur-medium) var(--standard), backdrop-filter var(--dur-medium) var(--standard); }
+  .app-bar.scrolled {
+    background: color-mix(in srgb, var(--md-sys-color-surface-container) 62%, transparent);
+    -webkit-backdrop-filter: blur(18px) saturate(1.6);
+    backdrop-filter: blur(18px) saturate(1.6);
+  }
+}
 .app-bar .title { flex: 1; min-width: 0; padding-left: 8px;
   font-size: var(--ts-title-large); line-height: var(--lh-title-large); font-weight: var(--w-regular);
   color: var(--md-sys-color-on-surface); }
@@ -275,7 +285,7 @@ svg.icon.s24 { width: 24px; height: 24px; }
 /* Капсула слегка прозрачная, под ней размыто то, что прокручивается мимо.
    Без backdrop-filter остаётся сплошной — иначе текст под ней мешал бы подписям */
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .nav-bar { background: color-mix(in srgb, var(--md-sys-color-surface-container-high) 76%, transparent); }
+  .nav-bar { background: color-mix(in srgb, var(--md-sys-color-surface-container-high) 62%, transparent); }
 }
 /* На дочерних экранах панель уезжает вниз: она есть только на разделах верхнего уровня */
 body.nav-hidden .nav-bar {

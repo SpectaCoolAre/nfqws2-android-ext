@@ -199,38 +199,30 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   // удар инерции о край — свой: короткое растяжение страницы
   await page.evaluate(() => { window.__abs = []; const o = stretchAbsorb; stretchAbsorb = (t, v) => { __abs.push(t ? 'top' : 'bottom'); return o(t, v); }; });
   const navF = await navGeo();
-  const flick = async (y0, y1) => {
-    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 190, y: y0 }] });
-    for (let i = 1; i <= 5; i++) {
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 190, y: y0 + (y1 - y0) * i / 5 }] });
-      await page.waitForTimeout(8);
-    }
-    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-    await page.waitForTimeout(1500);
-  };
-  // Бросок через CDP: под нагрузкой (тесты идут параллельно) он бывает слабым и
-  // не доезжает до края — тогда повторяем. Падение — только если инерция
-  // довела до края, а отскока не было.
-  async function flingInto(edge) {
-    for (let i = 0; i < 4; i++) {
-      await page.evaluate(e => { __abs.length = 0; window.__hit = 0;
-        const max = scroller.scrollHeight - scroller.clientHeight;
-        scrollToY(e === 'bottom' ? Math.max(0, max - 250) : Math.min(max, 250));
-        scroller.addEventListener('scroll', function f(){
-          const m = scroller.scrollHeight - scroller.clientHeight, top = scrollPos();
-          // до края доехала инерция и быстро: тут отскок обязан быть (медленный подъезд — без него)
-          if (!fling.touching && (e === 'bottom' ? top >= m - 1 : top <= 0)) { window.__hit = Math.abs(fling.v) > .3 ? 1 : 0; scroller.removeEventListener('scroll', f); }
-        });
-      }, edge);
-      await page.waitForTimeout(100);
-      if (edge === 'bottom') await flick(460, 280); else await flick(240, 420);
-      const r = await page.evaluate(() => [__abs.join(), window.__hit]);
-      if (r[0] || r[1]) return r[0];
-    }
-    return 'never reached';
+  // Инерция — покадровой прокруткой при отпущенном пальце: отскок срабатывает
+  // по событиям scroll, ему всё равно, кто крутит. Настоящий бросок через CDP
+  // (серия touchMove) запускал инерцию Chromium через раз — решала скорость
+  // в момент отпускания, а её задавали задержки самого CDP
+  async function flingInto(edge, speed = 1.5) {   // px/мс
+    await page.evaluate(() => { __abs.length = 0; });
+    await page.evaluate(([e, v]) => new Promise(done => {
+      const max = scroller.scrollHeight - scroller.clientHeight, dir = e === 'bottom' ? 1 : -1;
+      let y = e === 'bottom' ? Math.max(0, max - 200) : Math.min(max, 200), t = 0;
+      scrollToY(y);
+      requestAnimationFrame(function step(now){
+        if (t) y += dir * v * (now - t);
+        t = now;
+        scrollToY(Math.max(0, Math.min(max, y)));
+        if (y > 0 && y < max) requestAnimationFrame(step); else setTimeout(done, 300);
+      });
+    }), [edge, speed]);
+    return page.evaluate(() => __abs.join());
   }
   eq('bottom', await flingInto('bottom'), 'a fling that runs into the bottom bounces the page');
+  await page.waitForTimeout(600);   // два отскока подряд не чаще раза в 0,5 с
   eq('top', await flingInto('top'), 'and one into the top bounces it too');
+  await page.waitForTimeout(600);
+  eq('', await flingInto('bottom', .1), 'a slow arrival at the edge does not bounce');
   eq(navF, await navGeo(), 'the navigation bar does not move');
 
   sect('child screens');

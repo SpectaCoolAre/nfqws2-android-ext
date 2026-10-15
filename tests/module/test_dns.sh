@@ -281,6 +281,83 @@ dns_start "смена сети" force
 assert_rc 0 $? "a network or VPN change restarts dnsproxy even with the same config"
 assert_contains "$(ipt_rules OUTPUT nat)" "-j nfqws_dns" "keeping the interception, so nothing leaks to the carrier DNS meanwhile"
 assert_contains "$(cat "$DNS_LOG")" "сеть или VPN сменились" "and says why"
+# Трафик приложений (uid от 10000) на порт 53 не перехватывается: VPN-приложение
+# ходит так к своему серверу, и перехват глушил VPN на мобильной сети
+chain=$(ipt_rules nfqws_dns nat)
+assert_contains "$chain" "! --uid-owner 0-9999 -j RETURN" "app traffic to port 53 (a VPN app among it) is not intercepted, only the system resolver"
+assert_eq 1 "$(printf '%s\n' "$chain" | awk '/uid-owner/ { o = NR } /REDIRECT/ && !r { r = NR } END { print (o && r && o < r) ? 1 : 0 }')" "and that exception comes before the REDIRECT"
+
+# Под VPN: без busybox с setuidgid пакеты dnsproxy не отличить от прочих
+# root — DNS модуля выключается на время VPN
+cat > "$MOCKBIN/busybox" <<'BB'
+#!/bin/sh
+[ "$1" = setuidgid ] && [ "${MOCK_BB_NOSUID:-0}" != 1 ] || exit 1
+[ "$3" = true ] || echo "$2" >> "$MOCK_DIR/setuidgid"
+shift 2; exec "$@"
+BB
+chmod 0755 "$MOCKBIN/busybox"
+MOCK_BB_NOSUID=1; export MOCK_BB_NOSUID
+rm -f "$DNS_RUN_DIR/runner"
+NFQWS_SYSNET="$SANDBOX/sysnet"; export NFQWS_SYSNET
+mkdir -p "$NFQWS_SYSNET/tun0"; printf '0x1091\n' > "$NFQWS_SYSNET/tun0/flags"
+dns_start "смена сети" force
+assert_no_file "$DNS_PIDFILE" "without setuidgid a VPN stops dnsproxy"
+assert_eq "" "$(ipt_rules OUTPUT nat | grep nfqws_dns)" "and removes the interception"
+assert_contains "$(cat "$DNS_LOG")" "включён VPN" "the log says why"
+ctl dns-state
+assert_contains "$ctl_out" "vpn_paused=1" "dns-state reports the VPN pause"
+ctl json-status
+assert_contains "$ctl_out" '"dns_vpn":1' "and so does json-status"
+ctl dns-restart
+assert_rc 1 "$ctl_rc" "a manual DNS restart refuses meanwhile"
+assert_no_file "$DNS_PIDFILE" "and does not start it"
+rm -rf "$NFQWS_SYSNET/tun0"
+dns_start "смена сети" force
+assert_file "$DNS_PIDFILE" "the VPN gone, DNS is back"
+assert_contains "$(ipt_rules OUTPUT nat)" "-j nfqws_dns" "with its interception"
+assert_eq "" "$(ipt_rules OUTPUT mangle | grep nfqws_dnsm)" "no VPN bypass without setuidgid"
+
+# С busybox (Magisk/KernelSU/APatch) dnsproxy работает в своей группе, его
+# пакеты получают бит «мимо VPN» — и DNS модуля под VPN остаётся включённым
+unset MOCK_BB_NOSUID
+dns_stop; rm -f "$DNS_RUN_DIR/runner" "$MOCK_DIR/setuidgid"; _DNS_RUNNER=-
+dns_start "запуск"
+assert_file "$DNS_PIDFILE" "dnsproxy runs"
+assert_eq "0:$DNS_GID" "$(cat "$MOCK_DIR/setuidgid" 2>/dev/null)" "with its own group, through busybox setuidgid"
+mark=$(ipt_rules nfqws_dnsm mangle)
+assert_contains "$mark" "-m owner --gid-owner $DNS_GID -j MARK --set-xmark 0x20000/0x20000" "its packets get the VpnService.protect() bit"
+assert_contains "$(ipt_rules OUTPUT mangle)" "-j nfqws_dnsm" "in mangle OUTPUT"
+snat=$(ipt_rules nfqws_dnss nat)
+assert_contains "$snat" "-o lo -j RETURN" "replies over loopback are left alone"
+assert_contains "$snat" "-m owner --gid-owner $DNS_GID -j MASQUERADE" "the tunnel source address is replaced with the network one"
+assert_contains "$(ipt_rules POSTROUTING nat)" "-j nfqws_dnss" "in nat POSTROUTING"
+assert_contains "$(ipt_rules nfqws_dns nat)" "! --uid-owner 0-9999 -j RETURN" "apps' own port-53 traffic is still not intercepted"
+mkdir -p "$NFQWS_SYSNET/tun0"; printf '0x1091\n' > "$NFQWS_SYSNET/tun0/flags"
+dns_start "смена сети" force
+assert_file "$DNS_PIDFILE" "a VPN no longer stops DNS"
+assert_contains "$(ipt_rules OUTPUT nat)" "-j nfqws_dns" "interception stays"
+ctl json-status
+assert_contains "$ctl_out" '"dns_vpn":0' "no VPN pause reported"
+ctl dns-state
+assert_contains "$ctl_out" "vpn_paused=0" "in dns-state too"
+iptables -w -t mangle -D OUTPUT -j nfqws_dnsm
+dns_check
+assert_contains "$(ipt_rules OUTPUT mangle)" "-j nfqws_dnsm" "the watchdog restores a lost bypass rule"
+dns_stop
+assert_eq "" "$(ipt_rules OUTPUT mangle | grep nfqws_dnsm)" "stopping removes the bypass mark"
+assert_eq "" "$(ipt_rules POSTROUTING nat | grep nfqws_dnss)" "and the MASQUERADE"
+# Ядро без MARK/MASQUERADE: правила не встали — дальше на время VPN DNS выключается
+MOCK_IPT_FEATURES="connbytes multiport NFQUEUE"; export MOCK_IPT_FEATURES
+rm -rf "$NFQWS_SYSNET/tun0"
+dns_start "запуск"
+assert_file "$DNS_RUN_DIR/bypass_fail" "a kernel without owner match marks the bypass as failed"
+mkdir -p "$NFQWS_SYSNET/tun0"; printf '0x1091\n' > "$NFQWS_SYSNET/tun0/flags"
+dns_start "смена сети" force
+assert_no_file "$DNS_PIDFILE" "and DNS falls back to pausing under a VPN"
+MOCK_IPT_FEATURES="connbytes multiport owner NFQUEUE"; export MOCK_IPT_FEATURES
+dns_stop; rm -f "$DNS_RUN_DIR/bypass_fail" "$DNS_RUN_DIR/runner" "$MOCKBIN/busybox"; _DNS_RUNNER=-
+dns_start "запуск"
+rm -rf "$NFQWS_SYSNET"; unset NFQWS_SYSNET
 ctl dns-set-enabled 0
 assert_no_file "$DNS_PIDFILE" "the main switch is what turns it off"
 assert_eq "" "$(ipt_rules OUTPUT nat | grep nfqws_dns)" "interception included"

@@ -225,7 +225,10 @@ function dnsStateRow(){
   let title, sub = '';
   const working = s.rules === 'on' && s.proxy === 'running';
   if(s.private === 'hostname') title = t('Не применяется: включён «Частный DNS»');
-  else if(working){
+  else if(s.vpn_paused === '1'){
+    title = t('Выключен на время VPN');
+    sub = t('Пока включён VPN, DNS идёт через него. Включится сам, когда VPN отключится');
+  } else if(working){
     title = t('Работает');
     sub = t('Перехвачено запросов: {0}', fmtCount(+s.hits || 0));
   } else if(!dnsSt.profiles.some(p => p.enabled && p.servers.length && p.domains.length) && (s.default || 'net') === 'net')

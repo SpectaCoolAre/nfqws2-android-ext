@@ -154,11 +154,19 @@ conf_modified() {
 }
 
 cmd_json_status() {
-  local run=false pid="" uptime=0
+  local run=false pid="" uptime=0 upms=0 cs st
   if is_running; then
     run=true
     pid=$(cat "$PIDFILE" 2>/dev/null)
-    if [ -f "$STATE_DIR/started_at" ]; then
+    # Часы с загрузки (/proc/uptime, сотые доли секунды): перевод часов и смена
+    # часового пояса их не трогают. Метки нет (служба запущена прежней
+    # версией) — по date, как раньше
+    st=$(cat "$STATE_DIR/started_cs" 2>/dev/null); cs=$(uptime_cs)
+    case "$st$cs" in
+      ''|*[!0-9]*) ;;
+      *) [ "$cs" -ge "$st" ] && { upms=$(( (cs - st) * 10 )); uptime=$(( upms / 1000 )); } ;;
+    esac
+    if [ "$upms" = 0 ] && [ -f "$STATE_DIR/started_at" ]; then
       local now st
       now=$(date +%s)
       st=$(cat "$STATE_DIR/started_at" 2>/dev/null)
@@ -174,6 +182,7 @@ cmd_json_status() {
       esac
       # Часы могли перевести назад — тогда разница отрицательная.
       [ "$uptime" -ge 0 ] 2>/dev/null || uptime=0
+      upms=$(( uptime * 1000 ))
     fi
   fi
   # Ничего сверх того, что читает WebUI: раньше здесь ещё считались
@@ -198,7 +207,7 @@ cmd_json_status() {
                       "$LISTS_DIR/ipset.list" "$LISTS_DIR/ipset_exclude.list" "$CONFDIR/apps.list")
   cnt_user="$1" cnt_auto="$2" cnt_excl="$3" cnt_ipset="$4" cnt_ipset_excl="$5" cnt_apps="$6"
   # нечисловое значение обваливает весь JSON и убивает WebUI, поэтому проверяем каждое поле
-  for v in appn cnt_user cnt_auto cnt_excl cnt_ipset cnt_ipset_excl cnt_apps uptime qdrop \
+  for v in appn cnt_user cnt_auto cnt_excl cnt_ipset cnt_ipset_excl cnt_apps uptime upms qdrop \
            PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC AUTOSTART WATCHDOG IPV6_ENABLED LOG_LEVEL NFQUEUE_NUM HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT \
            DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS; do
     eval "case \"\${$v}\" in ''|*[!0-9]*) $v=0 ;; esac"
@@ -208,13 +217,16 @@ cmd_json_status() {
   local dnsav=0 dnson=0 override=""
   [ -f "$DNS_BIN" ] && dnsav=1
   dns_enabled && dnson=1
+  # DNS выключен на время VPN — карточка так и пишет
+  local dnsvpn=0
+  [ "$dnson" = 1 ] && dns_vpn_paused && dnsvpn=1
   # Обход запущен вручную в домашней сети — WebUI предлагает вернуть паузу
   [ -f "$HOME_OVERRIDE_FILE" ] && IFS= read -r override < "$HOME_OVERRIDE_FILE"
   cat <<JSON
-{"running":$run,"pid":"$pid","uptime":$uptime,"strategy":"$(json_str "$cur_strat")","version":"$(json_str "$ver")","mode":"$(json_str "$(current_mode)")",
+{"running":$run,"pid":"$pid","uptime":$uptime,"uptime_ms":$upms,"strategy":"$(json_str "$cur_strat")","version":"$(json_str "$ver")","mode":"$(json_str "$(current_mode)")",
 "pkt_limit_out":$PKT_LIMIT_OUT,"pkt_limit_in":$PKT_LIMIT_IN,"block_quic":$BLOCK_QUIC,"app_mode":"$(json_str "$APP_MODE")","autostart":$AUTOSTART,"watchdog":$WATCHDOG,
 "ipv6":$IPV6_ENABLED,"log_level":$LOG_LEVEL,"qdrop":$qdrop,"queue":$NFQUEUE_NUM,"app_uids":$appn,
-"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":$DOH_BYPASS,"meta_quic":$META_QUIC_REJECT,"calls_bypass":$CALLS_BYPASS,"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")","pending":"$(json_str "$pending")",
+"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":$DOH_BYPASS,"meta_quic":$META_QUIC_REJECT,"calls_bypass":$CALLS_BYPASS,"dns_vpn":$dnsvpn,"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")","pending":"$(json_str "$pending")",
 "counts":{"user":$cnt_user,"auto":$cnt_auto,"exclude":$cnt_excl,"ipset":$cnt_ipset,"ipset_exclude":$cnt_ipset_excl,"apps":$cnt_apps}}
 JSON
 }

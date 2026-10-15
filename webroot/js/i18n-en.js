@@ -653,5 +653,8 @@ EN = {
  "Экспорт журналов (долгое нажатие на значок журналов)": "Exporting logs (long press on the logs icon)",
  "Долгий тап по значку": "Long press on the icon",
  "Обход звонков (не тестировалось)": "Calls bypass (untested)",
- "Запросы к IPv6-серверам DNS идут мимо: в ядре нет ip6tables nat, а у сети нет IPv4-серверов.": "Queries to IPv6 DNS servers go around: the kernel has no ip6tables nat and the network has no IPv4 servers."
+ "Запросы к IPv6-серверам DNS идут мимо: в ядре нет ip6tables nat, а у сети нет IPv4-серверов.": "Queries to IPv6 DNS servers go around: the kernel has no ip6tables nat and the network has no IPv4 servers.",
+ "DNS выключен при VPN": "DNS off with VPN",
+ "Выключен на время VPN": "Off while a VPN is on",
+ "Пока включён VPN, DNS идёт через него. Включится сам, когда VPN отключится": "While a VPN is on, DNS goes through it. Turns back on by itself when the VPN goes off"
 };

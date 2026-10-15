@@ -2,7 +2,7 @@
    Скрипты подключаются из index.html обычными <script> по порядку и делят одну
    глобальную область: функции и let/const одного файла видны в остальных. */
 
-/* ── Время работы: tabular-nums, тик раз в секунду ─────────────────────── */
+/* ── Время работы: tabular-nums, ровно раз в секунду ───────────────────── */
 let uptTimer = null;
 function fmtUptime(sec){
   sec = Math.max(0, Math.floor(sec));
@@ -14,15 +14,32 @@ function fmtUptime(sec){
   if(h > 0) return p(h) + ':' + p(m) + ':' + p(sec);
   return p(m) + ':' + p(sec);
 }
-let uptBase = 0, uptAt = 0;
-function stopUptTimer(){ if(uptTimer){ clearInterval(uptTimer); uptTimer = null; } $('upt').textContent = '—'; }
-function startUptTimer(baseSec){
-  uptBase = Math.max(0, Math.floor(baseSec)); uptAt = Date.now();
-  const tick = () => { $('upt').textContent = fmtUptime(uptBase + (Date.now() - uptAt) / 1000); };
-  tick();
-  if(!uptTimer) uptTimer = setInterval(tick, 1000);
+/* Отсчёт ведёт сама страница по performance.now() — монотонным часам, которые
+   не трогают ни перевод часов, ни смена часового пояса. Служба присылает время
+   работы (тоже по часам с загрузки) раз в полторы секунды, но привязка к нему
+   — только при расхождении больше 2 с: перезапуск службы или телефон спал.
+   Иначе каждый опрос сдвигал бы отсчёт на округление и задержку ответа, и
+   секунды то замирали, то перескакивали. Следующий тик — ровно на границе
+   секунды, а не через 1000 мс от прошлого: setInterval копит опоздания. */
+let uptAnchor = null;   // {ms: время работы, t: performance.now() в тот момент}
+function uptElapsedMs(){ return uptAnchor.ms + (performance.now() - uptAnchor.t); }
+function stopUptTimer(){
+  if(uptTimer){ clearTimeout(uptTimer); uptTimer = null; }
+  uptAnchor = null;
+  $('upt').textContent = '—';
 }
-
+function uptTick(){
+  const ms = uptElapsedMs();
+  $('upt').textContent = fmtUptime(ms / 1000);
+  uptTimer = setTimeout(uptTick, 1000 - (ms % 1000) + 10);
+}
+function startUptTimer(ms){
+  ms = Math.max(0, ms);
+  if(uptAnchor && Math.abs(uptElapsedMs() - ms) < 2000) return;
+  uptAnchor = {ms, t: performance.now()};
+  if(uptTimer) clearTimeout(uptTimer);
+  uptTick();
+}
 /* ══ Стратегии ═══════════════════════════════════════════════════════════
    Описаний у стратегий нет намеренно: что работает, зависит от провайдера и
    региона, и описание обещало бы больше, чем может. Вместо них — группы по
@@ -262,7 +279,8 @@ function renderStatus(){
   // Части подписи с data-go открываются долгим нажатием: DNS — экран DNS,
   // «Домашний Wi‑Fi» — его настройки
   const part = (text, go) => go ? '<span data-go="' + go + '">' + esc(text) + '</span>' : esc(text);
-  const dns = j.dns_available == 1 ? ' · ' + part(j.dns_enabled == 1 ? t('DNS включён') : t('DNS выключен'), 'dns') : '';
+  const dns = j.dns_available == 1 ? ' · ' + part(j.dns_enabled != 1 ? t('DNS выключен')
+    : (j.dns_vpn == 1 ? t('DNS выключен при VPN') : t('DNS включён')), 'dns') : '';
   // Подпись — одна строка; подробности паузы — в title.
   const sub = paused
     ? (j.paused === '@vpn' ? esc(t('Включён VPN')) : part(t('Домашний Wi‑Fi'), 'wifi')) + dns
@@ -270,7 +288,7 @@ function renderStatus(){
   setHTML('sub', sub, false);
   $('sub').title = paused ? (j.paused === '@vpn' ? t('Включён VPN. Обход возобновится, когда VPN отключится.')
     : t('Домашний Wi‑Fi «{0}». Обход возобновится, когда телефон уйдёт из этой сети.', j.paused)) : '';
-  if(j.running) startUptTimer(j.uptime || 0); else stopUptTimer();
+  if(j.running) startUptTimer(j.uptime_ms != null ? j.uptime_ms : (j.uptime || 0) * 1000); else stopUptTimer();
   renderHeroActions();
   renderParams(j);
   $('dbg').checked = (j.log_level == 1);

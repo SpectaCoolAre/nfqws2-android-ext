@@ -422,13 +422,15 @@ dns_proxy_start() {
     awk "$DNS_LOG_FILTER" < "$fifo" >> "$DNS_LOG" 2>/dev/null &
     out="$fifo"
   fi
+  # Со своей группой — чтобы правила мимо VPN узнавали его пакеты
+  if dns_runner; then set -- "$_DNS_RUNNER" setuidgid "0:$DNS_GID" "$DNS_BIN"; else set -- "$DNS_BIN"; fi
   (
     set -f
     IFS='
 '
     exec 0</dev/null >>"$out" 2>&1
     SSL_CERT_DIR=$(dns_cert_dirs); export SSL_CERT_DIR
-    exec "$DNS_BIN" $(cat "$DNS_RUN_DIR/args")
+    exec "$@" $(cat "$DNS_RUN_DIR/args")
   ) &
   pid=$!
   echo "$pid" > "$DNS_PIDFILE"
@@ -445,7 +447,7 @@ dns_proxy_start() {
     dns_fail "dnsproxy не запустился: $(grep -v '] nfqws2: ' "$DNS_LOG" 2>/dev/null | tail -n 1)"
     return 1
   fi
-  if [ "$listen" = 1 ]; then dns_log "dnsproxy запущен, PID $pid, порт $DNS_PORT"
+  if [ "$listen" = 1 ]; then dns_log "dnsproxy запущен, PID $pid, порт $DNS_PORT${_DNS_RUNNER:+, группа $DNS_GID (мимо VPN)}"
   else dns_log "dnsproxy запущен (PID $pid), но порт $DNS_PORT за 4 с не открылся — ждём дальше"; fi
   protect_process "$pid"
   cp -f "$DNS_RUN_DIR/upstreams.txt" "$DNS_RUN_DIR/running.upstreams" 2>/dev/null
@@ -476,18 +478,82 @@ _dns_skip_vpn() { # <iptables|ip6tables> <таблица> <цепочка>
   local i
   for i in $DNS_VPN_IFACES; do $1 -w -t "$2" -A "$3" -o "$i" -j RETURN || return 1; done
 }
+# Перехватываются только запросы системного резолвера (netd, root): так
+# спрашивают DNS почти все приложения. Свой трафик на порт 53 у приложений
+# (uid от 10000) не трогаем: так ходит VPN-приложение — к серверу через порт
+# 53 или за адресом своего сервера мимо туннеля, — и перехват глушил VPN.
+# Без модуля owner в ядре правило не ставится, перехват работает как раньше
+_dns_skip_apps() { # <iptables|ip6tables> <таблица> <цепочка>
+  $1 -w -t "$2" -A "$3" -m owner ! --uid-owner 0-9999 -j RETURN 2>/dev/null || true
+}
+# Мимо VPN. VPN-приложения заворачивают в туннель всех, кроме себя, и root
+# тоже (правило «fwmark 0x0/0x20000 … uidrange 0-… lookup tun0»), а значит, и
+# dnsproxy. К модулю же под VPN приходят как раз запросы мимо туннеля — прежде
+# всего самого VPN-приложения за адресом своего сервера: dnsproxy слал их в
+# этот же туннель, и пока он переподключался (на мобильной сети — часто), VPN
+# глох. Поэтому dnsproxy работает со своей группой ($DNS_GID), а его пакеты
+# получают бит 0x20000 — тот же, что ставит VpnService.protect() самому
+# VPN-приложению: правило VPN их пропускает, и они идут в обычную сеть.
+# Адрес отправителя ядро успело выбрать по туннелю — MASQUERADE меняет его на
+# адрес сети. Трафик приложений не меняется: их DNS под VPN по-прежнему идёт
+# через туннель, а к dnsproxy — только то, что и так шло мимо VPN.
+# Без busybox с setuidgid (Magisk, KernelSU, APatch его дают) пакеты dnsproxy
+# не отличить — тогда на время VPN DNS модуля выключается
+DNS_GID=3953
+DNS_PROTECT=0x20000
+DNS_CHAIN_MARK=nfqws_dnsm    # mangle OUTPUT: бит «мимо VPN» пакетам dnsproxy
+DNS_CHAIN_SNAT=nfqws_dnss    # nat POSTROUTING: адрес отправителя — адрес сети
+_DNS_RUNNER=-
+# Результат поиска — в $DNS_RUN_DIR/runner до перезагрузки: статус для WebUI
+# спрашивают каждые полторы секунды, и запускать busybox каждый раз незачем
+dns_runner() { # находит busybox с setuidgid → $_DNS_RUNNER
+  local b f="$DNS_RUN_DIR/runner"
+  if [ "$_DNS_RUNNER" = - ]; then
+    if [ -f "$f" ]; then
+      IFS= read -r _DNS_RUNNER < "$f" || _DNS_RUNNER=
+    else
+      _DNS_RUNNER=
+      for b in /data/adb/ksu/bin/busybox /data/adb/ap/bin/busybox /data/adb/magisk/busybox "$(command -v busybox 2>/dev/null)"; do
+        [ -n "$b" ] && [ -x "$b" ] && "$b" setuidgid "0:$DNS_GID" true >/dev/null 2>&1 && { _DNS_RUNNER=$b; break; }
+      done
+      [ -d "$DNS_RUN_DIR" ] && echo "$_DNS_RUNNER" > "$f"
+    fi
+  fi
+  [ -n "$_DNS_RUNNER" ]
+}
+_dns_chain_bypass() { # <iptables|ip6tables>
+  local C="$1"
+  $C -w -t mangle -N $DNS_CHAIN_MARK 2>/dev/null
+  $C -w -t mangle -F $DNS_CHAIN_MARK || return 1
+  $C -w -t mangle -A $DNS_CHAIN_MARK -m owner --gid-owner $DNS_GID -j MARK --set-xmark $DNS_PROTECT/$DNS_PROTECT || return 1
+  $C -w -t mangle -C OUTPUT -j $DNS_CHAIN_MARK 2>/dev/null || $C -w -t mangle -I OUTPUT 1 -j $DNS_CHAIN_MARK || return 1
+  $C -w -t nat -N $DNS_CHAIN_SNAT 2>/dev/null
+  $C -w -t nat -F $DNS_CHAIN_SNAT || return 1
+  $C -w -t nat -A $DNS_CHAIN_SNAT -o lo -j RETURN || return 1
+  $C -w -t nat -A $DNS_CHAIN_SNAT -m owner --gid-owner $DNS_GID -j MASQUERADE || return 1
+  $C -w -t nat -C POSTROUTING -j $DNS_CHAIN_SNAT 2>/dev/null || $C -w -t nat -I POSTROUTING 1 -j $DNS_CHAIN_SNAT
+}
+_dns_unchain_bypass() { # <iptables|ip6tables>
+  _dns_unchain "$1" mangle $DNS_CHAIN_MARK
+  _dns_unchain "$1" nat $DNS_CHAIN_SNAT POSTROUTING
+}
+# Можно ли не выключать DNS под VPN: есть чем дать группу, и правила в прошлый
+# раз не отказали (метка bypass_fail живёт до перезагрузки)
+dns_vpn_bypass() { dns_runner && [ ! -f "$DNS_RUN_DIR/bypass_fail" ]; }
+
 _dns_chain_nat() { # <iptables|ip6tables>
   local C="$1"
   $C -w -t nat -N $DNS_CHAIN 2>/dev/null
   $C -w -t nat -F $DNS_CHAIN 2>/dev/null &&
   _dns_skip_vpn "$C" nat $DNS_CHAIN &&
+  _dns_skip_apps "$C" nat $DNS_CHAIN &&
   $C -w -t nat -A $DNS_CHAIN -m mark --mark 0x0/0xffff -j RETURN &&
   $C -w -t nat -A $DNS_CHAIN -p udp --dport 53 -j REDIRECT --to-ports $DNS_PORT &&
   $C -w -t nat -A $DNS_CHAIN -p tcp --dport 53 -j REDIRECT --to-ports $DNS_PORT &&
   { $C -w -t nat -C OUTPUT -j $DNS_CHAIN 2>/dev/null || $C -w -t nat -I OUTPUT 1 -j $DNS_CHAIN; }
 }
-_dns_unchain() { # <iptables|ip6tables> <таблица> <цепочка>
-  while $1 -w -t "$2" -D OUTPUT -j "$3" 2>/dev/null; do :; done
+_dns_unchain() { # <iptables|ip6tables> <таблица> <цепочка> [OUTPUT|POSTROUTING]
+  while $1 -w -t "$2" -D "${4:-OUTPUT}" -j "$3" 2>/dev/null; do :; done
   $1 -w -t "$2" -F "$3" 2>/dev/null
   $1 -w -t "$2" -X "$3" 2>/dev/null
 }
@@ -504,6 +570,7 @@ dns_rules_add() {
     if [ "$v4" = 1 ] && {
          ip6tables -w -t filter -N $DNS_CHAIN6F 2>/dev/null; ip6tables -w -t filter -F $DNS_CHAIN6F &&
          _dns_skip_vpn ip6tables filter $DNS_CHAIN6F &&
+         _dns_skip_apps ip6tables filter $DNS_CHAIN6F &&
          ip6tables -w -t filter -A $DNS_CHAIN6F -m mark --mark 0x0/0xffff -j RETURN &&
          ip6tables -w -t filter -A $DNS_CHAIN6F -p udp --dport 53 -j REJECT &&
          ip6tables -w -t filter -A $DNS_CHAIN6F -p tcp --dport 53 -j REJECT --reject-with tcp-reset &&
@@ -515,6 +582,20 @@ dns_rules_add() {
       echo none > "$DNS_RUN_DIR/ipv6"
     fi
   fi
+  rm -f "$DNS_RUN_DIR/bypass"
+  if dns_runner; then
+    if _dns_chain_bypass iptables >/dev/null 2>&1; then
+      : > "$DNS_RUN_DIR/bypass"
+      # IPv6 — только где есть ip6tables nat (MASQUERADE); иначе серверы по
+      # IPv6 под VPN идут, как раньше, через туннель
+      [ "$(cat "$DNS_RUN_DIR/ipv6" 2>/dev/null)" = redirect ] && _dns_chain_bypass ip6tables >/dev/null 2>&1 ||
+        _dns_unchain_bypass ip6tables
+    else
+      _dns_unchain_bypass iptables
+      : > "$DNS_RUN_DIR/bypass_fail"
+      dns_log "правила «мимо VPN» не применились (нет owner/MARK/MASQUERADE в ядре?) — на время VPN DNS модуля будет выключаться"
+    fi
+  fi
   return 0
 }
 
@@ -522,10 +603,15 @@ dns_rules_del() {
   _dns_unchain iptables nat $DNS_CHAIN
   _dns_unchain ip6tables nat $DNS_CHAIN
   _dns_unchain ip6tables filter $DNS_CHAIN6F
-  rm -f "$DNS_RUN_DIR/ipv6"
+  _dns_unchain_bypass iptables
+  _dns_unchain_bypass ip6tables
+  rm -f "$DNS_RUN_DIR/ipv6" "$DNS_RUN_DIR/bypass"
 }
 
-dns_rules_ok() { iptables -w -t nat -C OUTPUT -j $DNS_CHAIN 2>/dev/null; }
+dns_rules_ok() {
+  iptables -w -t nat -C OUTPUT -j $DNS_CHAIN 2>/dev/null &&
+  { [ ! -f "$DNS_RUN_DIR/bypass" ] || iptables -w -t mangle -C OUTPUT -j $DNS_CHAIN_MARK 2>/dev/null; }
+}
 
 # ---------------------------------------------------------------- жизненный цикл
 # Загрузка: всё в $DNS_RUN_DIR — от прошлой загрузки. Старый PID мог достаться
@@ -533,14 +619,19 @@ dns_rules_ok() { iptables -w -t nat -C OUTPUT -j $DNS_CHAIN 2>/dev/null; }
 dns_boot_reset() {
   # standalone — флаг прежних версий: теперь DNS всегда работает сам по себе
   rm -f "$DNS_DIR/standalone" "$DNS_PIDFILE" "$DNS_RUN_DIR/running.upstreams" "$DNS_RUN_DIR/running.args" \
-        "$DNS_RUN_DIR/active" "$DNS_RUN_DIR/error" "$DNS_RUN_DIR/ipv6" 2>/dev/null
+        "$DNS_RUN_DIR/active" "$DNS_RUN_DIR/error" "$DNS_RUN_DIR/ipv6" \
+        "$DNS_RUN_DIR/bypass" "$DNS_RUN_DIR/bypass_fail" "$DNS_RUN_DIR/runner" 2>/dev/null
 }
 
 # Нужен ли перехват сейчас. DNS работает независимо от службы обхода:
 # остановка службы, пауза в домашнем Wi‑Fi или при VPN его не трогают —
 # выключить его можно только главным переключателем на экране DNS. Есть ли
 # что применять, решает dns_build.
-dns_wanted() { dns_enabled; }
+# Под VPN DNS модуля работает, если dnsproxy можно вывести мимо туннеля (см.
+# «Мимо VPN» выше). Нельзя — выключается на время VPN и возвращается за
+# секунду после него (netwatch)
+dns_vpn_paused() { vpn_active && ! dns_vpn_bypass; }
+dns_wanted() { dns_enabled && ! dns_vpn_paused; }
 
 # Что будет применено — одной строкой в журнал DNS
 dns_describe() {
@@ -569,7 +660,11 @@ dns_start() {
 _dns_start() { # <причина> [force — перезапуск dnsproxy и при том же конфиге]
   local why="${1:-запрос}"
   dns_init
-  if ! dns_wanted; then _dns_stop "$why: не нужен"; return 0; fi
+  if ! dns_wanted; then
+    if dns_enabled; then _dns_stop "$why: включён VPN — DNS модуля выключен на время VPN"
+    else _dns_stop "$why: не нужен"; fi
+    return 0
+  fi
   if ! dns_build; then _dns_stop "$why: применять нечего — DNS сети и нет включённых профилей"; return 0; fi
   mkdir -p "$DNS_RUN_DIR"
   if [ "$2" = force ] && dns_pid >/dev/null && dns_rules_ok; then
@@ -601,7 +696,7 @@ _dns_start() { # <причина> [force — перезапуск dnsproxy и п
     dns_proxy_stop
     return 1
   fi
-  dns_log "перехват включён: IPv4 — nat REDIRECT, IPv6 — $(cat "$DNS_RUN_DIR/ipv6" 2>/dev/null)"
+  dns_log "перехват включён: IPv4 — nat REDIRECT, IPv6 — $(cat "$DNS_RUN_DIR/ipv6" 2>/dev/null)$([ -f "$DNS_RUN_DIR/bypass" ] && echo "; собственные запросы dnsproxy — мимо VPN")"
   rm -f "$DNS_RUN_DIR/error"
   [ -f "$DNS_RUN_DIR/active" ] || log_msg "DNS: перехват включён, правил по доменам: $(grep -c '^\[/' "$DNS_RUN_DIR/upstreams.txt" 2>/dev/null)"
   : > "$DNS_RUN_DIR/active"
@@ -676,6 +771,7 @@ dns_state() {
   fi
   echo "#status"
   echo "enabled=$(dns_enabled && echo 1 || echo 0)"
+  echo "vpn_paused=$(dns_enabled && dns_vpn_paused && echo 1 || echo 0)"
   echo "default=$(dns_default)"
   echo "proxy=$proxy"
   echo "rules=$(dns_rules_ok && echo on || echo off)"
@@ -756,7 +852,8 @@ dns_ctl() {
       dns_apply_now; echo OK ;;
     dns-restart) # долгое нажатие на «DNS профили»: как выключить и включить, но без смены настроек
       dns_init
-      dns_wanted || { echo "DNS выключен" >&2; return 1; }
+      dns_enabled || { echo "DNS выключен" >&2; return 1; }
+      dns_vpn_paused && { echo "DNS выключен на время VPN" >&2; return 1; }
       dns_stop "перезапуск по запросу" || { echo "Другой запуск DNS не завершился" >&2; return 1; }
       dns_start "перезапуск по запросу" || { echo "DNS не запустился — подробности в журнале DNS" >&2; return 1; }
       dns_pid >/dev/null || { echo "DNS не запустился — подробности в журнале DNS" >&2; return 1; }

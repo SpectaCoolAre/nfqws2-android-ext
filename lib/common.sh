@@ -20,6 +20,7 @@ WN_PIDFILE="$STATE_DIR/netwatch.pid"
 DESIRED_FILE="$STATE_DIR/desired"
 ARGS_FILE="$STATE_DIR/last.args"
 APP_UIDS_FILE="$STATE_DIR/app_uids"
+VPN_UIDS_FILE="$CONFDIR/vpn_uids"   # UID VPN-приложений, замеченных при VPN
 SERVICE_LOG="$LOG_DIR/service.log"
 NFQWS_LOG="$LOG_DIR/nfqws2.log"
 ACTIVE_FILE="$STATE_DIR/active_strategy"
@@ -340,6 +341,40 @@ app_rules() {
   fi
   log_msg "Фильтр по приложениям ($APP_MODE): $n UID"
   return 0
+}
+
+# Соединения VPN-приложения (к его серверу) обход не трогает. Иначе в момент
+# включения VPN, пока обход ещё не встал на паузу, nfqws2 успевал вмешаться в
+# подключение к серверу, а автосписок — записать сервер VPN в «заблокированные».
+# UID берётся из OwnerUid сети VPN в dumpsys connectivity (vpn_learn_uids) и
+# запоминается: в следующий раз правило стоит ещё до включения VPN
+vpn_app_rules() {
+  local CMD="$1" u n=0
+  [ -s "$VPN_UIDS_FILE" ] || return 0
+  has_ipt_feature "$CMD" -m owner --uid-owner 0 -j RETURN || return 0
+  for u in $(cat "$VPN_UIDS_FILE" 2>/dev/null); do
+    case "$u" in ''|*[!0-9]*) continue ;; esac
+    $CMD -w -t mangle -A $IPT_GROUP_POST -m owner --uid-owner "$u" -j CONNMARK --set-xmark "$MARK_EXCLUDE"
+    n=$((n + 1))
+  done
+  [ "$n" -gt 0 ] || return 0
+  $CMD -w -t mangle -A $IPT_GROUP_POST -m connmark --mark "$MARK_EXCLUDE" -j RETURN
+  $CMD -w -t mangle -A $IPT_GROUP_PRE -m connmark --mark "$MARK_EXCLUDE" -j RETURN
+}
+# Запомнить UID VPN-приложения. Только приложения (от 10000): у встроенного
+# VPN Android владелец — system, и исключать его трафик нельзя. Хранятся
+# последние 8. rc 0 — появился новый UID
+vpn_learn_uids() {
+  local u new=1
+  for u in $(dumpsys connectivity 2>/dev/null | awk '
+      /Transports: [A-Z|]*VPN/ && match($0, /OwnerUid: [0-9]+/) { print substr($0, RSTART + 10, RLENGTH - 10) }' | sort -u); do
+    [ "$u" -ge 10000 ] 2>/dev/null || continue
+    grep -qx "$u" "$VPN_UIDS_FILE" 2>/dev/null && continue
+    { cat "$VPN_UIDS_FILE" 2>/dev/null; echo "$u"; } | tail -n 8 > "$VPN_UIDS_FILE.tmp" && mv -f "$VPN_UIDS_FILE.tmp" "$VPN_UIDS_FILE"
+    log_msg "VPN-приложение (UID $u) запомнено: его соединения обход больше не трогает"
+    new=0
+  done
+  return $new
 }
 
 # Профиль звонков с подставленными сетями Meta и Telegram
@@ -776,6 +811,7 @@ _firewall_start() {
     done
   fi
 
+  vpn_app_rules "$CMD"
   app_rules "$CMD"
 
   if [ "$BLOCK_QUIC" = "1" ]; then
@@ -1364,6 +1400,15 @@ vpn_active() {
     [ -r "$d/flags" ] || continue
     f=$(cat "$d/flags" 2>/dev/null)
     case "$f" in 0x*) [ $(( $f & 1 )) -eq 1 ] && return 0 ;; esac
+  done
+  return 1
+}
+# Телефон подключён к Wi‑Fi: интерфейс wlan* в состоянии up (associated).
+# Без Wi‑Fi трафик (и VPN поверх него) идёт через мобильную сеть
+on_wifi() {
+  local d n="${NFQWS_SYSNET:-/sys/class/net}"
+  for d in "$n"/wlan*; do
+    [ "$(cat "$d/operstate" 2>/dev/null)" = up ] && return 0
   done
   return 1
 }
