@@ -252,7 +252,7 @@
           </span>
           <span class="li-trail"><svg aria-hidden="true" class="icon s24"><use href="#i-chevron-right"/></svg></span>
         </div>
-        <div class="list-item two-line clickable state" role="button" tabindex="0" aria-haspopup="menu" onclick="shareFileMenu(this, CONFFILE_PATH)">
+        <div id="conf-share" class="list-item two-line clickable state" role="button" tabindex="0" aria-haspopup="menu" onclick="shareFileMenu(this, CONFFILE_PATH)">
           <span class="li-icon"><svg aria-hidden="true" class="icon s24"><use href="#i-share"/></svg></span>
           <span class="li-text">
             <span class="li-primary" data-t>Поделиться</span>
@@ -304,6 +304,15 @@
 
     <div id="wifi-body" class="stack">
       <div id="wifi-suggest"></div>
+      <div class="list" id="wifi-dns" hidden>
+        <label class="list-item two-line clickable state">
+          <span class="li-icon"><svg aria-hidden="true" class="icon s24"><use href="#i-dns"/></svg></span>
+          <span class="li-text"><span class="li-primary" data-t>Пауза и для DNS</span>
+            <span class="li-secondary" data-t>DNS модуля тоже отдыхает в домашних сетях</span></span>
+          <span class="li-trail"><input type="checkbox" class="switch" role="switch" id="wifi-dns-toggle" aria-label="Пауза и для DNS" data-ta="aria-label"
+                 onchange="setDnsHome(this.checked)"></span>
+        </label>
+      </div>
       <h2 class="subhead" data-t>Домашние сети</h2>
       <div class="list" id="wifi-list"></div>
       <div class="row">
@@ -581,10 +590,6 @@
             aria-label="Удалить дубликаты" title="Удалить дубликаты" data-ta="aria-label,title">
       <svg aria-hidden="true" class="icon"><use href="#i-dedupe"/></svg>
     </button>
-    <button class="icon-btn state pending-btn" id="panel-pending" hidden onclick="offerListUpdate(editorCtx && editorCtx.key)"
-            aria-label="Доступна новая версия списка" title="Доступна новая версия списка" data-ta="aria-label,title">
-      <svg aria-hidden="true" class="icon"><use href="#i-warn"/></svg>
-    </button>
     <button class="btn text state" id="panel-save-btn">Сохранить</button>
   </div>
   <div class="fs-body">
@@ -616,6 +621,7 @@
 
 <!-- ═══ Modal bottom sheets ═══════════════════════════════════════════════ -->
 <div class="scrim" id="sheet-scrim" onclick="closeSheet()" aria-hidden="true"></div>
+<div class="scrim nav-scrim" id="nav-scrim" aria-hidden="true"></div>
 
 <div class="sheet list-sheet" id="strategy-sheet" role="dialog" aria-modal="true" aria-labelledby="strategy-sheet-title">
   <button type="button" class="sheet-drag" aria-label="Закрыть" data-ta="aria-label"><span class="handle"></span></button>
@@ -778,6 +784,7 @@
 <script src="js/dns.js"></script>
 <script src="js/hosts.js"></script>
 <script src="js/theme.js"></script>
+<script src="js/flappy.js"></script>
 <script src="js/i18n-en.js"></script>
 <script src="js/init.js"></script>
 </body>

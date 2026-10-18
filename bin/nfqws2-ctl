@@ -190,14 +190,9 @@ cmd_json_status() {
   # обоим наборам аргументов на КАЖДЫЙ вызов, — плюс всегда пустой preset.
   # Ни одно из этих полей интерфейс не читал. Если диагностика по стратегиям
   # понадобится, её стоит отдавать отдельной командой, а не в статусе.
-  local ver cur_strat paused pending f
+  local ver cur_strat paused
   ver=$(sed -n '/^version=/{s/^version=//p;q;}' "$MODDIR/module.prop")
   paused=$(cat "$HOME_PAUSED_FILE" 2>/dev/null)
-  pending=""
-  for f in "$LISTS_PENDING_DIR"/*.list; do
-    [ -e "$f" ] || continue
-    f="${f##*/}"; pending="$pending${pending:+,}${f%.list}"
-  done
   cur_strat=$(get_current_strategy)
   local qdrop
   qdrop=$(awk -v q="$NFQUEUE_NUM" '$1 == q { print $6 + $7; f = 1 } END { if (!f) print 0 }' /proc/net/netfilter/nfnetlink_queue 2>/dev/null)
@@ -217,16 +212,16 @@ cmd_json_status() {
   local dnsav=0 dnson=0 override=""
   [ -f "$DNS_BIN" ] && dnsav=1
   dns_enabled && dnson=1
-  # DNS выключен на время VPN — карточка так и пишет
-  local dnsvpn=0
-  [ "$dnson" = 1 ] && dns_vpn_paused && dnsvpn=1
+  # DNS модуля на паузе (при VPN или в домашнем Wi‑Fi) — карточка так и пишет
+  local dnspause=""
+  [ "$dnson" = 1 ] && dnspause=$(dns_pause_reason)
   # Обход запущен вручную в домашней сети — WebUI предлагает вернуть паузу
   [ -f "$HOME_OVERRIDE_FILE" ] && IFS= read -r override < "$HOME_OVERRIDE_FILE"
   cat <<JSON
 {"running":$run,"pid":"$pid","uptime":$uptime,"uptime_ms":$upms,"strategy":"$(json_str "$cur_strat")","version":"$(json_str "$ver")","mode":"$(json_str "$(current_mode)")",
 "pkt_limit_out":$PKT_LIMIT_OUT,"pkt_limit_in":$PKT_LIMIT_IN,"block_quic":$BLOCK_QUIC,"app_mode":"$(json_str "$APP_MODE")","autostart":$AUTOSTART,"watchdog":$WATCHDOG,
 "ipv6":$IPV6_ENABLED,"log_level":$LOG_LEVEL,"qdrop":$qdrop,"queue":$NFQUEUE_NUM,"app_uids":$appn,
-"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":$DOH_BYPASS,"meta_quic":$META_QUIC_REJECT,"calls_bypass":$CALLS_BYPASS,"dns_vpn":$dnsvpn,"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")","pending":"$(json_str "$pending")",
+"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":$DOH_BYPASS,"meta_quic":$META_QUIC_REJECT,"calls_bypass":$CALLS_BYPASS,"dns_paused":"$dnspause","dns_home_pause":$([ -f "$DNS_HOME_FILE" ] && echo 1 || echo 0),"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")",
 "counts":{"user":$cnt_user,"auto":$cnt_auto,"exclude":$cnt_excl,"ipset":$cnt_ipset,"ipset_exclude":$cnt_ipset_excl,"apps":$cnt_apps}}
 JSON
 }
@@ -352,7 +347,7 @@ cmd_doctor() {
   fi
   if [ -f "$WN_PIDFILE" ] && kill -0 "$(cat "$WN_PIDFILE" 2>/dev/null)" 2>/dev/null; then
     row ok netwatch "$(M 'работает: мгновенная реакция на смену сети' 'running: instant reaction to network changes')"
-  elif [ "$WATCHDOG" != "1" ] && [ "$HOME_WIFI" != "1" ] && [ "$VPN_PAUSE" != "1" ]; then
+  elif [ "$WATCHDOG" != "1" ] && [ "$HOME_WIFI" != "1" ] && [ "$VPN_PAUSE" != "1" ] && ! dns_enabled; then
     row info netwatch "$(M 'выключен вместе с контролем работы' 'off together with the watchdog')"
   elif command -v ip >/dev/null 2>&1; then
     row warn netwatch "$(M 'не запущен — правила обновятся только по watchdog (раз в 20 сек)' 'not running — rules are refreshed by the watchdog only (every 20 s)')"
@@ -1109,9 +1104,16 @@ cmd_domain_check() {
   for f in "$LISTS_DIR"/*.list; do
     [ -f "$f" ] || continue
     case "${f##*/}" in ipset*|probe_*|apps.list|tcp16.list) continue ;; esac
-    entry=$(tr -d '\r' < "$f" | sed 's/^[*.]*//' | grep -Fxf "$cand" 2>/dev/null | awk '{ print length, $0 }' | sort -rn | head -n1 | cut -d' ' -f2-)
+    # «^домен» (как в списках nfqws-menu) — только сам домен, без поддоменов
+    entry=$(tr -d '\r' < "$f" | awk -v d="$d" '
+      NR == FNR { c[$0] = 1; next }
+      /^\^/ { e = substr($0, 2); if (e == d && length(e) > best) { best = length(e); hit = $0 }; next }
+      { e = $0; sub(/^[*.]*/, "", e); if ((e in c) && length(e) > best) { best = length(e); hit = e } }
+      END { if (hit != "") print hit }' "$cand" - 2>/dev/null)
     [ -n "$entry" ] || continue
-    role=$(printf '%s\n' "$used" | awk -v f="$f" '$2 == f { r = $1 } END {
+    # exclude.list подключён и пустым профилем исключений (--hostlist) — это
+    # всё равно исключение
+    role=$(printf '%s\n' "$used" | awk -v f="$f" -v x="$LISTS_DIR/exclude.list" '$2 == f { r = (f == x && $1 == "hostlist") ? "hostlist-exclude" : (r == "hostlist-exclude" ? r : $1) } END {
       if (r == "hostlist") print "host"; else if (r == "hostlist-exclude") print "exclude"; else if (r == "hostlist-auto") print "auto"; else print "idle" }')
     printf 'LIST\t%s\t%s\t%s\n' "${f##*/}" "$role" "$entry"
   done
@@ -1123,7 +1125,7 @@ cmd_domain_check() {
   if [ -n "$ip" ]; then
     printf 'IP\t%s\n' "$ip"
     ip_in_ipsets "$ip" "$LISTS_DIR"/ipset*.list | while IFS='	' read -r f entry; do
-      role=$(printf '%s\n' "$used" | awk -v f="$f" '$2 == f { r = $1 } END {
+      role=$(printf '%s\n' "$used" | awk -v f="$f" -v x="$LISTS_DIR/ipset_exclude.list" '$2 == f { r = (f == x && $1 == "ipset") ? "ipset-exclude" : (r == "ipset-exclude" ? r : $1) } END {
         if (r == "ipset") print "ipset"; else if (r == "ipset-exclude") print "ipset-exclude"; else print "idle" }')
       printf 'LIST\t%s\t%s\t%s\n' "${f##*/}" "$role" "$entry"
     done
@@ -1137,21 +1139,6 @@ cmd_domain_check() {
   wait
   cleanup_probe_app_rule
   echo done
-}
-
-# ---------------------------------------------------------------- обновления списков
-# Установщик кладёт новую версию списка в .pending, если пользователь правил
-# свой; здесь её можно принять.
-cmd_list_update() { # <имя списка>
-  local f p
-  f=$(list_file "$1") || { echo "Неизвестный список" >&2; return 1; }
-  p="$LISTS_PENDING_DIR/${f##*/}"
-  [ -f "$p" ] || { echo "Обновления для ${f##*/} нет" >&2; return 1; }
-  cp -f "$p" "$f" || { echo "Не удалось обновить ${f##*/}" >&2; return 1; }
-  chmod 0644 "$f"
-  rm -f "$p"
-  reload_after_change
-  echo OK
 }
 
 # Список записан на диск, но служба его ещё не перечитала. Провал перезагрузки
@@ -1283,15 +1270,12 @@ case "$1" in
     { b64d "$3" | tr -d '\r' > "$f.tmp"; } && mv -f "$f.tmp" "$f" ||
       { rm -f "$f.tmp"; echo "Не удалось сохранить ${f##*/}" >&2; exit 1; }
     chmod 0644 "$f"
-    # Пользователь сам привёл список к новой версии — предлагать её больше незачем.
-    cmp -s "$f" "$LISTS_PENDING_DIR/${f##*/}" 2>/dev/null && rm -f "$LISTS_PENDING_DIR/${f##*/}"
     # имя списка — короткое или с .list: list_file принимает оба
     case "$2" in
       apps|apps.list) cmd_apply_apps; exit $? ;;
       home|home_wifi.list) sh "$SERVICE" home_check >/dev/null 2>&1; echo OK; exit 0 ;;
     esac
     reload_after_change; echo OK ;;
-  list-update) cmd_list_update "$2" ;;
   add-domain)
     d=$(printf '%s' "$2" | tr 'A-Z' 'a-z' | sed 's#^[a-z]*://##; s#/.*##; s/^www\.//')
     case "$d" in ''|*[!a-z0-9.-]*) echo "Некорректный домен" >&2; exit 1 ;; esac
@@ -1314,7 +1298,6 @@ case "$1" in
     for f in user exclude ipset ipset_exclude probe_hosts; do
       cp -f "$MODDIR/defaults/lists/$f.list" "$LISTS_DIR/$f.list" ||
         { echo "Не удалось восстановить $f.list" >&2; exit 1; }
-      rm -f "$LISTS_PENDING_DIR/$f.list"
     done
     reload_after_change; echo OK ;;
 
@@ -1378,7 +1361,7 @@ EOF
     echo "Команды: status json-status is-running check dry-run start stop restart reload doctor get-conf save-conf-b64 reset-conf conf-modified" >&2
     echo "         list-strategies get-strategy set-strategy strategy-get-b64 strategy-path strategy-save-b64 strategy-reset" >&2
     echo "         import-add-b64 list-imports get-import-merged-b64 rename-import delete-import" >&2
-    echo "         get-list save-list-b64 list-update add-domain clear-auto reset-lists set set-mode list-apps" >&2
+    echo "         get-list save-list-b64 add-domain clear-auto reset-lists set set-mode list-apps" >&2
     echo "         get-logs export-logs clear-logs wifi-ssid backup-create backup-list backup-restore backup-restore-b64 probe-dpi probe-cancel net-info" >&2
     echo "         home-pause net-recheck upload domain-check share changelog dns-* hosts-*" >&2
     exit 1 ;;

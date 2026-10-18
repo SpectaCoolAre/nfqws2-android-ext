@@ -23,7 +23,7 @@ const INDEX = 'file:///' + path.join(path.resolve(__dirname, '..', '..'), 'webro
 const STATUS = JSON.stringify({
   running: true, pid: '4710', uptime: 52, strategy: 'alt', version: 'v2.1.0', mode: 'auto',
   pkt_limit_out: 15, pkt_limit_in: 15, block_quic: 0, app_mode: 'off', autostart: 1, watchdog: 1, ipv6: 1,
-  log_level: 0, qdrop: 0, queue: 300, app_uids: 0, home_wifi: 0, vpn_pause: 0, paused: '', pending: '',
+  log_level: 0, qdrop: 0, queue: 300, app_uids: 0, home_wifi: 0, vpn_pause: 0, paused: '',
   dns_available: 1, dns_enabled: 1,
   counts: { user: 3, auto: 1, exclude: 2, ipset: 4, ipset_exclude: 1, apps: 0 }
 });
@@ -155,6 +155,9 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   const dev0 = await page.evaluate(() => devMode);
   await hold('#nav-settings', 800);
   eq(dev0, await page.evaluate(() => devMode), 'the settings tab no longer toggles developer mode');
+  // удержание вкладки теперь открывает быстрые действия — закрываем их
+  eq(1, await page.$$eval('.menu', r => r.length), 'it opens the quick actions instead');
+  await closeAll(); await page.waitForTimeout(300);
   await hold('#app-title');
   eq(!dev0, await page.evaluate(() => devMode), 'holding the module name does');
   truthy(/Режим разработчика/.test(await snack()), 'with a snackbar');

@@ -182,6 +182,15 @@ stop() {
 
 reload_lists() {
   is_running || { echo "Служба не запущена"; return 1; }
+  # SIGHUP перечитывает содержимое списков, но не состав профилей. А профили
+  # исключений и IP-списка есть, только пока их список не пуст (пустой список
+  # в профиле nfqws2 значит «подходит всё»): список стал пустым или перестал
+  # им быть — нужен перезапуск с новыми аргументами
+  if [ "$(_startup_args)" != "$(cat "$ARGS_FILE" 2>/dev/null)" ]; then
+    log_msg "Списки: состав профилей изменился — перезапуск nfqws2"
+    stop; start
+    return
+  fi
   kill -HUP "$(cat "$PIDFILE")" 2>/dev/null || { log_msg "Списки не перечитаны: SIGHUP не доставлен"; return 1; }
   log_msg "Списки перечитаны (SIGHUP)"
 }
@@ -308,7 +317,6 @@ netwatch() {
         else dns_start "смена сети"; fi
       fi
       netsig="$sig"
-      vpn_active && vpn_learn_uids
       if [ -f "$DESIRED_FILE" ] && is_running; then
         log_msg "netwatch: сеть изменилась (ip monitor) — пересобираю правила"
         firewall_start
@@ -398,6 +406,14 @@ home_check() {
     @vpn) [ "$vpn" = 1 ] || { rm -f "$HOME_OVERRIDE_FILE"; ovr=""; } ;;
     *) [ "$ovr" = "$ssid" ] || { rm -f "$HOME_OVERRIDE_FILE"; ovr=""; } ;;
   esac
+  # Телефон в домашнем Wi‑Fi (для паузы DNS дома — от ручного запуска обхода
+  # не зависит). Сменилось — DNS заново решает, работать ли
+  local athome=""
+  [ "$HOME_WIFI" = "1" ] && ssid_is_home "$ssid" && athome="$ssid"
+  if [ "$athome" != "$(cat "$HOME_AT_FILE" 2>/dev/null)" ]; then
+    if [ -n "$athome" ]; then printf '%s' "$athome" > "$HOME_AT_FILE"; else rm -f "$HOME_AT_FILE"; fi
+    [ -f "$DNS_HOME_FILE" ] && dns_enabled && dns_start "домашний Wi‑Fi"
+  fi
   if [ "$vpn" = 1 ] && [ "$ovr" != "@vpn" ]; then
     want="@vpn"
   elif [ "$HOME_WIFI" = "1" ] && ssid_is_home "$ssid" && [ "$ovr" != "$ssid" ]; then
@@ -480,9 +496,14 @@ case "$1" in
     until [ "$(getprop sys.boot_completed 2>/dev/null)" = "1" ]; do sleep 3; done
     sleep 4
     [ -f "$CONFDIR/disable" ] && { log_msg "Найден $CONFDIR/disable — автозапуск пропущен"; : > "$STATE_DIR/boot_done"; exit 0; }
-    rm -f "$HOME_PAUSED_FILE" "$HOME_OVERRIDE_FILE"
+    rm -f "$HOME_PAUSED_FILE" "$HOME_OVERRIDE_FILE" "$HOME_AT_FILE"
     rmdir "$STATE_DIR/home.lock" 2>/dev/null
     dns_boot_reset
+    # Пауза DNS дома: SSID нужен до запуска DNS (два вызова Java — только
+    # когда пауза включена)
+    if [ -f "$DNS_HOME_FILE" ] && [ "$HOME_WIFI" = "1" ] && dns_enabled && ssid=$(active_ssid) && ssid_is_home "$ssid"; then
+      printf '%s' "$ssid" > "$HOME_AT_FILE"
+    fi
     # DNS — первым: пока он не поднят, первые запросы приложений уходят мимо
     # профилей (геоблок), и ответы остаются в кэше. От службы он не зависит
     dns_start "загрузка"

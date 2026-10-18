@@ -194,6 +194,8 @@ else
     queue_suite "webui: tab paging" "$NODE_BIN" "$HERE/webui/test_swipe.js"
     queue_suite "webui: long presses" "$NODE_BIN" "$HERE/webui/test_longpress.js"
     queue_suite "webui: uptime ticks evenly" "$NODE_BIN" "$HERE/webui/test_uptime.js"
+    queue_suite "webui: easter egg game" "$NODE_BIN" "$HERE/webui/test_flappy.js"
+    queue_suite "webui: quick actions on tabs" "$NODE_BIN" "$HERE/webui/test_navquick.js"
     [ -f "$REPO_DIR/webroot/js/dns.js" ] && queue_suite "webui: DNS profiles (extended)" "$NODE_BIN" "$HERE/webui/test_dns.js"
   fi
 fi

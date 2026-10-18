@@ -177,16 +177,16 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     const presetNames = PRESETS.map(p => (/^NAME=(.*)$/m.exec(p.text) || [])[1]).sort();
     eq(presetNames, (await page.$$eval('#dns-preset-list .li-primary', l => l.map(e => e.textContent))).slice().sort(), 'every preset is offered');
     const withDomains = PRESETS.filter(p => /^DOMAIN=/m.test(p.text)).length;
-    truthy(withDomains >= 5, 'several presets come with domains');
+    truthy(withDomains >= 1, 'a preset comes with domains (GeoHide)');
     eq(Array(withDomains).fill('dns').join(','), (await page.$$eval('#dns-preset-list .li-icon use', l => l.map(e => e.getAttribute('href').slice(3)))).slice(0, withDomains).join(','),
       'presets with domains come first');
     await shot('presets');
-    await page.click('#dns-preset-list .list-item:has(.li-primary:text-is("XBox DNS"))'); await idle();
-    const xbox = await page.evaluate(() => window.__dns.profiles.xbox || '');
-    eq(['https://xbox-dns.ru/dns-query', 'tls://xbox-dns.ru', '111.88.96.54', '111.88.96.55'],
-      xbox.split('\n').filter(l => l.startsWith('SERVER=')).map(l => l.slice(7)), 'the preset is saved with DoH, DoT and both IPs');
-    truthy(xbox.includes('ENABLED=0'), 'a preset without domains is added switched off');
-    await page.click('#dns-profiles .list-item:has-text("XBox DNS")'); await idle();
+    await page.click('#dns-preset-list .list-item:has(.li-primary:text-is("Google Public DNS"))'); await idle();
+    const gpre = await page.evaluate(() => window.__dns.profiles.google || '');
+    eq(['https://dns.google/dns-query', 'tls://dns.google', '8.8.8.8', '8.8.4.4'],
+      gpre.split('\n').filter(l => l.startsWith('SERVER=')).map(l => l.slice(7)), 'the preset is saved with DoH, DoT and both IPs');
+    truthy(gpre.includes('ENABLED=0'), 'a preset without domains is added switched off');
+    await page.click('#dns-profiles .list-item:has-text("Google Public DNS")'); await idle();
     eq(['DoH (HTTPS)', 'DoT (TLS)', 'Обычный DNS', 'Обычный DNS'],
       await page.$$eval('#dnsp-servers .li-secondary', l => l.map(e => e.textContent)), 'plain IPs are shown as one plain DNS type');
     await page.evaluate(() => goBack()); await idle();
@@ -212,7 +212,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     await answer('dns.google');
     truthy(await page.isVisible('#dialog-wrap.open'), 'a plain DNS server by name is refused and asked again');
     await page.click('#d-cancel'); await idle();
-    const gid = () => Object.keys(window.__dns.profiles).find(k => k !== 'xbox');
+    const gid = () => Object.keys(window.__dns.profiles).find(k => k !== 'google');
     let prof = await page.evaluate(`window.__dns.profiles[(${gid})()]`);
     truthy(prof.includes('SERVER=tls://dns.google'), 'DoT is stored as tls://');
     truthy(prof.includes('SERVER=https://dns.comss.one/dns-query'), 'DoH gets /dns-query');
@@ -277,7 +277,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     await page.click('#bar-actions .icon-btn:nth-child(1)'); await idle();
     eq(total, await page.$$eval('#dns-profiles .list-item.selected', r => r.length), 'select all selects every profile');
     await page.click('#dns-profiles .list-item:has-text("Alpha")'); await idle();
-    await page.click('#dns-profiles .list-item[data-id="xbox"]'); await idle();
+    await page.click('#dns-profiles .list-item[data-id="google"]'); await idle();
     const keep = await page.$$eval('#dns-profiles .list-item:not(.selected) .li-primary', r => r.map(e => e.textContent));
     await page.click('#bar-actions .icon-btn:nth-child(3)');
     await page.waitForSelector('#dialog-wrap.open');
@@ -359,7 +359,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
 
     sect(`${mode}: independent of the service`);
     // профиль с доменами, чтобы было что применять
-    await page.evaluate(() => { window.__dns.profiles.xbox = window.__dns.profiles.xbox.replace('ENABLED=0', 'ENABLED=1') + '\nDOMAIN=chatgpt.com'; });
+    await page.evaluate(() => { window.__dns.profiles.google = window.__dns.profiles.google.replace('ENABLED=0', 'ENABLED=1') + '\nDOMAIN=chatgpt.com'; });
     await page.evaluate(() => { window.__dns.service = false; }); await page.evaluate(() => dnsInit()); await idle();
     truthy(!(await page.textContent('#dns-general')).includes('Без службы обхода'), 'there is no standalone switch');
     truthy(!(await page.textContent('#dns-warn')).includes('Служба не запущена'), 'no "service stopped" warning');

@@ -28,7 +28,6 @@ pre.appear > * { animation: none; }
 .list-item .li-actions { gap: 0; margin-right: -8px; }
 .list-item .li-actions .icon-btn { color: var(--md-sys-color-on-surface-variant); }
 .list-item.selected .li-actions .icon-btn { color: var(--md-sys-color-on-secondary-container); }
-.pending-btn, .list-item .li-trail .pending-btn { color: var(--status-warn); }
 
 /* ── Группы на листе выбора стратегии ────────────────────────────────── */
 .sheet-group { padding: 16px 16px 8px; font-size: var(--ts-title-small); line-height: var(--lh-title-small);

@@ -203,7 +203,7 @@ document.addEventListener('keydown', e => {
    menu-back ловит click целиком, и элемент под пальцем не срабатывает. */
 let openMenuEntry = null;
 function closeMenu(){ if(openMenuEntry) openMenuEntry.close(); }
-function openMenu(anchor, items){
+function openMenu(anchor, items, opts){
   if(openMenuEntry && openMenuEntry.anchor === anchor){ closeMenu(); return null; }
   closeMenu();
   const viaKeyboard = anchor.matches(':focus-visible');
@@ -250,9 +250,13 @@ function openMenu(anchor, items){
   let closed = false;
   const entry = { close, anchor };
   openMenuEntry = entry;
+  // быстрые действия вкладок: всё, кроме капсулы вкладок, — под размытием
+  const scrim = opts && opts.scrim && $('nav-scrim');
+  if(scrim) scrim.classList.add('show');
   scheduleSync();
   function close(){
     if(closed) return; closed = true;
+    if(scrim) scrim.classList.remove('show');
     removeEventListener('keydown', onKey, true);
     back.remove();
     menu.classList.add('closing');
@@ -898,6 +902,8 @@ function bindNavTap(b, go){
   b.addEventListener('pointerup', e => {
     const d = down; down = null;
     if(!d || d.id !== e.pointerId || e.button > 0) return;
+    // палец отпущен после долгого нажатия: открыто меню быстрых действий
+    if(longGuard && longGuard.el === b) return;
     if(Math.abs(e.clientX - d.x) > 12 || Math.abs(e.clientY - d.y) > 12) return;
     handled = e.timeStamp;
     go();
@@ -912,6 +918,52 @@ function bindNavTap(b, go){
 document.querySelectorAll('.nav-dest:not([data-page="settings"])').forEach(b => bindNavTap(b, () => navigate(b.dataset.page)));
 
 $('logs-btn').onclick = () => navigate('logs');
+
+/* ── Быстрые действия: долгое нажатие на вкладку ─────────────────────────
+   Меню как у «трёх точек»: висит, пока не выбрано действие или не нажато
+   мимо. Под ним всё, кроме капсулы вкладок, размывается — тем же переходом,
+   что фон под листом стратегий. Действие сначала открывает свою вкладку
+   (и экран настроек), а потом делает то же, что кнопка на этом экране:
+   новых функций здесь нет, только короткий путь к ним. */
+function goThen(page, fn){
+  if(currentPage === page){ fn(); return; }
+  navigate(page);
+  setTimeout(() => { if(currentPage === page) fn(); }, 420);
+}
+function prevListMode(){
+  const p = store.get('nfq_prev_mode'), cur = S.mode;
+  return ['auto', 'list', 'all'].includes(p) && p !== cur ? p : (cur === 'auto' ? 'list' : 'auto');
+}
+const NAV_QUICK = {
+  control: () => [
+    {icon: 'restart', label: t('Перезапуск'), onClick: () => goThen('control', restartSvc)},
+    S.running
+      ? {icon: 'stop', label: t('Остановить'), onClick: () => goThen('control', () => act('stop'))}
+      : {icon: 'play', label: t('Запустить'), onClick: () => goThen('control', () => act('start'))},
+    {icon: 'tune', label: t('Выбор стратегии'), onClick: () => goThen('control', openStrategySheet)}
+  ],
+  lists: () => {
+    const m = prevListMode();
+    return [
+      {icon: 'trash', label: t('Очистить auto.list'), onClick: () => goThen('lists', clearAuto)},
+      {icon: 'list', label: t('Режим работы: {0}', m), sub: t('сейчас {0}', S.mode || '—'), onClick: () => goThen('lists', () => setMode(m))}
+    ];
+  },
+  settings: () => [
+    {icon: 'dns', label: t('DNS профили'), onClick: () => goThen('settings', () => navigate('dns'))},
+    {icon: 'edit', label: t('Редактор hosts'), onClick: () => goThen('settings', () => navigate('hosts'))},
+    {icon: 'test', label: t('Проверка доступности'), onClick: () => goThen('settings', () => navigate('test'))}
+  ],
+  config: () => [
+    {icon: 'edit', label: t('Редактировать'), onClick: () => goThen('config', () => openSlideEditor('conf'))},
+    {icon: 'upload', label: t('Импортировать'), onClick: () => goThen('config', () => $('impFile').click())},
+    {icon: 'share', label: t('Поделиться'), onClick: () => goThen('config', () => shareFileMenu($('conf-share'), CONFFILE_PATH))}
+  ]
+};
+document.querySelectorAll('.nav-dest').forEach(b => onLongPress(b, null, () => {
+  const f = NAV_QUICK[b.dataset.page];
+  if(f) openMenu(b, f(), {scrim: true});
+}));
 
 /* ── Режим разработчика: долгое нажатие на название модуля или его значок в
    шапке. Показывает в настройках блок «Для разработчиков» — то, что обычному
@@ -1117,6 +1169,7 @@ function openMonetModal(){ drawThemeUI(); openSheet('monet-modal'); }
 
 /* ── «Назад»: сначала оверлеи, потом дочерний экран, потом домой, потом выход ── */
 function handleBack(allowExit){
+  if(typeof flappy !== 'undefined' && flappy.open){ flappy.close(); return true; }
   if(openMenuEntry){ closeMenu(); return true; }
   if($('dialog-wrap').classList.contains('open')){ dialogResolve(false); return true; }
   if($('editor-panel').classList.contains('open')){
@@ -1161,6 +1214,7 @@ function uiLayers(){
   if(editorCtx) n++;
   if($('dialog-wrap').classList.contains('open')) n++;
   if(openMenuEntry) n++;
+  if(typeof flappy !== 'undefined' && flappy.open) n++;
   return n;
 }
 const canPush = () => !navigator.userActivation || navigator.userActivation.isActive;

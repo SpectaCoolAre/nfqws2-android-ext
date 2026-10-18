@@ -217,12 +217,31 @@ assert_contains "$args" "--ipset=$LISTS_DIR/ipset.list" "ipset block appears whe
 : > "$LISTS_DIR/ipset.list"
 reload_conf
 args=$(_startup_args)
-assert_not_contains "$args" "--ipset" "ipset block disappears when ipset.list is empty"
+assert_not_contains "$args" "--ipset=$LISTS_DIR/ipset.list" "ipset block disappears when ipset.list is empty"
 
 printf 'BLOCK_QUIC=1\n' >> "$CONFFILE"
 reload_conf
 args=$(_startup_args)
 assert_not_contains "$args" "--filter-udp=443" "QUIC block drops the quic desync"
+
+# Исключения — первыми, пустыми профилями: сильнее любого профиля стратегии
+conf_reset
+printf 'ipset.example.com\n' > "$LISTS_DIR/ipset.list"
+printf 'sponsor.ajay.app\n' > "$LISTS_DIR/exclude.list"
+printf '172.67.146.99\n' > "$LISTS_DIR/ipset_exclude.list"
+reload_conf
+args=$(_startup_args)
+first=$(printf '%s' "$args" | awk '{ for (i = 1; i <= NF; i++) if ($i == "--new") { print s; exit } else s = s " " $i }')
+assert_contains "$first" "--hostlist=$LISTS_DIR/exclude.list" "the first profile takes the excluded domains"
+assert_not_contains "$first" "--lua-desync" "and does nothing with them"
+second=$(printf '%s' "$args" | awk '{ n = 0; for (i = 1; i <= NF; i++) if ($i == "--new") { if (++n == 2) { print s; exit } ; s = "" } else s = s " " $i }')
+assert_eq " --ipset=$LISTS_DIR/ipset_exclude.list" "$second" "the second one takes the excluded addresses, nothing else"
+: > "$LISTS_DIR/exclude.list"; printf '# only a comment\n' > "$LISTS_DIR/ipset_exclude.list"
+reload_conf
+args=$(_startup_args)
+assert_not_contains "$args" "--hostlist=$LISTS_DIR/exclude.list --new" "an empty exclude.list adds no profile (an empty hostlist would match every host)"
+assert_not_contains "$args" "--ipset=$LISTS_DIR/ipset_exclude.list" "nor does an empty ipset_exclude.list"
+: > "$LISTS_DIR/ipset.list"; rm -f "$LISTS_DIR/ipset_exclude.list"
 
 conf_reset
 printf 'LOG_LEVEL=1\n' >> "$CONFFILE"

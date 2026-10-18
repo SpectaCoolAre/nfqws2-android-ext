@@ -29,7 +29,7 @@ window.ksu = { exec: function(cmd, o, cb){
     var s = window.__srv, ms = Math.max(0, Math.floor(performance.now() - s.base + (Math.random() * 2 - 1) * s.jitter));
     var j = { running: true, pid: '4710', uptime: Math.floor(ms / 1000), strategy: 'alt', version: 'v2.1.2', mode: 'auto',
       pkt_limit_out: 15, pkt_limit_in: 15, block_quic: 0, app_mode: 'off', autostart: 1, watchdog: 1, ipv6: 1,
-      log_level: 0, qdrop: 0, queue: 300, app_uids: 0, home_wifi: 0, vpn_pause: 0, paused: '', pending: '',
+      log_level: 0, qdrop: 0, queue: 300, app_uids: 0, home_wifi: 0, vpn_pause: 0, paused: '',
       dns_available: 0, dns_enabled: 0, counts: { user: 0, auto: 0, exclude: 0, ipset: 0, ipset_exclude: 0, apps: 0 } };
     if (!s.legacy) j.uptime_ms = ms;
     out = JSON.stringify(j);

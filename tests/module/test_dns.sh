@@ -281,33 +281,24 @@ dns_start "смена сети" force
 assert_rc 0 $? "a network or VPN change restarts dnsproxy even with the same config"
 assert_contains "$(ipt_rules OUTPUT nat)" "-j nfqws_dns" "keeping the interception, so nothing leaks to the carrier DNS meanwhile"
 assert_contains "$(cat "$DNS_LOG")" "сеть или VPN сменились" "and says why"
-# Трафик приложений (uid от 10000) на порт 53 не перехватывается: VPN-приложение
-# ходит так к своему серверу, и перехват глушил VPN на мобильной сети
+# Перехват — как в 2.1.0/2.1.1: весь трафик на порт 53, и приложений тоже
 chain=$(ipt_rules nfqws_dns nat)
-assert_contains "$chain" "! --uid-owner 0-9999 -j RETURN" "app traffic to port 53 (a VPN app among it) is not intercepted, only the system resolver"
-assert_eq 1 "$(printf '%s\n' "$chain" | awk '/uid-owner/ { o = NR } /REDIRECT/ && !r { r = NR } END { print (o && r && o < r) ? 1 : 0 }')" "and that exception comes before the REDIRECT"
+assert_eq "" "$(printf '%s\n' "$chain" | grep uid-owner)" "app traffic to port 53 is intercepted too, as before 2.1.2"
 
-# Под VPN: без busybox с setuidgid пакеты dnsproxy не отличить от прочих
-# root — DNS модуля выключается на время VPN
-cat > "$MOCKBIN/busybox" <<'BB'
-#!/bin/sh
-[ "$1" = setuidgid ] && [ "${MOCK_BB_NOSUID:-0}" != 1 ] || exit 1
-[ "$3" = true ] || echo "$2" >> "$MOCK_DIR/setuidgid"
-shift 2; exec "$@"
-BB
-chmod 0755 "$MOCKBIN/busybox"
-MOCK_BB_NOSUID=1; export MOCK_BB_NOSUID
-rm -f "$DNS_RUN_DIR/runner"
+# При VPN DNS модуля на паузе — как «Частный DNS» Android: DNS идёт через VPN
 NFQWS_SYSNET="$SANDBOX/sysnet"; export NFQWS_SYSNET
+mkdir -p "$NFQWS_SYSNET/wlan0"; echo up > "$NFQWS_SYSNET/wlan0/operstate"
+dns_start "смена сети" force
+assert_file "$DNS_PIDFILE" "on Wi‑Fi DNS runs"
 mkdir -p "$NFQWS_SYSNET/tun0"; printf '0x1091\n' > "$NFQWS_SYSNET/tun0/flags"
 dns_start "смена сети" force
-assert_no_file "$DNS_PIDFILE" "without setuidgid a VPN stops dnsproxy"
+assert_no_file "$DNS_PIDFILE" "a VPN pauses dnsproxy"
 assert_eq "" "$(ipt_rules OUTPUT nat | grep nfqws_dns)" "and removes the interception"
-assert_contains "$(cat "$DNS_LOG")" "включён VPN" "the log says why"
+assert_contains "$(cat "$DNS_LOG")" "включён VPN — DNS модуля на паузе" "the log says why"
 ctl dns-state
-assert_contains "$ctl_out" "vpn_paused=1" "dns-state reports the VPN pause"
+assert_contains "$ctl_out" "paused=vpn" "dns-state reports the pause"
 ctl json-status
-assert_contains "$ctl_out" '"dns_vpn":1' "and so does json-status"
+assert_contains "$ctl_out" '"dns_paused":"vpn"' "and so does json-status"
 ctl dns-restart
 assert_rc 1 "$ctl_rc" "a manual DNS restart refuses meanwhile"
 assert_no_file "$DNS_PIDFILE" "and does not start it"
@@ -315,49 +306,46 @@ rm -rf "$NFQWS_SYSNET/tun0"
 dns_start "смена сети" force
 assert_file "$DNS_PIDFILE" "the VPN gone, DNS is back"
 assert_contains "$(ipt_rules OUTPUT nat)" "-j nfqws_dns" "with its interception"
-assert_eq "" "$(ipt_rules OUTPUT mangle | grep nfqws_dnsm)" "no VPN bypass without setuidgid"
-
-# С busybox (Magisk/KernelSU/APatch) dnsproxy работает в своей группе, его
-# пакеты получают бит «мимо VPN» — и DNS модуля под VPN остаётся включённым
-unset MOCK_BB_NOSUID
-dns_stop; rm -f "$DNS_RUN_DIR/runner" "$MOCK_DIR/setuidgid"; _DNS_RUNNER=-
-dns_start "запуск"
-assert_file "$DNS_PIDFILE" "dnsproxy runs"
-assert_eq "0:$DNS_GID" "$(cat "$MOCK_DIR/setuidgid" 2>/dev/null)" "with its own group, through busybox setuidgid"
-mark=$(ipt_rules nfqws_dnsm mangle)
-assert_contains "$mark" "-m owner --gid-owner $DNS_GID -j MARK --set-xmark 0x20000/0x20000" "its packets get the VpnService.protect() bit"
-assert_contains "$(ipt_rules OUTPUT mangle)" "-j nfqws_dnsm" "in mangle OUTPUT"
-snat=$(ipt_rules nfqws_dnss nat)
-assert_contains "$snat" "-o lo -j RETURN" "replies over loopback are left alone"
-assert_contains "$snat" "-m owner --gid-owner $DNS_GID -j MASQUERADE" "the tunnel source address is replaced with the network one"
-assert_contains "$(ipt_rules POSTROUTING nat)" "-j nfqws_dnss" "in nat POSTROUTING"
-assert_contains "$(ipt_rules nfqws_dns nat)" "! --uid-owner 0-9999 -j RETURN" "apps' own port-53 traffic is still not intercepted"
-mkdir -p "$NFQWS_SYSNET/tun0"; printf '0x1091\n' > "$NFQWS_SYSNET/tun0/flags"
-dns_start "смена сети" force
-assert_file "$DNS_PIDFILE" "a VPN no longer stops DNS"
-assert_contains "$(ipt_rules OUTPUT nat)" "-j nfqws_dns" "interception stays"
 ctl json-status
-assert_contains "$ctl_out" '"dns_vpn":0' "no VPN pause reported"
-ctl dns-state
-assert_contains "$ctl_out" "vpn_paused=0" "in dns-state too"
-iptables -w -t mangle -D OUTPUT -j nfqws_dnsm
-dns_check
-assert_contains "$(ipt_rules OUTPUT mangle)" "-j nfqws_dnsm" "the watchdog restores a lost bypass rule"
-dns_stop
-assert_eq "" "$(ipt_rules OUTPUT mangle | grep nfqws_dnsm)" "stopping removes the bypass mark"
-assert_eq "" "$(ipt_rules POSTROUTING nat | grep nfqws_dnss)" "and the MASQUERADE"
-# Ядро без MARK/MASQUERADE: правила не встали — дальше на время VPN DNS выключается
-MOCK_IPT_FEATURES="connbytes multiport NFQUEUE"; export MOCK_IPT_FEATURES
-rm -rf "$NFQWS_SYSNET/tun0"
-dns_start "запуск"
-assert_file "$DNS_RUN_DIR/bypass_fail" "a kernel without owner match marks the bypass as failed"
-mkdir -p "$NFQWS_SYSNET/tun0"; printf '0x1091\n' > "$NFQWS_SYSNET/tun0/flags"
-dns_start "смена сети" force
-assert_no_file "$DNS_PIDFILE" "and DNS falls back to pausing under a VPN"
-MOCK_IPT_FEATURES="connbytes multiport owner NFQUEUE"; export MOCK_IPT_FEATURES
-dns_stop; rm -f "$DNS_RUN_DIR/bypass_fail" "$DNS_RUN_DIR/runner" "$MOCKBIN/busybox"; _DNS_RUNNER=-
+assert_contains "$ctl_out" '"dns_paused":""' "and the pause is over"
+
+# Домашний Wi‑Fi: DNS не трогается, пока на его экране не включена пауза DNS
+printf 'Home\n' > "$HOME_FILE"; HOME_WIFI=1
+printf 'HOME_WIFI=1\n' >> "$CONFFILE"
+# телефон в «Home»: cmd wifi отвечает её SSID
+printf '#!/bin/sh\necho "Wifi is enabled"; echo "Wifi is connected to \\"Home\\""\n' > "$MOCKBIN/cmd"; chmod 0755 "$MOCKBIN/cmd"
+printf 'Home' > "$HOME_AT_FILE"
+dns_start "смена сети"
+assert_file "$DNS_PIDFILE" "at home DNS keeps running by default"
+ctl dns-set-home 1
+assert_rc 0 "$ctl_rc" "the home DNS pause is a switch"
+assert_no_file "$DNS_PIDFILE" "on: at home DNS pauses"
+ctl json-status
+assert_contains "$ctl_out" '"dns_paused":"home"' "json-status says so"
+assert_contains "$ctl_out" '"dns_home_pause":1' "with the switch on"
+printf '#!/bin/sh\necho "Wifi is enabled"; echo "Wifi is disconnected"\n' > "$MOCKBIN/cmd"
+svc home_check
+assert_no_file "$HOME_AT_FILE" "home_check sees the phone leave home"
+assert_file "$DNS_PIDFILE" "and DNS resumes away from home"
+printf '#!/bin/sh\necho "Wifi is enabled"; echo "Wifi is connected to \\"Home\\""\n' > "$MOCKBIN/cmd"
+svc home_check
+assert_eq "Home" "$(cat "$HOME_AT_FILE" 2>/dev/null)" "home_check sees it come back"
+assert_no_file "$DNS_PIDFILE" "and DNS pauses again"
+ctl dns-set-home 0
+assert_file "$DNS_PIDFILE" "switch off: DNS runs at home again"
+svc stop
+rm -f "$HOME_AT_FILE" "$HOME_FILE" "$HOME_PAUSED_FILE" "$HOME_OVERRIDE_FILE" "$MOCKBIN/cmd"; HOME_WIFI=0
+conf_reset; printf 'WATCHDOG=0\nIPV6_ENABLED=0\n' >> "$CONFFILE"
+
+# Остатки «мимо VPN» версии 2.1.2 снимаются вместе с правилами DNS
+iptables -w -t mangle -N nfqws_dnsm; iptables -w -t mangle -I OUTPUT 1 -j nfqws_dnsm
+iptables -w -t nat -N nfqws_dnss; iptables -w -t nat -I POSTROUTING 1 -j nfqws_dnss
+dns_rules_del
+assert_eq "" "$(ipt_rules OUTPUT mangle | grep nfqws_dnsm)" "a 2.1.2 bypass mark chain is removed"
+assert_eq "" "$(ipt_rules POSTROUTING nat | grep nfqws_dnss)" "and its MASQUERADE"
 dns_start "запуск"
 rm -rf "$NFQWS_SYSNET"; unset NFQWS_SYSNET
+
 ctl dns-set-enabled 0
 assert_no_file "$DNS_PIDFILE" "the main switch is what turns it off"
 assert_eq "" "$(ipt_rules OUTPUT nat | grep nfqws_dns)" "interception included"
@@ -399,7 +387,7 @@ assert_contains "$ctl_out" "#status" "dns-state has a status section"
 assert_contains "$ctl_out" "enabled=0" "it reports the feature as off"
 assert_contains "$ctl_out" "private=off" "and the Private DNS mode"
 assert_contains "$ctl_out" "#profile insta" "profiles follow"
-assert_contains "$ctl_out" "#preset xbox" "and presets"
+assert_contains "$ctl_out" "#preset google" "and presets"
 
 STUB_PRIVATE=hostname; STUB_PRIVATE_HOST=dns.google
 ctl dns-state

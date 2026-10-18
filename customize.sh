@@ -75,9 +75,48 @@ else
   fi
 fi
 
+# Списки из релиза. Нетронутый список (совпадает с прошлой версией из релиза,
+# .dist) обновляется молча, свой — не трогаем: обновление по запросу из WebUI
+# убрано, правки пользователя главнее
 DIST="$CONF/lists/.dist"
-PEND="$CONF/lists/.pending"
-mkdir -p "$DIST" "$PEND" || abort "! Cannot create list update directories"
+mkdir -p "$DIST" || abort "! Cannot create list update directories"
+rm -rf "${CONF:?}/lists/.pending"
+# исключение VPN-приложения из обхода (2.1.2) убрано: с ним перестала
+# грузиться лента X; запомненные UID больше не нужны
+rm -f "${CONF:?}/vpn_uids"
+
+# Убранные пресеты DNS: их копии среди профилей удаляются, если профиль
+# выключен и не выбран DNS по умолчанию. Включённые и выбранные остаются —
+# ими пользуются
+DP="$CONF/dns/profiles"
+# один раз: метка .presets2 — дальше набор профилей целиком в руках пользователя
+if [ -d "$DP" ] && [ ! -f "$CONF/dns/.presets2" ]; then
+  dflt=$(cat "$CONF/dns/default" 2>/dev/null)
+  for id in astracat dns-ai instagram ntc rutor supercell twitch xbox; do
+    f="$DP/$id.conf"
+    [ -f "$f" ] || continue
+    grep -q '^ENABLED=1' "$f" && continue
+    [ "$id" = "$dflt" ] && continue
+    rm -f "$f" && ui_print "- DNS: removed old preset profile $id"
+  done
+  # новые пресеты (Google, Яндекс, Cloudflare) — выключенными, если их ещё нет
+  # (удалённые пользователем Comss, GeoHide, malw не возвращаются)
+  for id in google yandex cloudflare; do
+    f="$MODPATH/defaults/dns-presets/$id.conf"
+    [ -f "$f" ] || continue
+    [ -f "$DP/$id.conf" ] && continue
+    sed 's/^ENABLED=.*/ENABLED=0/' "$f" > "$DP/$id.conf" && chmod 0644 "$DP/$id.conf"
+  done
+  # Comss, GeoHide, malw: серверы — актуальные из релиза; включён ли профиль
+  # и его домены — как были у пользователя
+  for id in comss geohide malw; do
+    f="$MODPATH/defaults/dns-presets/$id.conf"
+    [ -f "$f" ] && [ -f "$DP/$id.conf" ] || continue
+    { grep -E '^(NAME|DESC)=' "$f"; grep '^ENABLED=' "$DP/$id.conf"; grep '^SERVER=' "$f"; grep '^DOMAIN=' "$DP/$id.conf"; true; } > "$DP/$id.conf.new" &&
+      mv -f "$DP/$id.conf.new" "$DP/$id.conf" && chmod 0644 "$DP/$id.conf"
+  done
+  : > "$CONF/dns/.presets2"
+fi
 
 for src in "$MODPATH"/lists/*.list; do
   [ -f "$src" ] || continue
@@ -88,32 +127,17 @@ for src in "$MODPATH"/lists/*.list; do
     if [ ! -f "$dst" ]; then
       cp -f "$src" "$dst" || abort "! Failed to install $f"
     fi
-    cp -f "$src" "$DIST/$f" || abort "! Failed to save release copy of $f"
-    continue
-  fi
-
-  if [ ! -f "$dst" ] || cmp -s "$src" "$dst"; then
+  elif [ ! -f "$dst" ] || cmp -s "$src" "$dst"; then
     cp -f "$src" "$dst" || abort "! Failed to install $f"
-    rm -f "$PEND/$f"
-  elif [ -f "$DIST/$f" ] && cmp -s "$src" "$DIST/$f"; then
-    :
   elif [ -f "$DIST/$f" ] && cmp -s "$dst" "$DIST/$f"; then
     cp -f "$src" "$dst" || abort "! Failed to update $f"
-    rm -f "$PEND/$f"
   elif [ ! -f "$DIST/$f" ]; then
     case " user exclude ipset ipset_exclude probe_hosts " in
-      *" ${f%.list} "*)
-        cp -f "$src" "$PEND/$f" || abort "! Failed to save pending update for $f"
-        ui_print "- $f has local changes; the release version is available in the WebUI"
-        ;;
-      *)
-        cp -f "$src" "$dst" || abort "! Failed to migrate $f"
-        rm -f "$PEND/$f"
-        ;;
+      *" ${f%.list} "*) ui_print "- $f has local changes, kept as is" ;;
+      *) cp -f "$src" "$dst" || abort "! Failed to migrate $f" ;;
     esac
   else
-    cp -f "$src" "$PEND/$f" || abort "! Failed to save pending update for $f"
-    ui_print "- $f has local changes; the release version is available in the WebUI"
+    ui_print "- $f has local changes, kept as is"
   fi
 
   cp -f "$src" "$DIST/$f" || abort "! Failed to save release copy of $f"

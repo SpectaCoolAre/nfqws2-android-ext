@@ -366,7 +366,6 @@ async function openEditorWith(o){
   $('panel-hint').className = 'helper';
   $('panel-save-btn').disabled = !!o.load;
   $('panel-save-btn').textContent = o.saveLabel || t('Сохранить');
-  $('panel-pending').hidden = !(o.target === 'list' && pendingLists().includes(o.key));
   $('panel-dedupe-btn').hidden = o.lang !== 'list' || !!o.readonly;
   toggleFind(false);
   ta.placeholder = o.target === 'list' ? '' : t('# Конфигурация…');

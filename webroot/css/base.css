@@ -255,6 +255,10 @@ svg.icon.s24 { width: 24px; height: 24px; }
     -webkit-backdrop-filter var(--dur-long) var(--standard), backdrop-filter var(--dur-long) var(--standard);
 }
 .scrim.show { opacity: 1; pointer-events: auto; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+/* Под меню быстрых действий: ниже капсулы вкладок (30), выше шапки (25).
+   Касания ловит подложка меню — сама она их не берёт */
+.scrim.nav-scrim { z-index: 29; }
+.scrim.nav-scrim.show { pointer-events: none; }
 
 /* ── App bar: действия текущего экрана + overflow ─────────────────────── */
 .bar-actions { display: flex; align-items: center; flex: none; }

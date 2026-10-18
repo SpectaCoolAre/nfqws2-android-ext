@@ -25,7 +25,7 @@ const INDEX = 'file:///' + path.join(path.resolve(__dirname, '..', '..'), 'webro
 const STATUS = JSON.stringify({
   running: true, pid: '4710', uptime: 52, strategy: 'alt13', version: 'v2.0.5', mode: 'auto',
   pkt_limit_out: 15, pkt_limit_in: 15, block_quic: 0, app_mode: 'off', autostart: 1, watchdog: 1, ipv6: 1,
-  log_level: 0, qdrop: 0, queue: 300, app_uids: 0, home_wifi: 0, vpn_pause: 0, paused: '', pending: '',
+  log_level: 0, qdrop: 0, queue: 300, app_uids: 0, home_wifi: 0, vpn_pause: 0, paused: '',
   counts: { user: 3, auto: 1, exclude: 2, ipset: 4, ipset_exclude: 1, apps: 0 }
 });
 const STUB = `window.ksu = { exec: function(cmd, o, cb){

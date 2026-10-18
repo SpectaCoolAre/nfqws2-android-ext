@@ -1,7 +1,7 @@
 id=nfqws2-android-ext
 name=nfqws2-android-ext
-version=v2.1.2
-versionCode=2102
+version=v2.1.3
+versionCode=2103
 author=SpectaCoolAre (форк nfqws2-android от deathwatcher)
 description=Обход DPI на базе nfqws2 с DNS по профилям. Форк nfqws2-android.
 updateJson=https://raw.githubusercontent.com/SpectaCoolAre/nfqws2-android-ext/main/update.json

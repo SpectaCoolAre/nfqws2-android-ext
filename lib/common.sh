@@ -20,18 +20,15 @@ WN_PIDFILE="$STATE_DIR/netwatch.pid"
 DESIRED_FILE="$STATE_DIR/desired"
 ARGS_FILE="$STATE_DIR/last.args"
 APP_UIDS_FILE="$STATE_DIR/app_uids"
-VPN_UIDS_FILE="$CONFDIR/vpn_uids"   # UID VPN-приложений, замеченных при VPN
 SERVICE_LOG="$LOG_DIR/service.log"
 NFQWS_LOG="$LOG_DIR/nfqws2.log"
 ACTIVE_FILE="$STATE_DIR/active_strategy"
 FIRST_STRATEGY=hardcorp74      # стратегия при первой установке
 
-# Release-shipped lists; .pending = newer version kept aside due to user edits
-LISTS_PENDING_DIR="$LISTS_DIR/.pending"
-
 # Home Wi-Fi: bypass pauses on these networks (HOME_WIFI=1)
 HOME_FILE="$CONFDIR/home_wifi.list"
 HOME_PAUSED_FILE="$STATE_DIR/home_paused"      # paused by home network; holds SSID
+HOME_AT_FILE="$STATE_DIR/home_at"              # телефон в домашнем Wi‑Fi; SSID (для паузы DNS)
 HOME_OVERRIDE_FILE="$STATE_DIR/home_override"  # user re-enabled on this network
 
 MARK_EXCLUDE="0x20000000/0x20000000"
@@ -343,39 +340,6 @@ app_rules() {
   return 0
 }
 
-# Соединения VPN-приложения (к его серверу) обход не трогает. Иначе в момент
-# включения VPN, пока обход ещё не встал на паузу, nfqws2 успевал вмешаться в
-# подключение к серверу, а автосписок — записать сервер VPN в «заблокированные».
-# UID берётся из OwnerUid сети VPN в dumpsys connectivity (vpn_learn_uids) и
-# запоминается: в следующий раз правило стоит ещё до включения VPN
-vpn_app_rules() {
-  local CMD="$1" u n=0
-  [ -s "$VPN_UIDS_FILE" ] || return 0
-  has_ipt_feature "$CMD" -m owner --uid-owner 0 -j RETURN || return 0
-  for u in $(cat "$VPN_UIDS_FILE" 2>/dev/null); do
-    case "$u" in ''|*[!0-9]*) continue ;; esac
-    $CMD -w -t mangle -A $IPT_GROUP_POST -m owner --uid-owner "$u" -j CONNMARK --set-xmark "$MARK_EXCLUDE"
-    n=$((n + 1))
-  done
-  [ "$n" -gt 0 ] || return 0
-  $CMD -w -t mangle -A $IPT_GROUP_POST -m connmark --mark "$MARK_EXCLUDE" -j RETURN
-  $CMD -w -t mangle -A $IPT_GROUP_PRE -m connmark --mark "$MARK_EXCLUDE" -j RETURN
-}
-# Запомнить UID VPN-приложения. Только приложения (от 10000): у встроенного
-# VPN Android владелец — system, и исключать его трафик нельзя. Хранятся
-# последние 8. rc 0 — появился новый UID
-vpn_learn_uids() {
-  local u new=1
-  for u in $(dumpsys connectivity 2>/dev/null | awk '
-      /Transports: [A-Z|]*VPN/ && match($0, /OwnerUid: [0-9]+/) { print substr($0, RSTART + 10, RLENGTH - 10) }' | sort -u); do
-    [ "$u" -ge 10000 ] 2>/dev/null || continue
-    grep -qx "$u" "$VPN_UIDS_FILE" 2>/dev/null && continue
-    { cat "$VPN_UIDS_FILE" 2>/dev/null; echo "$u"; } | tail -n 8 > "$VPN_UIDS_FILE.tmp" && mv -f "$VPN_UIDS_FILE.tmp" "$VPN_UIDS_FILE"
-    log_msg "VPN-приложение (UID $u) запомнено: его соединения обход больше не трогает"
-    new=0
-  done
-  return $new
-}
 
 # Профиль звонков с подставленными сетями Meta и Telegram
 calls_args() {
@@ -442,7 +406,7 @@ _startup_args() {
     args="--debug=@$NFQWS_LOG $args"
   fi
 
-  args="$args $base"
+  args="$args $base $(exclude_profiles)"
   # Обход блокировки DoT/DoH — первым профилем, чтобы его не перехватила стратегия
   if [ "$DOH_BYPASS" = "1" ] && [ -f "$MODDIR/defaults/doh-bypass.conf" ]; then
     args="$args --blob=doh_tls:@$BLOBS_DIR/tls_clienthello.bin $(norm_args "$(cat "$MODDIR/defaults/doh-bypass.conf")") --new"
@@ -463,6 +427,23 @@ _startup_args() {
   args="$args $tcp $extra"
 
   printf '%s' "$args" | tr -s ' '
+}
+
+# Исключения — первыми профилями, сильнее любого профиля стратегии. nfqws2
+# отдаёт соединение первому подходящему профилю, а стратегии подключают
+# exclude.list только к профилю по спискам доменов, ipset_exclude.list —
+# только к профилю по IP-списку: сайт, чей адрес попал в ipset или в свой
+# профиль стратегии, обход трогал, хоть домен и в исключениях. Здесь — пустые
+# профили (без действий): домен из exclude.list (по SNI/Host, с поддоменами)
+# или адрес из ipset_exclude.list забирает такой профиль, и обход его не
+# трогает, какой бы ни был IP. Вписать исключения в каждый профиль нельзя:
+# профиль со списком доменов не срабатывает, пока имя хоста неизвестно, и
+# трафик без имени (Discord, игры, звонки) остался бы без обхода
+exclude_profiles() {
+  local p=""
+  [ "$(list_count "$LISTS_DIR/exclude.list")" -gt 0 ] 2>/dev/null && p="--hostlist=$LISTS_DIR/exclude.list --new"
+  [ "$(list_count "$LISTS_DIR/ipset_exclude.list")" -gt 0 ] 2>/dev/null && p="$p --ipset=$LISTS_DIR/ipset_exclude.list --new"
+  printf '%s' "$p"
 }
 
 # Аргументы, уже прошедшие --dry-run, запоминаются; запуск службы с ними
@@ -811,7 +792,6 @@ _firewall_start() {
     done
   fi
 
-  vpn_app_rules "$CMD"
   app_rules "$CMD"
 
   if [ "$BLOCK_QUIC" = "1" ]; then
@@ -1186,7 +1166,9 @@ normalize_import() { # <import file> -> stdout
   local bad
   bad=$(unsupported_opts "$clean" | tr '\n' ' ')
   if [ -n "$bad" ]; then strip_opts "$bad" < "$clean" > "$clean.s" && mv -f "$clean.s" "$clean"; fi
-  awk -v skeys=" $STRATEGY_KEYS " -v tpl="$MODDIR/defaults/nfqws2.conf" '
+  # MODE_LIST / MODE_ALL — тоже из импорта: в них списки стратегии (например,
+  # user_extra.list у hardcorp74 из nfqws-menu), а MODE_AUTO шаблона их подхватит
+  awk -v skeys=" $STRATEGY_KEYS MODE_LIST MODE_ALL " -v tpl="$MODDIR/defaults/nfqws2.conf" '
     function quotes(str,   t) { t = str; return gsub(/"/, "", t) }
     function keyof(line) { return match(line, /^[A-Za-z_][A-Za-z0-9_]*=/) ? substr(line, 1, RLENGTH - 1) : "" }
     # read file into KEY=blocks (values may span lines)
@@ -1218,7 +1200,10 @@ normalize_import() { # <import file> -> stdout
               if (!(e in intpl) && !(e in skip) && !(e in done)) { print imp[e]; print ""; done[e] = 1 } }
             first = 0
           }
-          print ((k in imp) ? imp[k] : k "=\"\"")
+          # нет в импорте: ключ стратегии — пустой, MODE_* — из шаблона
+          if (k in imp) print imp[k]
+          else if (k ~ /^MODE_/) print tblk[k]
+          else print k "=\"\""
         } else {
           print tblk[k]
         }

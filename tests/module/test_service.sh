@@ -416,39 +416,6 @@ assert_no_file "$STATE_DIR/netwatch.fifo" "and removes its FIFO"
 rm -f "$MOCKBIN/ip" "$WN_PIDFILE" "$WD_PIDFILE"
 
 # ── pause while a VPN is on ──────────────────────────────────────────────────
-section "the VPN app's own connections bypass nfqws2"
-conf_reset
-load_conf >/dev/null 2>&1
-cat > "$MOCKBIN/dumpsys" <<'EOF2'
-#!/bin/sh
-echo "  NetworkAgentInfo{network{102}  lp{{InterfaceName: tun0}} nc{[ Transports: VPN Capabilities: INTERNET&NOT_RESTRICTED OwnerUid: 10423 AdminUids: [10423]]}"
-echo "  NetworkAgentInfo{network{103}  lp{{InterfaceName: ipsec0}} nc{[ Transports: VPN Capabilities: INTERNET OwnerUid: 1000]}"
-echo "  NetworkAgentInfo{network{101}  lp{{InterfaceName: rmnet_data1}} nc{[ Transports: CELLULAR Capabilities: INTERNET OwnerUid: 10999]}"
-EOF2
-chmod 0755 "$MOCKBIN/dumpsys"
-rm -f "$CONFDIR/vpn_uids"
-vpn_learn_uids >/dev/null 2>&1
-assert_rc 0 $? "a new VPN app is learned"
-assert_eq "10423" "$(cat "$CONFDIR/vpn_uids" 2>/dev/null)" "only the VPN app's UID: not system (built-in VPN), not other networks"
-vpn_learn_uids >/dev/null 2>&1
-assert_rc 1 $? "the same app again is nothing new"
-assert_eq 1 "$(grep -c . "$CONFDIR/vpn_uids")" "and is stored once"
-ipt_reset
-firewall_start >/dev/null 2>&1
-post=$(ipt_rules nfqws_post mangle)
-assert_contains "$post" "-m owner --uid-owner 10423 -j CONNMARK --set-xmark $MARK_EXCLUDE" "its connections are marked"
-assert_contains "$post" "-m connmark --mark $MARK_EXCLUDE -j RETURN" "and leave the queue"
-assert_contains "$(ipt_rules nfqws_pre mangle)" "-m connmark --mark $MARK_EXCLUDE -j RETURN" "replies included"
-first=$(printf '%s\n' "$post" | grep -n -- '-j RETURN' | grep connmark | head -n1 | cut -d: -f1); q=$(printf '%s\n' "$post" | grep -n NFQUEUE | head -n1 | cut -d: -f1)
-[ "$first" -lt "$q" ]
-assert_rc 0 $? "before any rule that queues"
-firewall_stop >/dev/null 2>&1
-rm -f "$CONFDIR/vpn_uids" "$MOCKBIN/dumpsys"
-ipt_reset
-firewall_start >/dev/null 2>&1
-assert_not_contains "$(ipt_rules nfqws_post mangle)" "uid-owner" "no VPN app known — no extra rules"
-firewall_stop >/dev/null 2>&1
-
 section "VPN pause"
 NFQWS_SYSNET="$SANDBOX/sysnet"; export NFQWS_SYSNET
 mkdir -p "$NFQWS_SYSNET/rmnet_data1"; printf '0x1003\n' > "$NFQWS_SYSNET/rmnet_data1/flags"

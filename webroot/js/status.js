@@ -280,7 +280,7 @@ function renderStatus(){
   // «Домашний Wi‑Fi» — его настройки
   const part = (text, go) => go ? '<span data-go="' + go + '">' + esc(text) + '</span>' : esc(text);
   const dns = j.dns_available == 1 ? ' · ' + part(j.dns_enabled != 1 ? t('DNS выключен')
-    : (j.dns_vpn == 1 ? t('DNS выключен при VPN') : t('DNS включён')), 'dns') : '';
+    : (j.dns_paused === 'vpn' ? t('DNS на паузе при VPN') : j.dns_paused === 'home' ? t('DNS на паузе дома') : t('DNS включён')), 'dns') : '';
   // Подпись — одна строка; подробности паузы — в title.
   const sub = paused
     ? (j.paused === '@vpn' ? esc(t('Включён VPN')) : part(t('Домашний Wi‑Fi'), 'wifi')) + dns

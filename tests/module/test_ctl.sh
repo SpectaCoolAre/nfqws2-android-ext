@@ -174,7 +174,7 @@ section "get-list / save-list-b64"
 
 ctl get-list user
 assert_rc 0 "$ctl_rc" "get-list user works"
-assert_contains "$ctl_out" "youtube.com" "get-list returns the seeded contents"
+assert_contains "$ctl_out" "$(head -n 1 "$REPO_DIR/lists/user.list")" "get-list returns the seeded contents"
 
 ctl save-list-b64 user "$(b64 'one.example.com
 two.example.com')"
@@ -305,6 +305,17 @@ preview=$(printf '%s' "$ctl_out" | base64 -d 2>/dev/null)
 assert_not_contains "$preview" "ISP_INTERFACE=" "the preview drops ISP_INTERFACE"
 assert_contains "$preview" "AUTOSTART=" "the preview fills in Android settings"
 
+# Списки стратегии в MODE_LIST (hardcorp74 из nfqws-menu: user.list + user_extra.list) переносятся
+imp=$(b64 'NFQWS_ARGS="--filter-tcp=443"
+MODE_LIST="--hostlist=/opt/etc/nfqws2/lists/user.list --hostlist=/opt/etc/nfqws2/lists/user_extra.list"
+NFQWS_EXTRA_ARGS="$MODE_LIST"
+IPV6_ENABLED=0')
+ctl import-add-b64 "$(b64 'with-extra')" "$imp"
+ctl get-import-merged-b64 "with-extra"
+preview=$(printf '%s' "$ctl_out" | base64 -d 2>/dev/null)
+assert_contains "$preview" 'MODE_LIST="--hostlist=$LISTS_DIR/user.list --hostlist=$LISTS_DIR/user_extra.list"' "the imported MODE_LIST with its extra list is kept"
+assert_contains "$preview" 'IPV6_ENABLED=1' "IPv6 of a router config (off there) does not carry over to the phone"
+
 # strategies written for other nfqws2 builds may carry options this binary doesnt know
 imp=$(b64 '# e.g. NFQWS_ARGS_CUSTOM="--made-up-option=auto"
 NFQWS_BASE_ARGS="--made-up-option=auto
@@ -367,6 +378,9 @@ assert_eq "0" "$(wc -c < "$CONFDIR/logs/service.log" | tr -d ' ')" "service.log 
 # ── backup & export ───────────────────────────────────────────────────────────
 section "backup and export"
 
+# Списки nfqws-menu маленькие — архив раздуваем сами: проверяется путь
+# большого архива (по частям через upload)
+awk 'BEGIN { srand(7); for (i = 0; i < 6000; i++) printf "%08x%08x.example\n", rand() * 4294967295, rand() * 4294967295 }' >> "$LISTS_DIR/user.list"
 ctl backup-create "$(b64 '{"m3_monochrome":"true"}')"
 assert_rc 0 "$ctl_rc" "backup-create works"
 b64_bak="$(printf '%s' "$ctl_out" | cut -f3)"
@@ -423,6 +437,11 @@ assert_match "$ctl_out" "R	[123]	ok" "the site is opened through the bypass"
 assert_contains "$ctl_out" "done" "the output ends with done"
 ctl domain-check www.googlevideo.com
 assert_contains "$ctl_out" "$(printf 'LIST\texclude.list\texclude')" "an exclusion is reported as such"
+printf '^exact.example\n' >> "$LISTS_DIR/user.list"
+ctl domain-check exact.example
+assert_contains "$ctl_out" "$(printf 'LIST\tuser.list\thost\t^exact.example')" "a ^entry (nfqws-menu lists) matches the domain itself"
+ctl domain-check sub.exact.example
+assert_not_contains "$ctl_out" "^exact.example" "but not its subdomains, as nfqws2 matches it"
 ctl domain-check 'bad host'
 assert_rc 1 "$ctl_rc" "a malformed domain is refused"
 rm -f "$MOCKBIN/ping" "$MOCKBIN/curl"

@@ -295,6 +295,7 @@ function automate_failure_check(desync, hrec, crec)
 	return false
 end
 
+
 -- circularily change strategy numbers when failure count reaches threshold ('fails')
 -- this orchestrator requires redirection of incoming traffic to cache RST and http replies !
 -- each orchestrated instance must have strategy=N arg, where N starts from 1 and increment without gaps
@@ -419,7 +420,6 @@ function cond_lua(desync)
 		_G[fname], err = load(desync.arg.cond_code, fname)
 		if not _G[fname] then
 			error(err)
-			return
 		end
 	end
 	-- allow dynamic cond_code to access desync
@@ -462,7 +462,7 @@ function condition(ctx, desync)
 	return replay_execution_plan(desync)
 end
 -- execute further desync instances.
--- each instance may have "cond" and "cond_neg" args.
+-- each instance must have "cond" arg and may optionally have "cond_neg" arg.
 -- "cond" - condition function.  "neg" - invert condition function result
 -- arg: instances - how many instances execute conditionally. all if not defined
 function per_instance_condition(ctx, desync)
@@ -574,45 +574,3 @@ function repeater(ctx, desync)
 	-- replay the rest
 	return verdict_aggregate(verdict, replay_execution_plan(desync))
 end
-
--- ==============================================================================
--- LIVE IN-MEMORY AUTO-FALLBACK ORCHESTRATOR
--- ==============================================================================
-
--- zapret2 : In-memory host-level strategy rotation without restarting nfqws2
--- arg : key - storage table key (default "live_auto")
--- arg : max_fails - failure count threshold before rotation (default 2)
--- arg : strategies - total number of strategies in rotation
-function live_fallback(ctx, desync)
-	orchestrate(ctx, desync)
-	if #desync.plan == 0 then return end
-
-	local rec = automate_host_record(desync)
-	if not rec then return end
-
-	rec.strategy = rec.strategy or 1
-	rec.fails = rec.fails or 0
-
-	local max_fails = tonumber(desync.arg.max_fails) or 2
-	local total_strats = tonumber(desync.arg.strategies) or #desync.plan
-
-	-- check if connection was terminated by RST from remote/DPI
-	if desync.track and desync.track.incoming_rst then
-		rec.fails = rec.fails + 1
-		DLOG("live_fallback: recorded RST failure for host. fail count: "..rec.fails.."/"..max_fails)
-		if rec.fails >= max_fails then
-			rec.strategy = (rec.strategy % total_strats) + 1
-			rec.fails = 0
-			DLOG("live_fallback: rotated host strategy to #"..rec.strategy)
-		end
-	end
-
-	-- select planned strategy instance
-	local target_idx = rec.strategy
-	if target_idx <= #desync.plan then
-		local instance = desync.plan[target_idx]
-		plan_clear(desync)
-		return plan_instance_execute(desync, VERDICT_PASS, instance)
-	end
-end
-
