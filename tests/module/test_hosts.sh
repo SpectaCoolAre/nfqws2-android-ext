@@ -209,4 +209,41 @@ assert_eq "preset:adaway" "$(cat "$H/sources.txt")" "a bypass preset leaves the 
 assert_no_file "$H/custom.txt" "the old file is gone"
 assert_not_contains "$(cat "$H/block.txt")" "redirect.example" "and no bypass entry is blocked"
 
+section "extra lists: rkn.list and the Flowseal ipset are downloaded on demand"
+RKN="$WEB/raw.githubusercontent.com_IndeecFOX_zapret4rocket_master_extra_strats_TCP_RKN_List.txt"
+FS="$WEB/raw.githubusercontent.com_Flowseal_zapret-discord-youtube_main_.service_ipset-service.txt"
+i=0; : > "$RKN"; while [ $i -lt 150 ]; do printf 'Site%s.Example\r\n' "$i" >> "$RKN"; i=$((i + 1)); done
+printf '# comment\nbad line here\n' >> "$RKN"
+i=0; : > "$FS"; while [ $i -lt 120 ]; do printf '10.%s.0.0/16\n' "$i" >> "$FS"; i=$((i + 1)); done
+printf '2606:4700::/32\n' >> "$FS"
+ctl set EXTRA_RKN 1
+assert_rc 0 "$ctl_rc" "enabling rkn.list downloads it"
+assert_eq "150" "$(list_count "$LISTS_DIR/rkn.list")" "only the domains, without CR, comments or junk"
+assert_contains "$(cat "$LISTS_DIR/rkn.list")" "site7.example" "lowercased"
+ctl set EXTRA_FLOWSEAL 1
+assert_rc 0 "$ctl_rc" "enabling the Flowseal ipset downloads it"
+assert_eq "121" "$(list_count "$LISTS_DIR/ipset_flowseal.list")" "with IPv6 subnets too"
+ctl json-status
+assert_contains "$ctl_out" '"extra_rkn":1,"extra_flowseal":1' "json-status reports both switches"
+assert_contains "$ctl_out" '"rkn":150,"flowseal":121' "and their sizes"
+reload_conf
+NFQWS_EXTRA_ARGS='--hostlist=$LISTS_DIR/user.list'; NFQWS_ARGS_IPSET=""
+args=$(_startup_args)
+assert_contains "$args" "--hostlist=$LISTS_DIR/rkn.list" "rkn.list joins the hostlist profile"
+assert_contains "$args" "--ipset=$LISTS_DIR/ipset_flowseal.list" "the Flowseal ipset gets an IP profile"
+NFQWS_EXTRA_ARGS='--filter-tcp=80'
+assert_not_contains "$(_startup_args)" "rkn.list" "a profile without hostlists (all traffic) does not get it"
+printf 'only.example\n' > "$RKN"
+ctl extra-list-update rkn
+assert_rc 1 "$ctl_rc" "a broken download fails"
+assert_eq "150" "$(list_count "$LISTS_DIR/rkn.list")" "and keeps the old list"
+ctl extra-list-update nope
+assert_rc 1 "$ctl_rc" "an unknown list is refused"
+rm -f "$LISTS_DIR/ipset_flowseal.list" "$FS"
+ctl set EXTRA_FLOWSEAL 0
+ctl set EXTRA_FLOWSEAL 1
+assert_rc 1 "$ctl_rc" "nothing to download: the switch stays off"
+assert_contains "$(cat "$CONFFILE")" 'EXTRA_FLOWSEAL="0"' "and the config says so"
+ctl set EXTRA_RKN 0
+
 harness_finish

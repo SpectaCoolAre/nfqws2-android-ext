@@ -37,6 +37,39 @@ function renderListFiles(){
         (c[key] != null ? '<span class="li-value">' + fmtCount(c[key]) + '</span>' : '') +
         icon('chevron-right', 's24') + '</span>' +
     '</div>').join(''), false);
+  renderExtraLists();
+}
+/* Дополнительные списки: скачиваются по запросу, а не идут с модулем —
+   rkn.list (zapret4rocket, ~125 тыс. доменов) и ipset Flowseal (подсети
+   сервисов, в т.ч. Cloudflare). Ключ, id, файл, описание, поле json-status */
+const EXTRA_LISTS = [
+  ['EXTRA_RKN', 'rkn', 'rkn.list', 'Домены из реестра блокировок (zapret4rocket)', 'extra_rkn'],
+  ['EXTRA_FLOWSEAL', 'flowseal', 'ipset_flowseal.list', 'Подсети сервисов из Flowseal', 'extra_flowseal']
+];
+function renderExtraLists(){
+  const c = S.counts || {};
+  const rows = EXTRA_LISTS.map(([key, id, file, desc, f]) => settingsRow({
+    icon: id === 'rkn' ? 'list' : 'globe', title: file, sw: true, checked: S[f] == 1,
+    sub: t(desc) + (c[id] ? ' · ' + fmtCount(c[id]) : ''), on: 'toggleExtraList(' + jsArg(id) + ', this.checked)'}));
+  if(EXTRA_LISTS.some(e => S[e[4]] == 1))
+    rows.push(settingsRow({icon: 'restart', title: 'Обновить дополнительные списки', sub: t('Скачать свежие версии включённых списков'), on: 'updateExtraLists()'}));
+  setHTML('extra-lists', rows.join(''), false);
+}
+async function toggleExtraList(id, on){
+  const e = EXTRA_LISTS.find(x => x[1] === id);
+  if(on) toast(t('Скачивание {0}…', e[2]));
+  const r = await withBusy(['set', e[0], on ? '1' : '0'], 120000);
+  if(r.code){ toast(errText(r, 'Не удалось сохранить')); $('extra-lists')._html = ''; }
+  else { S[e[4]] = on ? 1 : 0; toast(on ? t('{0} подключён', e[2]) : t('{0} отключён', e[2])); }
+  renderExtraLists(); stat();
+}
+async function updateExtraLists(){
+  const on = EXTRA_LISTS.filter(e => S[e[4]] == 1);
+  toast(t('Обновление списков…'));
+  const bad = [];
+  for(const e of on){ const r = await withBusy(['extra-list-update', e[1]], 120000); if(r.code) bad.push(e[2]); }
+  toast(bad.length ? t('Не удалось обновить: {0} — старый оставлен', bad.join(', ')) : t('Списки обновлены'));
+  stat();
 }
 async function setMode(m){
   // прежний режим — для быстрого действия «Режим работы» на вкладке «Списки»

@@ -367,6 +367,18 @@ assert_file "$WD_PIDFILE" "with WATCHDOG=1 the watchdog is spawned"
 # The sandbox has no `ip`, so the netwatch precondition fails and it must stay down.
 assert_no_file "$WN_PIDFILE" "netwatch stays down while ip is missing"
 
+# Служба остановлена вручную, а пауз и DNS нет — сторожить нечего:
+# watchers_wanted ложно, наблюдатели завершаются на следующем шаге
+rm -f "$DESIRED_FILE"
+out=$(sh -c '. "$MODDIR/lib/common.sh"; load_conf >/dev/null 2>&1; eval "$(sed -n "/^watchers_wanted()/,/^}/p" "$MODDIR/service.sh")"; HOME_WIFI=0; VPN_PAUSE=0; watchers_wanted && echo yes || echo no')
+assert_eq "no" "$out" "WATCHDOG=1 alone does not keep the helpers for a stopped service"
+: > "$DESIRED_FILE"
+out=$(sh -c '. "$MODDIR/lib/common.sh"; load_conf >/dev/null 2>&1; eval "$(sed -n "/^watchers_wanted()/,/^}/p" "$MODDIR/service.sh")"; HOME_WIFI=0; VPN_PAUSE=0; watchers_wanted && echo yes || echo no')
+assert_eq "yes" "$out" "but does while the service should run"
+out=$(sh -c '. "$MODDIR/lib/common.sh"; load_conf >/dev/null 2>&1; eval "$(sed -n "/^watchers_wanted()/,/^}/p" "$MODDIR/service.sh")"; rm -f "$DESIRED_FILE"; HOME_WIFI=1; VPN_PAUSE=0; watchers_wanted && echo yes || echo no')
+assert_eq "yes" "$out" "the home Wi‑Fi pause keeps them for a stopped service"
+: > "$DESIRED_FILE"
+
 # Kill the daemon but leave the watchdog alive: the next start must reuse the
 # running watchdog rather than spawn a second one. That guard is only reachable
 # with the service down and the watchdog up — the state after a daemon crash.

@@ -86,6 +86,18 @@ EN = {
  "Домены-исключения": "Excluded domains",
  "IP-адреса и подсети для обхода": "IP addresses and subnets to bypass",
  "IP-исключения": "Excluded IPs",
+ "Дополнительные списки": "Extra lists",
+ "Скачиваются из интернета и подключаются к текущей стратегии: домены — к профилю по спискам доменов, подсети — к профилю по IP.": "Downloaded from the internet and attached to the current strategy: domains to the hostlist profile, subnets to the IP profile.",
+ "Домены из реестра блокировок (zapret4rocket)": "Domains from the block registry (zapret4rocket)",
+ "Подсети сервисов из Flowseal": "Service subnets from Flowseal",
+ "Обновить дополнительные списки": "Update extra lists",
+ "Скачать свежие версии включённых списков": "Download fresh copies of the enabled lists",
+ "Скачивание {0}…": "Downloading {0}…",
+ "{0} подключён": "{0} enabled",
+ "{0} отключён": "{0} disabled",
+ "Обновление списков…": "Updating lists…",
+ "Не удалось обновить: {0} — старый оставлен": "Update failed: {0} — the old copy is kept",
+ "Списки обновлены": "Lists updated",
  "Адреса для проверки доступности": "Addresses for the reachability check",
  "Заменить": "Replace",
  "Не удалось сменить режим": "Could not change the mode",
@@ -663,5 +675,6 @@ EN = {
   "Так выбрано в настройках домашнего Wi‑Fi. Включится сам, когда телефон уйдёт из этой сети": "Set so in the home Wi‑Fi settings. Turns back on by itself when the phone leaves this network",
   "Пауза и для DNS": "Pause DNS too",
   "DNS модуля тоже отдыхает в домашних сетях": "The module's DNS rests on home networks too",
-  "В домашних сетях DNS модуля тоже встанет на паузу": "On home networks the module's DNS will pause too"
+  "В домашних сетях DNS модуля тоже встанет на паузу": "On home networks the module's DNS will pause too",
+  "Push-уведомления через DNS Google": "Push notifications via Google DNS"
 };

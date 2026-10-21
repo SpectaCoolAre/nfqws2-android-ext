@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Трекер обновлений</title>
+<style>
+/* Цвета — токены: светлая и тёмная схема по системной теме */
+:root {
+  --bg: #fbf8ff; --surface: #f0edf7; --surface2: #e8e5f0; --on: #1b1b21; --on2: #46464f;
+  --primary: #4355b9; --on-primary: #fff; --ok-bg: #d7f5dd; --ok: #1e6b35;
+  --new-bg: #ffdcc2; --new: #7a3d00; --err-bg: #ffdad6; --err: #93000a; --line: #c7c5d0;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121318; --surface: #1d1e25; --surface2: #282a31; --on: #e4e1e9; --on2: #c7c5d0;
+    --primary: #bac3ff; --on-primary: #08218a; --ok-bg: #0f3d1e; --ok: #9ee2ae;
+    --new-bg: #4f2600; --new: #ffb77c; --err-bg: #690005; --err: #ffb4ab; --line: #46464f;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: var(--bg); color: var(--on);
+  font: 15px/1.45 system-ui, -apple-system, Roboto, "Segoe UI", sans-serif; }
+body { padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px calc(env(safe-area-inset-bottom, 0px) + 24px); }
+header { display: flex; align-items: center; gap: 12px; margin: 4px 0 4px; }
+h1 { font-size: 22px; font-weight: 600; margin: 0; flex: 1; min-width: 0; }
+.sub { color: var(--on2); font-size: 13px; margin: 0 0 14px; }
+button { font: inherit; border: 0; cursor: pointer; }
+.btn { background: var(--primary); color: var(--on-primary); border-radius: 999px; padding: 9px 18px; font-weight: 600; }
+.btn:disabled { opacity: .55; }
+.btn.tonal { background: var(--surface2); color: var(--on); font-weight: 500; }
+.btn.sm { padding: 6px 14px; font-size: 13px; }
+.summary { border-radius: 20px; padding: 14px 16px; margin-bottom: 14px; background: var(--surface); display: flex; gap: 12px; align-items: center; }
+.summary .big { font-size: 17px; font-weight: 600; }
+.summary .grow { flex: 1; min-width: 0; }
+.card { background: var(--surface); border-radius: 20px; padding: 14px 16px; margin-bottom: 10px; }
+.row { display: flex; align-items: flex-start; gap: 10px; }
+.name { font-weight: 600; font-size: 16px; flex: 1; min-width: 0; }
+.repo { color: var(--primary); font-size: 13px; word-break: break-all; }
+.use { color: var(--on2); font-size: 13px; margin-top: 6px; }
+.meta { color: var(--on2); font-size: 13px; margin-top: 2px; }
+.pill { border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600; white-space: nowrap; flex: none; }
+.pill.ok { background: var(--ok-bg); color: var(--ok); }
+.pill.new { background: var(--new-bg); color: var(--new); }
+.pill.err { background: var(--err-bg); color: var(--err); }
+.pill.wait { background: var(--surface2); color: var(--on2); }
+.items { margin: 10px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.items li { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; cursor: pointer; }
+.items li:last-child { border-bottom: 0; }
+.items .d { color: var(--on2); font-size: 12px; display: block; }
+.items .t { display: block; overflow-wrap: anywhere; }
+.extra { color: var(--on2); font-size: 13px; margin-top: 8px; }
+.actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.foot { color: var(--on2); font-size: 12px; margin-top: 16px; text-align: center; }
+.spin { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent;
+  border-radius: 50%; animation: s .8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+@keyframes s { to { transform: rotate(360deg); } }
+.toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 20px); transform: translateX(-50%) translateY(120px);
+  background: var(--on); color: var(--bg); border-radius: 12px; padding: 10px 16px; font-size: 14px; transition: transform .25s, opacity .25s; max-width: calc(100% - 32px);
+  opacity: 0; pointer-events: none; }
+.toast.show { transform: translateX(-50%); opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Трекер обновлений</h1>
+  <button class="btn" id="check" onclick="checkAll(true)">Проверить</button>
+</header>
+<p class="sub" id="sub">Источники nfqws2-android-ext</p>
+<div id="summary"></div>
+<div id="list"></div>
+<div class="foot" id="foot"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* Трекер обновлений для nfqws2-android-ext.
+   Список проектов, на которых основан модуль, и версии, до которых они
+   перенесены, лежат в upstreams.json репозитория модуля — его обновляют при
+   каждом переносе. Здесь он читается с GitHub (или из копии в модуле, если
+   GitHub недоступен) и сверяется с текущим состоянием проектов через GitHub
+   API: для «releases» — новые релизы, для «commits» — новые коммиты в ветке
+   (только в нужной папке, если задан path). Без root: только сеть WebView. */
+const MANIFEST_URLS = [
+  'https://raw.githubusercontent.com/SpectaCoolAre/nfqws2-android-ext/main/upstreams.json',
+  'https://cdn.jsdelivr.net/gh/SpectaCoolAre/nfqws2-android-ext@main/upstreams.json',
+  'upstreams.json'
+];
+const API = 'https://api.github.com/repos/';
+const CACHE_KEY = 'ut_cache_v1', CACHE_MS = 15 * 60 * 1000;
+let manifest = null, results = {}, rate = null, busy = false;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+const fmtDate = s => { if(!s) return '—'; const d = new Date(s); return isNaN(d) ? s : d.toLocaleDateString('ru-RU', {day: 'numeric', month: 'short', year: 'numeric'}); };
+const plural = (n, a, b, c) => { const m10 = n % 10, m100 = n % 100; return n + ' ' + (m10 === 1 && m100 !== 11 ? a : m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20) ? b : c); };
+function store(k, v){ try { if(v === undefined) return JSON.parse(localStorage.getItem(k) || 'null'); localStorage.setItem(k, JSON.stringify(v)); } catch(e) { return null; } }
+
+function toast(msg){
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._tm); t._tm = setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+/* Ссылки — во внешнем браузере: WebView менеджера сам их не открывает */
+let seq = 0;
+function sh(cmd){
+  return new Promise(res => {
+    if(!window.ksu || !ksu.exec){ res(1); return; }
+    const cb = '__ut' + (++seq);
+    const t = setTimeout(() => { delete window[cb]; res(1); }, 8000);
+    window[cb] = code => { clearTimeout(t); delete window[cb]; res(code); };
+    try { ksu.exec(cmd, '{}', cb); } catch(e) { clearTimeout(t); res(1); }
+  });
+}
+async function openUrl(url){
+  const ok = window.ksu && (await sh("am start -a android.intent.action.VIEW -d '" + url.replace(/'/g, '') + "' >/dev/null 2>&1")) === 0;
+  if(!ok) window.open(url, '_blank');
+}
+
+async function getJSON(url, ms){
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms || 15000);
+  try {
+    const r = await fetch(url, {signal: ctl.signal, cache: 'no-store', headers: url.startsWith(API) ? {Accept: 'application/vnd.github+json'} : {}});
+    if(url.startsWith(API)){
+      const left = r.headers.get('x-ratelimit-remaining'), lim = r.headers.get('x-ratelimit-limit'), reset = r.headers.get('x-ratelimit-reset');
+      if(left != null) rate = {left: +left, limit: +lim, reset: +reset};
+    }
+    if(!r.ok){
+      if(r.status === 403 && rate && rate.left === 0) throw new Error('лимит запросов к GitHub исчерпан до ' + new Date(rate.reset * 1000).toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'}));
+      throw new Error('GitHub ответил ' + r.status);
+    }
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
+
+async function loadManifest(){
+  for(const u of MANIFEST_URLS){
+    try {
+      const m = await getJSON(u + (u.startsWith('http') ? '?t=' + Date.now() : ''), 10000);
+      if(m && Array.isArray(m.projects)){ m._src = u.startsWith('http') ? new URL(u).host : 'копия в модуле'; return m; }
+    } catch(e) {}
+  }
+  throw new Error('не удалось прочитать upstreams.json');
+}
+
+/* Сравнение версий вида v1.2.3.4 — на случай, если релиза с нашим тегом в списке нет */
+function verCmp(a, b){
+  const pa = String(a).replace(/^v/, '').split(/[.-]/).map(x => parseInt(x, 10) || 0);
+  const pb = String(b).replace(/^v/, '').split(/[.-]/).map(x => parseInt(x, 10) || 0);
+  for(let i = 0; i < Math.max(pa.length, pb.length); i++){ const d = (pa[i] || 0) - (pb[i] || 0); if(d) return d; }
+  return 0;
+}
+
+async function checkProject(p){
+  const res = {items: [], extra: '', compare: ''};
+  if(p.track === 'releases'){
+    const rel = (await getJSON(API + p.repo + '/releases?per_page=30')).filter(r => !r.draft);
+    const idx = rel.findIndex(r => r.tag_name === p.ref);
+    const newer = idx >= 0 ? rel.slice(0, idx)
+      : rel.filter(r => p.date ? new Date(r.published_at) > new Date(p.date) : verCmp(r.tag_name, p.ref) > 0);
+    res.items = newer.map(r => ({date: r.published_at, title: r.tag_name + (r.name && r.name !== r.tag_name ? ' — ' + r.name : '') + (r.prerelease ? ' (пре-релиз)' : ''), url: r.html_url}));
+    res.latest = rel[0] ? rel[0].tag_name : '';
+    res.compare = 'https://github.com/' + p.repo + '/compare/' + encodeURIComponent(p.ref) + '...' + encodeURIComponent(p.branch || 'HEAD');
+    // Коммиты в ветке после последнего релиза (нашего или нового) — для
+    // сведения: в релиз они ещё не вошли
+    const base = newer.length ? {tag: newer[0].tag_name, date: newer[0].published_at} : {tag: p.ref, date: p.date};
+    if(p.branch && base.date){
+      try {
+        const c = await getJSON(API + p.repo + '/commits?sha=' + encodeURIComponent(p.branch) + '&since=' + encodeURIComponent(base.date) + '&per_page=100');
+        const n = c.filter(x => new Date(x.commit.committer.date) > new Date(base.date)).length;
+        if(n) res.extra = 'В ветке ' + p.branch + ' после ' + base.tag + ': ' + plural(n, 'коммит', 'коммита', 'коммитов') + (n >= 100 ? '+' : '') + ' — ещё не в релизе';
+      } catch(e) {}
+    }
+  } else {
+    let q = API + p.repo + '/commits?sha=' + encodeURIComponent(p.branch || 'HEAD') + '&per_page=50';
+    if(p.path) q += '&path=' + encodeURIComponent(p.path);
+    if(p.date) q += '&since=' + encodeURIComponent(p.date);
+    const c = await getJSON(q);
+    res.items = c.filter(x => x.sha !== p.ref && !(p.date && new Date(x.commit.committer.date) <= new Date(p.date)))
+      .map(x => ({date: x.commit.committer.date, title: x.commit.message.split('\n')[0], url: x.html_url, sha: x.sha.slice(0, 7)}));
+    res.compare = 'https://github.com/' + p.repo + '/compare/' + p.ref.slice(0, 12) + '...' + encodeURIComponent(p.branch || 'HEAD');
+  }
+  return res;
+}
+
+function statusPill(p, r){
+  if(!r) return '<span class="pill wait">' + (busy ? '<span class="spin"></span>' : '') + 'не проверено</span>';
+  if(r.error) return '<span class="pill err">ошибка</span>';
+  if(!r.items.length) return '<span class="pill ok">актуально</span>';
+  return '<span class="pill new">' + (p.track === 'releases'
+    ? (r.items.length === 1 ? 'новый релиз' : plural(r.items.length, 'новый релиз', 'новых релиза', 'новых релизов'))
+    : plural(r.items.length, 'новый коммит', 'новых коммита', 'новых коммитов') + (r.items.length >= 50 ? '+' : '')) + '</span>';
+}
+
+function render(){
+  $('check').disabled = busy;
+  if(!manifest){ $('list').innerHTML = ''; return; }
+  $('sub').textContent = (manifest.module || 'nfqws2-android-ext') + ' · список источников от ' + fmtDate(manifest.updated) + ' · ' + manifest._src;
+  const ps = manifest.projects, done = ps.filter(p => results[p.id]);
+  const upd = ps.filter(p => results[p.id] && !results[p.id].error && results[p.id].items.length);
+  const err = ps.filter(p => results[p.id] && results[p.id].error);
+  let sum;
+  if(busy) sum = '<span class="spin"></span>Проверяю ' + done.length + ' из ' + ps.length + '…';
+  else if(!done.length) sum = 'Нажмите «Проверить»';
+  else if(upd.length) sum = 'Есть обновления: ' + upd.map(p => esc(p.name)).join(', ');
+  else if(err.length) sum = 'Проверено не всё — ' + plural(err.length, 'ошибка', 'ошибки', 'ошибок');
+  else sum = 'Всё актуально';
+  $('summary').innerHTML = '<div class="summary"><div class="grow"><div class="big">' + sum + '</div>' +
+    (store(CACHE_KEY) && !busy ? '<div class="meta">Проверено ' + new Date(store(CACHE_KEY).at).toLocaleString('ru-RU', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}) + '</div>' : '') + '</div>' +
+    (upd.length && !busy ? '<button class="btn tonal sm" onclick="copyRequest()">Скопировать запрос</button>' : '') + '</div>';
+  $('list').innerHTML = ps.map(p => {
+    const r = results[p.id];
+    const used = p.track === 'releases' ? 'релиз ' + esc(p.ref) : 'коммит ' + esc(p.label || p.ref.slice(0, 7));
+    let body = '';
+    if(r && r.error) body = '<div class="extra" style="color:var(--err)">' + esc(r.error) + '</div>';
+    else if(r){
+      if(r.items.length) body += '<ul class="items">' + r.items.slice(0, 15).map(it =>
+        '<li onclick="openUrl(' + esc(JSON.stringify(it.url)) + ')"><span class="d">' + fmtDate(it.date) + (it.sha ? ' · ' + it.sha : '') + '</span><span class="t">' + esc(it.title) + '</span></li>').join('') +
+        (r.items.length > 15 ? '<li onclick="openUrl(' + esc(JSON.stringify(r.compare)) + ')"><span class="t">…и ещё ' + (r.items.length - 15) + '</span></li>' : '') + '</ul>';
+      if(r.extra) body += '<div class="extra">' + esc(r.extra) + '</div>';
+      body += '<div class="actions">' +
+        (r.items.length || r.extra ? '<button class="btn tonal sm" onclick="openUrl(' + esc(JSON.stringify(r.compare)) + ')">Сравнить на GitHub</button>' : '') +
+        '<button class="btn tonal sm" onclick="openUrl(' + esc(JSON.stringify('https://github.com/' + p.repo + (p.track === 'releases' ? '/releases' : (p.path ? '/commits/' + (p.branch || 'HEAD') + '/' + p.path : '/commits/' + (p.branch || 'HEAD'))))) + ')">' + (p.track === 'releases' ? 'Релизы' : 'Коммиты') + '</button></div>';
+    }
+    return '<div class="card"><div class="row"><div class="name">' + esc(p.name) + '</div>' + statusPill(p, r) + '</div>' +
+      '<div class="repo" onclick="openUrl(' + esc(JSON.stringify('https://github.com/' + p.repo)) + ')">' + esc(p.repo) + (p.path ? ' · ' + esc(p.path) + '/' : '') + '</div>' +
+      '<div class="meta">У нас: ' + used + (p.date ? ' от ' + fmtDate(p.date) : '') + (r && r.latest && r.latest !== p.ref ? ' · последний: ' + esc(r.latest) : '') + '</div>' +
+      (p.use ? '<div class="use">' + esc(p.use) + '</div>' : '') + body + '</div>';
+  }).join('');
+  $('foot').textContent = rate ? 'Запросов к GitHub API осталось: ' + rate.left + ' из ' + rate.limit + ' в час' : '';
+}
+
+/* Текст для переписки: что обновилось и с какой версии на какую */
+function copyRequest(){
+  const lines = manifest.projects.filter(p => results[p.id] && !results[p.id].error && results[p.id].items.length).map(p => {
+    const r = results[p.id];
+    return '- ' + p.name + ' (' + p.repo + (p.path ? '/' + p.path : '') + '): у нас ' + (p.track === 'releases' ? p.ref : (p.label || p.ref.slice(0, 7))) +
+      ', новее: ' + (p.track === 'releases' ? r.items.map(i => i.title.split(' ')[0]).join(', ') : plural(r.items.length, 'коммит', 'коммита', 'коммитов'));
+  });
+  const text = 'Подтяни обновления источников nfqws2-android-ext:\n' + lines.join('\n');
+  const done = () => toast('Запрос скопирован');
+  if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
+  function fallback(){
+    const ta = document.createElement('textarea'); ta.value = text; document.body.append(ta); ta.select();
+    try { document.execCommand('copy'); done(); } catch(e) { toast('Не удалось скопировать'); }
+    ta.remove();
+  }
+}
+
+async function checkAll(force){
+  if(busy) return;
+  busy = true; render();
+  try {
+    manifest = await loadManifest();
+    const cache = store(CACHE_KEY);
+    if(!force && cache && Date.now() - cache.at < CACHE_MS && cache.updated === manifest.updated){
+      results = cache.results; rate = cache.rate || null;
+    } else {
+      results = {};
+      for(const p of manifest.projects){
+        try { results[p.id] = await checkProject(p); }
+        catch(e) { results[p.id] = {error: (e && e.name === 'AbortError') ? 'нет ответа от GitHub' : (e.message || String(e)), items: []}; }
+        render();
+      }
+      store(CACHE_KEY, {at: Date.now(), updated: manifest.updated, results, rate});
+    }
+  } catch(e) {
+    $('summary').innerHTML = '<div class="summary"><div class="grow"><div class="big">Нет связи</div><div class="meta">' + esc(e.message) + '</div></div></div>';
+  }
+  busy = false; render();
+}
+checkAll(false);
+</script>
+</body>
+</html>

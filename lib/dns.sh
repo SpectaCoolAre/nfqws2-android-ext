@@ -42,6 +42,18 @@ DNS_MAX_DOMAINS=1000
 # вариант, когда DNS сети не определился или не отвечает.
 DNS_PUBLIC="77.88.8.8 1.1.1.1 8.8.8.8"
 
+# Push-уведомления (FCM): сервисы Google держат одно соединение с mtalk.google.com,
+# через него приходят уведомления почти всех приложений. DNS «для обхода»
+# (Comss, GeoHide, malw) отдают для доменов Google адреса своих прокси, а те
+# не принимают порт 5228: FCM не мог переподключиться, уведомления копились и
+# приходили пачкой, когда приложение открывали. Поэтому, если DNS по умолчанию
+# — профиль, эти домены всегда идут в DNS Google (настройка разработчика
+# DNS_PUSH, по умолчанию включена). Свои профили на те же домены добавляются
+# к этим серверам, а не заменяют их
+DNS_PUSH_DOMAINS="mtalk.google.com mtalk4.google.com alt1-mtalk.google.com alt2-mtalk.google.com alt3-mtalk.google.com alt4-mtalk.google.com alt5-mtalk.google.com alt6-mtalk.google.com alt7-mtalk.google.com alt8-mtalk.google.com android.apis.google.com device-provisioning.googleapis.com firebaseinstallations.googleapis.com fcm.googleapis.com fcm-xmpp.googleapis.com gcm-http.googleapis.com gcm-xmpp.googleapis.com"
+DNS_PUSH_SERVERS="https://dns.google/dns-query tls://dns.google 8.8.8.8 8.8.4.4"
+dns_push_on() { [ "${DNS_PUSH:-1}" = 1 ] && [ "$(dns_default)" != net ]; }
+
 dns_enabled() { [ -f "$DNS_ENABLED_FILE" ] && [ -f "$DNS_BIN" ]; }
 
 dns_default() {
@@ -211,6 +223,11 @@ dns_build() {
       }
     }
     END { flush() }' "$DNS_PROFILES_DIR"/*.conf 2>/dev/null > "$up.rules"
+  if dns_push_on; then
+    local d s pl="[/"
+    for d in $DNS_PUSH_DOMAINS; do pl="$pl$d/"; done
+    for s in $DNS_PUSH_SERVERS; do echo "$pl]$s"; done >> "$up.rules"
+  fi
   routed=$(grep -c . "$up.rules" 2>/dev/null)
 
   # DNS по умолчанию: серверы выбранного профиля (его домены всё равно идут
@@ -566,7 +583,7 @@ dns_describe() {
   prof=$(grep -l '^ENABLED=1$' "$DNS_PROFILES_DIR"/*.conf 2>/dev/null | sed 's#.*/##; s#\.conf$##' | tr '\n' ' ' | sed 's/ $//')
   up=$(grep -v '^\[/' "$DNS_RUN_DIR/upstreams.txt" 2>/dev/null | grep . | tr '\n' ' ' | sed 's/ $//')
   if [ "$def" = net ]; then def="DNS сети"; else def="профиль $def"; fi
-  dns_log "по умолчанию: $def ($up); включённые профили: ${prof:-нет}; правил по доменам: ${rules:-0}; DNS сети: ${net:-не определён}"
+  dns_log "по умолчанию: $def ($up); включённые профили: ${prof:-нет}; правил по доменам: ${rules:-0}; DNS сети: ${net:-не определён}$(dns_push_on && echo "; push-уведомления Google — через DNS Google")"
   pm=$(dns_private_mode)
   case "$pm" in hostname|opportunistic)
     dns_log "внимание: «Частный DNS» = $pm — запросы через DoT системы идут мимо перехвата" ;;
@@ -701,6 +718,7 @@ dns_state() {
   echo "enabled=$(dns_enabled && echo 1 || echo 0)"
   echo "paused=$(dns_enabled && dns_pause_reason)"
   echo "home_pause=$([ -f "$DNS_HOME_FILE" ] && echo 1 || echo 0)"
+  echo "push=$(dns_push_on && echo 1 || echo 0)"
   echo "default=$(dns_default)"
   echo "proxy=$proxy"
   echo "rules=$(dns_rules_ok && echo on || echo off)"

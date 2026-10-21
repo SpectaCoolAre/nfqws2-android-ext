@@ -87,6 +87,9 @@ set_defaults() {
   : "${DOH_BYPASS:=0}"
   : "${META_QUIC_REJECT:=1}"
   : "${CALLS_BYPASS:=0}"
+  : "${DNS_PUSH:=1}"
+  : "${EXTRA_RKN:=0}"
+  : "${EXTRA_FLOWSEAL:=0}"
 }
 
 log_msg() {
@@ -393,6 +396,19 @@ _startup_args() {
     ipset=$(norm_args "$NFQWS_ARGS_IPSET")
   fi
 
+  # Дополнительные списки (Списки → Дополнительные), как в nfqws-menu: rkn.list
+  # — ещё один список доменов к спискам стратегии (режимы list и auto), IP-список
+  # Flowseal — к её IP-спискам. Стратегия не меняется, только чем её кормят
+  if [ "$EXTRA_RKN" = "1" ] && [ "$(list_count "$LISTS_DIR/rkn.list")" -gt 0 ] 2>/dev/null; then
+    case " $extra " in *" --hostlist="*) extra="$extra --hostlist=$LISTS_DIR/rkn.list" ;; esac
+  fi
+  if [ "$EXTRA_FLOWSEAL" = "1" ] && [ "$(list_count "$LISTS_DIR/ipset_flowseal.list")" -gt 0 ] 2>/dev/null; then
+    if [ -n "$ipset" ]; then ipset="$ipset --ipset=$LISTS_DIR/ipset_flowseal.list"
+    elif [ -n "$NFQWS_ARGS_IPSET" ]; then ipset="$(norm_args "$NFQWS_ARGS_IPSET") --ipset=$LISTS_DIR/ipset_flowseal.list"
+    else ipset="--ipset=$LISTS_DIR/ipset_flowseal.list --ipset-exclude=$LISTS_DIR/ipset_exclude.list"
+    fi
+  fi
+
   local args="--user=$NFQWS_USER --qnum=$NFQUEUE_NUM"
 
   if [ -n "$ISP_INTERFACE" ] && [ "$(echo $ISP_INTERFACE | wc -w)" -gt 1 ]; then
@@ -427,6 +443,36 @@ _startup_args() {
   args="$args $tcp $extra"
 
   printf '%s' "$args" | tr -s ' '
+}
+
+# Дополнительные списки: id -> адрес и файл. Скачиваются по запросу из WebUI
+# (с зеркалами jsDelivr, как hosts), в релиз не входят: rkn.list ~2 МБ
+extra_list_url() {
+  case "$1" in
+    rkn) echo "https://raw.githubusercontent.com/IndeecFOX/zapret4rocket/master/extra_strats/TCP/RKN/List.txt" ;;
+    flowseal) echo "https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/main/.service/ipset-service.txt" ;;
+    *) return 1 ;;
+  esac
+}
+extra_list_file() { case "$1" in rkn) echo "$LISTS_DIR/rkn.list" ;; flowseal) echo "$LISTS_DIR/ipset_flowseal.list" ;; *) return 1 ;; esac; }
+# Скачать и проверить: домены или подсети по строке, без комментариев и мусора.
+# Меньше 100 записей — не тот файл (страница ошибки, обрезка): прежний остаётся
+extra_list_update() { # <id> -> число записей
+  local url f tmp n
+  url=$(extra_list_url "$1") || return 1
+  f=$(extra_list_file "$1"); tmp="$f.dl"
+  hosts_download "$url" "$tmp" || { rm -f "$tmp"; return 1; }
+  if [ "$1" = rkn ]; then
+    tr -d '\r' < "$tmp" | tr 'A-Z' 'a-z' | sed 's/[[:space:]]*#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//' |
+      grep -E '^[a-z0-9*^.-]+\.[a-z0-9-]+$' > "$tmp.ok"
+  else
+    tr -d '\r' < "$tmp" | sed 's/[[:space:]]*#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//' |
+      grep -E '^[0-9a-fA-F:.]+(/[0-9]+)?$' > "$tmp.ok"
+  fi
+  rm -f "$tmp"
+  n=$(grep -c . "$tmp.ok" 2>/dev/null)
+  if [ "${n:-0}" -lt 100 ]; then rm -f "$tmp.ok"; return 1; fi
+  mv -f "$tmp.ok" "$f" && chmod 0644 "$f" && echo "$n"
 }
 
 # Исключения — первыми профилями, сильнее любого профиля стратегии. nfqws2
@@ -981,6 +1027,11 @@ restore_tether_offload() {
 # check both rc: firewall_ip6tables returns 0 when IPv6 is off, masking an iptables failure
 firewall_start() {
   local rc=0
+  # Учёт трафика conntrack — до правил: connbytes (лимит первых пакетов
+  # соединения) без него не видит счётчиков, и в очередь ничего не попадает.
+  # На части ядер выключен по умолчанию (из nfqws2-keenetic 1.3.2, 8c5607a)
+  sysctl -w net.netfilter.nf_conntrack_acct=1 >/dev/null 2>&1 ||
+    { [ -w /proc/sys/net/netfilter/nf_conntrack_acct ] && echo 1 > /proc/sys/net/netfilter/nf_conntrack_acct 2>/dev/null; }
   FW_RESTORE_DIR="$STATE_DIR/firewall-restore"
   mkdir -p "$FW_RESTORE_DIR" 2>/dev/null
   if command -v iptables-restore >/dev/null 2>&1; then
@@ -1292,7 +1343,7 @@ render_strategy() {
 
 # Module settings (same across strategies) are carried over whole from the live
 # config on strategy change/reset. NFQWS_EXTRA_ARGS only for standard $MODE_* refs.
-USER_KEYS="DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT NFQWS_EXTRA_ARGS"
+USER_KEYS="DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH EXTRA_RKN EXTRA_FLOWSEAL NFQWS_EXTRA_ARGS"
 merge_user_keys() { # <generated config> <settings source config>  -> stdout
   awk -v keys=" $USER_KEYS " -v src="$2" '
     function quotes(str,   t) { t = str; return gsub(/"/, "", t) }

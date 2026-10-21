@@ -212,8 +212,12 @@ const RESTART_KEYS = {CALLS_BYPASS: 1};
 const DEV_SW = [
   ['WATCHDOG', 'Watchdog', 'watchdog'],
   ['META_QUIC_REJECT', 'Отказ QUIC для Instagram', 'meta_quic'],
-  ['CALLS_BYPASS', 'Обход звонков (не тестировалось)', 'calls_bypass']
+  ['CALLS_BYPASS', 'Обход звонков (не тестировалось)', 'calls_bypass'],
+  ['DNS_PUSH', 'Push-уведомления через DNS Google', 'dns_push']
 ];
+/* Переключатели разработчика, доступные в этой сборке: DNS_PUSH — только
+   при DNS профилях (сборка с dnsproxy) */
+const devSwitches = j => DEV_SW.filter(([k]) => k !== 'DNS_PUSH' || j.dns_available == 1);
 const LIMITS = [
   ['PKT_LIMIT_OUT', 'Исходящие пакеты', 'Сколько первых пакетов соединения обрабатывать', 'pkt_limit_out'],
   ['PKT_LIMIT_IN', 'Входящие пакеты', 'Сколько первых ответных пакетов обрабатывать', 'pkt_limit_in']
@@ -258,7 +262,7 @@ function renderParams(j){
           '<span class="li-value">' + esc(j[jk] != null ? j[jk] : '—') + '</span>' + icon('chevron-right', 's24') +
         '</span>' +
       '</div>');
-    setHTML('dev-sws', DEV_SW.map(([k, label, jk]) => switchRow(k, label, j[jk] == 1)).concat(lim).join(''), false);
+    setHTML('dev-sws', devSwitches(j).map(([k, label, jk]) => switchRow(k, label, j[jk] == 1)).concat(lim).join(''), false);
   }
   if($('dev-block')) $('dev-block').hidden = !devMode;
 }

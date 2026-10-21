@@ -196,15 +196,17 @@ cmd_json_status() {
   cur_strat=$(get_current_strategy)
   local qdrop
   qdrop=$(awk -v q="$NFQUEUE_NUM" '$1 == q { print $6 + $7; f = 1 } END { if (!f) print 0 }' /proc/net/netfilter/nfnetlink_queue 2>/dev/null)
-  local appn cnt_user cnt_auto cnt_excl cnt_ipset cnt_ipset_excl cnt_apps v
+  local appn cnt_user cnt_auto cnt_excl cnt_ipset cnt_ipset_excl cnt_apps cnt_rkn cnt_flowseal v
   appn=$(app_uid_count 2>/dev/null)
   set -- $(list_counts "$LISTS_DIR/user.list" "$LISTS_DIR/auto.list" "$LISTS_DIR/exclude.list" \
                       "$LISTS_DIR/ipset.list" "$LISTS_DIR/ipset_exclude.list" "$CONFDIR/apps.list")
   cnt_user="$1" cnt_auto="$2" cnt_excl="$3" cnt_ipset="$4" cnt_ipset_excl="$5" cnt_apps="$6"
+  set -- $(list_counts "$LISTS_DIR/rkn.list" "$LISTS_DIR/ipset_flowseal.list")
+  cnt_rkn="$1" cnt_flowseal="$2"
   # нечисловое значение обваливает весь JSON и убивает WebUI, поэтому проверяем каждое поле
-  for v in appn cnt_user cnt_auto cnt_excl cnt_ipset cnt_ipset_excl cnt_apps uptime upms qdrop \
+  for v in appn cnt_user cnt_auto cnt_excl cnt_ipset cnt_ipset_excl cnt_apps cnt_rkn cnt_flowseal uptime upms qdrop \
            PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC AUTOSTART WATCHDOG IPV6_ENABLED LOG_LEVEL NFQUEUE_NUM HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT \
-           DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS; do
+           DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS DNS_PUSH EXTRA_RKN EXTRA_FLOWSEAL; do
     eval "case \"\${$v}\" in ''|*[!0-9]*) $v=0 ;; esac"
   done
 
@@ -221,8 +223,8 @@ cmd_json_status() {
 {"running":$run,"pid":"$pid","uptime":$uptime,"uptime_ms":$upms,"strategy":"$(json_str "$cur_strat")","version":"$(json_str "$ver")","mode":"$(json_str "$(current_mode)")",
 "pkt_limit_out":$PKT_LIMIT_OUT,"pkt_limit_in":$PKT_LIMIT_IN,"block_quic":$BLOCK_QUIC,"app_mode":"$(json_str "$APP_MODE")","autostart":$AUTOSTART,"watchdog":$WATCHDOG,
 "ipv6":$IPV6_ENABLED,"log_level":$LOG_LEVEL,"qdrop":$qdrop,"queue":$NFQUEUE_NUM,"app_uids":$appn,
-"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":$DOH_BYPASS,"meta_quic":$META_QUIC_REJECT,"calls_bypass":$CALLS_BYPASS,"dns_paused":"$dnspause","dns_home_pause":$([ -f "$DNS_HOME_FILE" ] && echo 1 || echo 0),"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")",
-"counts":{"user":$cnt_user,"auto":$cnt_auto,"exclude":$cnt_excl,"ipset":$cnt_ipset,"ipset_exclude":$cnt_ipset_excl,"apps":$cnt_apps}}
+"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":$DOH_BYPASS,"meta_quic":$META_QUIC_REJECT,"calls_bypass":$CALLS_BYPASS,"dns_push":$DNS_PUSH,"extra_rkn":$EXTRA_RKN,"extra_flowseal":$EXTRA_FLOWSEAL,"dns_paused":"$dnspause","dns_home_pause":$([ -f "$DNS_HOME_FILE" ] && echo 1 || echo 0),"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")",
+"counts":{"user":$cnt_user,"auto":$cnt_auto,"exclude":$cnt_excl,"ipset":$cnt_ipset,"ipset_exclude":$cnt_ipset_excl,"apps":$cnt_apps,"rkn":$cnt_rkn,"flowseal":$cnt_flowseal}}
 JSON
 }
 
@@ -349,6 +351,8 @@ cmd_doctor() {
     row ok netwatch "$(M 'работает: мгновенная реакция на смену сети' 'running: instant reaction to network changes')"
   elif [ "$WATCHDOG" != "1" ] && [ "$HOME_WIFI" != "1" ] && [ "$VPN_PAUSE" != "1" ] && ! dns_enabled; then
     row info netwatch "$(M 'выключен вместе с контролем работы' 'off together with the watchdog')"
+  elif [ ! -f "$DESIRED_FILE" ] && [ "$HOME_WIFI" != "1" ] && [ "$VPN_PAUSE" != "1" ] && ! dns_enabled; then
+    row info netwatch "$(M 'не нужен: служба остановлена, следить не за чем' 'not needed: the service is stopped, nothing to watch')"
   elif command -v ip >/dev/null 2>&1; then
     row warn netwatch "$(M 'не запущен — правила обновятся только по watchdog (раз в 20 сек)' 'not running — rules are refreshed by the watchdog only (every 20 s)')"
   else
@@ -1303,10 +1307,17 @@ case "$1" in
 
   set)
     case "$2" in
-      BLOCK_QUIC|AUTOSTART|WATCHDOG|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|VPN_PAUSE|ENABLE_HOTSPOT|DOH_BYPASS|META_QUIC_REJECT|CALLS_BYPASS) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
+      BLOCK_QUIC|AUTOSTART|WATCHDOG|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|VPN_PAUSE|ENABLE_HOTSPOT|DOH_BYPASS|META_QUIC_REJECT|CALLS_BYPASS|DNS_PUSH|EXTRA_RKN|EXTRA_FLOWSEAL) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
       PKT_LIMIT_OUT|PKT_LIMIT_IN) case "$3" in [1-9]|1[0-5]) ;; *) echo "Допустимо 1..15" >&2; exit 1 ;; esac ;;
       APP_MODE) case "$3" in off|include|exclude) ;; *) echo "off|include|exclude" >&2; exit 1 ;; esac ;;
       *) echo "Параметр $2 нельзя менять этой командой" >&2; exit 1 ;;
+    esac
+    # Дополнительный список включаем только скачанным: пустой ничего не обходит
+    case "$2:$3" in
+      EXTRA_RKN:1|EXTRA_FLOWSEAL:1)
+        id=rkn; [ "$2" = EXTRA_FLOWSEAL ] && id=flowseal
+        if [ "$(list_count "$(extra_list_file "$id")")" -gt 0 ] 2>/dev/null || extra_list_update "$id" >/dev/null; then :
+        else echo "$(M 'Не удалось скачать список — проверьте интернет' 'Could not download the list — check the connection')" >&2; exit 1; fi ;;
     esac
     set_conf_param "$2" "$3"; echo OK
     case "$2" in
@@ -1317,8 +1328,17 @@ case "$1" in
       # отдельная цепочка — меняется без перезапуска службы
       META_QUIC_REJECT) load_conf >/dev/null 2>&1; if is_running; then meta_quic_start; fi ;;
       AUTOSTART) ;;
+      # DNS применяет сразу, служба обхода тут ни при чём
+      DNS_PUSH) load_conf >/dev/null 2>&1; dns_apply_now ;;
+      # список подключается к профилям — служба перечитает и перезапустится сама
+      EXTRA_RKN|EXTRA_FLOWSEAL) reload_after_change ;;
       *) need_restart_note ;;
     esac ;;
+  # extra-list-update <rkn|flowseal> — скачать свежий дополнительный список
+  extra-list-update)
+    extra_list_file "$2" >/dev/null || { echo "rkn|flowseal" >&2; exit 1; }
+    n=$(extra_list_update "$2") || { echo "$(M 'Не удалось скачать список — старый оставлен' 'Download failed — the old list is kept')" >&2; exit 1; }
+    reload_after_change; echo "$n" ;;
   set-mode)
     case "$2" in list|auto|all) set_conf_param NFQWS_EXTRA_ARGS "\$MODE_$(printf '%s' "$2" | tr a-z A-Z)"; echo OK; need_restart_note ;;
       *) echo "list|auto|all" >&2; exit 1 ;; esac ;;

@@ -122,7 +122,18 @@ dns_build
 assert_eq "https://ns2.opennameserver.org/dns-query" "$(head -n 1 "$DNS_RUN_DIR/upstreams.txt")" "a profile as the default puts its servers first"
 assert_not_contains "$(cat "$DNS_RUN_DIR/upstreams.txt")" "192.168.1.1:53" "the network DNS is then not a primary"
 assert_contains "$(cat "$DNS_RUN_DIR/fallback.txt")" "192.168.1.1:53" "but stays a fallback"
+# Push-уведомления Google: при DNS по умолчанию — профиль (Comss, GeoHide…)
+# домены FCM идут в DNS Google, иначе FCM не переподключается
+up=$(cat "$DNS_RUN_DIR/upstreams.txt")
+assert_contains "$up" "/mtalk.google.com/" "with a profile as the default the FCM domains get their own rule"
+assert_contains "$up" "/fcm.googleapis.com/" "fcm.googleapis.com among them"
+assert_contains "$up" "/]tls://dns.google" "routed to Google DNS"
+DNS_PUSH=0 dns_build
+assert_not_contains "$(cat "$DNS_RUN_DIR/upstreams.txt")" "mtalk.google.com" "the developer switch DNS_PUSH=0 turns the rule off"
+dns_build
 echo net > "$DNS_DEFAULT_FILE"
+dns_build
+assert_not_contains "$(cat "$DNS_RUN_DIR/upstreams.txt")" "mtalk.google.com" "with the network DNS as the default no rule is needed"
 
 # 250 доменов — три строки правил на сервер, по 100 доменов
 printf 'NAME=Big\nENABLED=1\nSERVER=8.8.8.8\n' > "$SANDBOX/big"
@@ -308,6 +319,12 @@ assert_file "$DNS_PIDFILE" "the VPN gone, DNS is back"
 assert_contains "$(ipt_rules OUTPUT nat)" "-j nfqws_dns" "with its interception"
 ctl json-status
 assert_contains "$ctl_out" '"dns_paused":""' "and the pause is over"
+assert_contains "$ctl_out" '"dns_push":1' "json-status reports the push rule switch (on by default)"
+ctl set DNS_PUSH 0
+assert_rc 0 "$ctl_rc" "DNS_PUSH is a setting"
+ctl json-status
+assert_contains "$ctl_out" '"dns_push":0' "and it is saved"
+ctl set DNS_PUSH 1
 
 # Домашний Wi‑Fi: DNS не трогается, пока на его экране не включена пауза DNS
 printf 'Home\n' > "$HOME_FILE"; HOME_WIFI=1

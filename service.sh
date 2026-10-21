@@ -33,8 +33,15 @@ start_failed() {
   firewall_stop
 }
 
-# watchdog/netwatch: auto-restart, home Wi-Fi pause, per-network strategies
-watchers_wanted() { [ "$WATCHDOG" = "1" ] || [ "$HOME_WIFI" = "1" ] || [ "$VPN_PAUSE" = "1" ] || dns_enabled; }
+# watchdog/netwatch: auto-restart, home Wi-Fi pause, per-network strategies.
+# Наблюдатели живут, только пока есть за чем следить: «Контроль работы» — пока
+# служба должна работать (остановленную вручную сторожить незачем), пауза в
+# домашнем Wi‑Fi и при VPN — всегда (они же службу и возобновляют), DNS — пока
+# включён (пауза при VPN, перезапуск при смене сети). Ничего из этого —
+# наблюдатели сами завершаются на следующем шаге, запуск службы поднимет снова
+watchers_wanted() {
+  { [ "$WATCHDOG" = "1" ] && [ -f "$DESIRED_FILE" ]; } || [ "$HOME_WIFI" = "1" ] || [ "$VPN_PAUSE" = "1" ] || dns_enabled
+}
 
 # Запуск под замком: netwatch, watchdog, загрузка и WebUI могут позвать start
 # одновременно, и два демона сели бы на одну очередь (из оригинала, caa8be3).
