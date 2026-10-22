@@ -349,9 +349,9 @@ cmd_doctor() {
   fi
   if [ -f "$WN_PIDFILE" ] && kill -0 "$(cat "$WN_PIDFILE" 2>/dev/null)" 2>/dev/null; then
     row ok netwatch "$(M 'работает: мгновенная реакция на смену сети' 'running: instant reaction to network changes')"
-  elif [ "$WATCHDOG" != "1" ] && [ "$HOME_WIFI" != "1" ] && [ "$VPN_PAUSE" != "1" ] && ! dns_enabled; then
+  elif [ "$WATCHDOG" != "1" ] && [ "$HOME_WIFI" != "1" ] && [ "$VPN_PAUSE" != "1" ] && ! dns_enabled && ! hosts_watch_wanted; then
     row info netwatch "$(M 'выключен вместе с контролем работы' 'off together with the watchdog')"
-  elif [ ! -f "$DESIRED_FILE" ] && [ "$HOME_WIFI" != "1" ] && [ "$VPN_PAUSE" != "1" ] && ! dns_enabled; then
+  elif [ ! -f "$DESIRED_FILE" ] && [ "$HOME_WIFI" != "1" ] && [ "$VPN_PAUSE" != "1" ] && ! dns_enabled && ! hosts_watch_wanted; then
     row info netwatch "$(M 'не нужен: служба остановлена, следить не за чем' 'not needed: the service is stopped, nothing to watch')"
   elif command -v ip >/dev/null 2>&1; then
     row warn netwatch "$(M 'не запущен — правила обновятся только по watchdog (раз в 20 сек)' 'not running — rules are refreshed by the watchdog only (every 20 s)')"
@@ -645,7 +645,11 @@ cmd_backup_create() { # [ui.json в base64]
   cp -f "$USER_STRATEGIES_DIR"/*.conf "$tmp/strategies/" 2>/dev/null
   cp -f "$IMPORTS_DIR"/*.conf "$tmp/imports/" 2>/dev/null
   dns_backup_add "$tmp/dns"
-  hosts_backup_add "$tmp/hosts"
+  if ! hosts_backup_add "$tmp/hosts"; then
+    rm -rf "$tmp"
+    echo "Не удалось сохранить hosts (занят или ошибка чтения); резервная копия не создана" >&2
+    return 1
+  fi
   [ -n "$1" ] && b64d "$1" > "$tmp/ui.json"
   if ! (cd "$tmp" && tar_cmd -cf "$BACKUP_DIR/$name" .) 2>/dev/null; then
     rm -rf "$tmp" "$BACKUP_DIR/$name"
@@ -663,7 +667,17 @@ cmd_backup_list() {
     printf '%s\t%s\n' "${f##*/}" "$(wc -c < "$f" 2>/dev/null | tr -d ' ')"
   done
 }
-_apply_restored_backup() { # <tmp dir>
+_apply_restored_backup() { # <проверенный временный каталог в STATE_DIR>
+  local rc
+  # При занятом hosts не начинаем частично восстанавливать остальные настройки.
+  _hosts_locked 1 _apply_restored_backup_locked "$1"; rc=$?
+  if [ "$rc" != 0 ]; then
+    rm -rf "${1:?}"
+    [ "$rc" != 2 ] || echo "Hosts занят другой операцией; восстановление не начато — повторите позже" >&2
+  fi
+  return "$rc"
+}
+_apply_restored_backup_locked() { # <tmp dir>
   local tmp="$1" f
   if [ -f "$tmp/nfqws2.conf" ]; then
     if ! validate_conf "$tmp/nfqws2.conf" >/dev/null 2>&1; then
@@ -681,7 +695,13 @@ _apply_restored_backup() { # <tmp dir>
   for f in "$tmp"/strategies/*.conf; do [ -f "$f" ] && validate_conf "$f" >/dev/null 2>&1 && cp -f "$f" "$USER_STRATEGIES_DIR/"; done
   for f in "$tmp"/imports/*.conf; do [ -f "$f" ] && validate_conf "$f" >/dev/null 2>&1 && cp -f "$f" "$IMPORTS_DIR/"; done
   dns_backup_restore "$tmp/dns"
-  hosts_backup_restore "$tmp/hosts"
+  if ! hosts_backup_restore "$tmp/hosts"; then
+    rm -rf "$tmp"
+    load_conf >/dev/null 2>&1
+    echo "Восстановление неполное: не удалось применить hosts; часть настроек уже восстановлена" >&2
+    [ ! -s "$HOSTS_ERROR_FILE" ] || cat "$HOSTS_ERROR_FILE" >&2
+    return 1
+  fi
   [ -s "$tmp/ui.json" ] && b64e < "$tmp/ui.json" | tr -d '\n'
   echo
   rm -rf "$tmp"

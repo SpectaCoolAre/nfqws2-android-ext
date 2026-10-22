@@ -110,3 +110,28 @@ seconds on Linux. Use `--fast` while iterating.
   corners while `getComputedStyle` still reports the intended value), the
   counters living in their own card rather than inside the hero, and switch rows
   staying single-line.
+
+## Hosts network pause and DNS cache refresh
+
+* [test_hosts_pause.sh](module/test_hosts_pause.sh) exercises the real hosts ctl
+  and service policy with sandboxed mounts: independent home/VPN switches,
+  overlapping reasons, no-op polls, edits while paused, cold-start reconciliation,
+  manual disable, backups including legacy archives, mount/stat errors, conflict
+  detection, lock recovery, and racing watchers. Cache mocks record the visible
+  file when notified; they do not assert Android runtime behavior.
+* [test_dns_cache.sh](module/test_dns_cache.sh) mocks the bounded Android commands
+  and checks capability detection, status/error parsing, native-before-app order,
+  missing tools, permissions and timeouts. No real Android settings or services
+  are modified by these tests.
+* [test_hosts.js](webui/test_hosts.js) checks the hosts pause controls, status,
+  errors, truthful saved/applied messages and independent home SSID editing.
+* [Java resolver fixtures](java/dns-cache/run.sh) compile the production helper
+  against tiny fake Android APIs, checking capability gaps, actual network IDs,
+  duplicate IDs, vanished networks, and permission errors. Use a JDK 17 via
+  `JAVA_HOME` (or `JAVAC`/`JAVA`). With no usable JDK the runner exits 77 and the
+  main test runner reports SKIP; CI installs JDK 17 and requires these tests.
+
+The cache helper uses the existing PkgList build (Java 8 bytecode, D8 min-api 21);
+there is no new module minimum Android version. Host-side tests are not a rooted
+Android/device test, and cannot prove visibility in every app mount namespace,
+ROM-specific hidden-API availability, or invalidation of an app's private cache.

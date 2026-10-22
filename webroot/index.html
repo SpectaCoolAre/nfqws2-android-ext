@@ -313,7 +313,7 @@
         <label class="list-item two-line clickable state">
           <span class="li-icon"><svg aria-hidden="true" class="icon s24"><use href="#i-dns"/></svg></span>
           <span class="li-text"><span class="li-primary" data-t>Пауза и для DNS</span>
-            <span class="li-secondary" data-t>DNS модуля тоже отдыхает в домашних сетях</span></span>
+            <span class="li-secondary" data-t>DNS модуля тоже отдыхает в домашних сетях; требуется включённая пауза nfqws2</span></span>
           <span class="li-trail"><input type="checkbox" class="switch" role="switch" id="wifi-dns-toggle" aria-label="Пауза и для DNS" data-ta="aria-label"
                  onchange="setDnsHome(this.checked)"></span>
         </label>
@@ -369,8 +369,11 @@
       <input type="checkbox" class="switch" role="switch" id="hosts-toggle" aria-label="Свой hosts" data-ta="aria-label"
              onchange="setHostsEnabled(this.checked, this)">
     </label>
-    <div class="helper" data-t>Файл hosts подменяется сразу, без перезагрузки и отдельного модуля. Он собирается из двух частей: обход ограничений и блокировка рекламы. Выключение возвращает системный hosts.</div>
+    <div class="helper" data-t>Файл hosts подменяется без перезагрузки и отдельного модуля. Он собирается из двух частей: обход ограничений и блокировка рекламы. Выключение возвращает системный hosts.</div>
     <div id="hosts-warn" class="stack"></div>
+    <h2 class="subhead" data-t>Автоматическая пауза hosts</h2>
+    <div class="helper" data-t>Пауза возвращает весь системный hosts: обход через hosts и блокировка рекламы временно не действуют. Списки сохраняются и доступны для правки. Возобновится, когда все выбранные причины паузы исчезнут; настройки nfqws2 и DNS независимы.</div>
+    <div class="list" id="hosts-pause"></div>
     <h2 class="subhead" data-t>Обход ограничений</h2>
     <div class="helper" data-t>Записи «IP домен» для доступа к сервисам. Пресет загружается целиком и заменяет записи: для одного домена работает только одна запись.</div>
     <div class="list" id="hosts-bypass"></div>
@@ -387,6 +390,8 @@
         <svg aria-hidden="true" class="icon s18"><use href="#i-add"/></svg><span data-t>Свои ссылки</span>
       </button>
     </div>
+    <div id="hosts-cache" class="stack"></div>
+    <div class="helper" data-t>Модуль пытается обновить стандартные DNS-кэши и уведомить приложения. Собственный кэш приложения и открытые соединения могут потребовать перезапуска этого приложения.</div>
   </section>
 
   <!-- ═══ ПРОФИЛЬ DNS (дочерний экран «DNS по профилям») ═════════════════ -->

@@ -93,6 +93,7 @@ sandbox_init() {
   fi
   # Редактор hosts: файл назначения — в песочнице, mount/umount — заглушки
   cp "$REPO_DIR/lib/hosts.sh" "$MODDIR/lib/hosts.sh"
+  cp "$REPO_DIR/lib/dns-cache.sh" "$MODDIR/lib/dns-cache.sh"
   mkdir -p "$MODDIR/defaults/hosts-presets"
   cp -R "$REPO_DIR"/defaults/hosts-presets/. "$MODDIR/defaults/hosts-presets/"
   cp "$REPO_DIR/defaults/hosts-bypass.txt" "$MODDIR/defaults/hosts-bypass.txt"

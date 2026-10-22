@@ -24,7 +24,7 @@ jobs:
       - name: Синтаксис shell-скриптов (dash, как sh на Android)
         run: |
           rc=0
-          for f in service.sh action.sh boot-completed.sh customize.sh uninstall.sh lib/common.sh lib/dns.sh lib/hosts.sh bin/nfqws2-ctl system/bin/nfqws2-ctl; do
+          for f in service.sh action.sh boot-completed.sh customize.sh uninstall.sh lib/common.sh lib/dns.sh lib/dns-cache.sh lib/hosts.sh bin/nfqws2-ctl system/bin/nfqws2-ctl; do
             sh -n "$f" || { echo "::error file=$f::синтаксическая ошибка"; rc=1; }
           done
           exit $rc
@@ -63,3 +63,21 @@ jobs:
             || { echo "::error file=update.json::битый update.json"; exit 1; }
           grep -q '^updateJson=https://' module.prop \
             || { echo "::error file=module.prop::нет updateJson — менеджер не увидит обновления"; exit 1; }
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Java-контракт DNS resolver без Android-устройства
+        run: sh tests/java/dns-cache/run.sh
+
+      - name: Регрессии hosts, паузы и DNS-кэшей
+        run: |
+          for shell in dash bash; do
+            "$shell" tests/module/test_hosts.sh
+            "$shell" tests/module/test_hosts_pause.sh
+            "$shell" tests/module/test_dns_cache.sh
+          done
+          node tests/webui/test_static.js
+          node tests/webui/test_hosts.js

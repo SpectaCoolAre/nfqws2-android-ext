@@ -35,7 +35,7 @@ rm -rf "$MODPATH/tests" "$MODPATH/tools" "$MODPATH/.workbuddy-ai" \
 rm -f "$MODPATH"/*.zip
 
 for f in \
-  service.sh action.sh boot-completed.sh uninstall.sh lib/common.sh lib/dns.sh lib/hosts.sh bin/nfqws2-ctl \
+  service.sh action.sh boot-completed.sh uninstall.sh lib/common.sh lib/dns.sh lib/dns-cache.sh lib/hosts.sh bin/nfqws2-ctl \
   system/bin/nfqws2-ctl defaults/nfqws2.conf \
   "binaries/$BIN/nfqws2" "binaries/$BIN/dnsproxy"
 do
