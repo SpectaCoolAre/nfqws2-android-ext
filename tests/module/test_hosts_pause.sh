@@ -364,11 +364,13 @@ assert_no_file "$HOSTS_ENABLED_FILE" 'retry never turns the master switch back o
 mkdir "$HOSTS_ENABLED_FILE"
 ctl hosts-set-enabled 1
 assert_rc 1 "$ctl_rc" 'failure to persist enabled state cannot report success'
+assert_rc 1 "$([ -d "$HOSTS_LOCK" ]; echo $?)" 'a failed enabled write releases the hosts lock'
 rmdir "$HOSTS_ENABLED_FILE"
 ctl hosts-set-pause home 0
 mkdir "$HOSTS_HOME_FILE"
 ctl hosts-set-pause home 1
 assert_rc 1 "$ctl_rc" 'failure to persist a pause preference cannot report success'
+assert_rc 1 "$([ -d "$HOSTS_LOCK" ]; echo $?)" 'a failed preference write releases the hosts lock'
 rmdir "$HOSTS_HOME_FILE"
 
 section 'real backup commands propagate hosts lock failures'

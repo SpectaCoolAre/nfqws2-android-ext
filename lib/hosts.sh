@@ -580,7 +580,7 @@ _hosts_backup_add() { # <каталог в архиве>
   mkdir -p "$1" || return 1
   cp -f "$HOSTS_BYPASS" "$HOSTS_BLOCK_CUSTOM" "$HOSTS_WHITELIST" "$HOSTS_SOURCES" "$1/" 2>/dev/null || return 1
   for f in enabled pause_home pause_vpn; do
-    if [ -f "$HOSTS_DIR/$f" ]; then : > "$1/$f"; else rm -f "$1/$f"; fi || return 1
+    if [ -f "$HOSTS_DIR/$f" ]; then printf '' > "$1/$f"; else rm -f "$1/$f"; fi || return 1
   done
 }
 hosts_backup_restore() {
@@ -598,7 +598,7 @@ _hosts_backup_restore() { # <каталог из архива>
   done
   # В старой копии этих флагов нет — прежнее поведение, без автопаузы.
   for f in enabled pause_home pause_vpn; do
-    if [ -f "$1/$f" ]; then : > "$HOSTS_DIR/$f"; else rm -f "$HOSTS_DIR/$f"; fi || return 1
+    if [ -f "$1/$f" ]; then printf '' > "$HOSTS_DIR/$f"; else rm -f "$HOSTS_DIR/$f"; fi || return 1
   done
   hosts_init
   hosts_build_block
@@ -660,7 +660,9 @@ _hosts_ctl() {
           c=$(hosts_conflicts | tr '\n' ' ' | sed 's/ $//')
           [ -z "$c" ] || { echo "Сначала отключите модуль, который тоже меняет hosts: $c" >&2; return 1; }
           hosts_write || return 1
-          : > "$HOSTS_ENABLED_FILE" || return 1 ;;
+          # ':' — special builtin: ошибка редиректа в dash завершила бы весь sh,
+          # минуя hosts_unlock. Обычный printf позволяет вернуть ошибку и снять лок.
+          printf '' > "$HOSTS_ENABLED_FILE" || return 1 ;;
         0) rm -f "$HOSTS_ENABLED_FILE" || return 1 ;;
         *) echo "Допустимо 0 или 1" >&2; return 1 ;;
       esac
@@ -671,7 +673,7 @@ _hosts_ctl() {
       case "$1" in home) f="$HOSTS_HOME_FILE" ;; vpn) f="$HOSTS_VPN_FILE" ;; *) echo "Нужно home или vpn" >&2; return 1 ;; esac
       case "$2" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; return 1 ;; esac
       hosts_init
-      if [ "$2" = 1 ]; then : > "$f"; else rm -f "$f"; fi || return 1
+      if [ "$2" = 1 ]; then printf '' > "$f"; else rm -f "$f"; fi || return 1
       _hosts_check || return 1
       echo OK ;;
     hosts-sync) # apply — собрать hosts из файлов; import — файлы из hosts
