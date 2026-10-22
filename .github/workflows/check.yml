@@ -45,6 +45,9 @@ jobs:
           cat js/*.js > /tmp/webui-all.js && node --check /tmp/webui-all.js || rc=1
           exit $rc
 
+      - name: Статические проверки WebUI и CSP
+        run: node tests/webui/test_static.js
+
       - name: index.html ссылается только на существующие файлы
         working-directory: webroot
         run: |
