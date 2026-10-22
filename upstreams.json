@@ -1,7 +1,7 @@
 {
   "about": "Что взято из чужих проектов и до какой версии. Обновляется при каждом переносе изменений; читает модуль «трекер обновлений» (extras/update-tracker).",
-  "updated": "2026-10-21",
-  "module": "nfqws2-android-ext v2.1.4",
+  "updated": "2026-10-22",
+  "module": "nfqws2-android-ext v2.2.0",
   "projects": [
     {
       "id": "original",

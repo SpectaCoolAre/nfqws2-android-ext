@@ -36,6 +36,7 @@ function renderSettings(){
       // только если в модуле есть dnsproxy
       {icon: 'dns', title: 'DNS профили', sub: t('Свои DoH, DoT и DNS-серверы для выбранных доменов'), on: "navigate('dns')", chevron: true, long: 'dns'}
     ] : []).concat([
+      {icon: 'auto', title: 'Умный режим', sub: S.smart == 1 ? t('Включён · сам подбирает обход для каждого сайта и сети') : t('Сам подбирает обход для каждого сайта и сети'), on: "navigate('smart')", chevron: true},
       {icon: 'edit', title: 'Редактор hosts', sub: t('Обход ограничений и блокировка рекламы — без перезагрузки'), on: "navigate('hosts')", chevron: true},
       {icon: 'apps', title: 'Фильтр приложений', sub: t('Обход только для выбранных приложений или для всех, кроме них'), on: "navigate('apps')", chevron: true},
       {icon: 'test', title: 'Проверка доступности', sub: t('Открывает адреса из probe_hosts.list через обход'), on: "navigate('test')", chevron: true},
@@ -246,8 +247,7 @@ async function setHomeWifi(on){
 /* ══ РЕЗЕРВНАЯ КОПИЯ ═════════════════════════════════════════════════════ */
 const UI_KEYS = ['m3_seed', 'm3_mode', 'm3_amoled', 'm3_containers', 'm3_monochrome', 'nfq_lang', 'nfq_dev'];
 async function createBackup(){
-  const dir = await askSaveDir(t('Сохранить копию'));
-  if(dir === null) return;
+  const dir = SAVE_DIR_DEFAULT;
   const ui = {};
   UI_KEYS.forEach(k => { const v = store.get(k); if(v != null) ui[k] = v; });
   const r = await withBusy(['backup-create', b64(JSON.stringify(ui))], 60000);

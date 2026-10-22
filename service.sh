@@ -37,10 +37,11 @@ start_failed() {
 # Наблюдатели живут, только пока есть за чем следить: «Контроль работы» — пока
 # служба должна работать (остановленную вручную сторожить незачем), пауза в
 # домашнем Wi‑Fi и при VPN — всегда (они же службу и возобновляют), DNS — пока
-# включён (пауза при VPN, перезапуск при смене сети). Ничего из этого —
+# включён (пауза при VPN, перезапуск при смене сети), умный режим — пока служба
+# должна работать (ему нужно знать, в какой он сети). Ничего из этого —
 # наблюдатели сами завершаются на следующем шаге, запуск службы поднимет снова
 watchers_wanted() {
-  { [ "$WATCHDOG" = "1" ] && [ -f "$DESIRED_FILE" ]; } || [ "$HOME_WIFI" = "1" ] || [ "$VPN_PAUSE" = "1" ] || dns_enabled
+  { [ -f "$DESIRED_FILE" ] && { [ "$WATCHDOG" = "1" ] || smart_active; }; } || [ "$HOME_WIFI" = "1" ] || [ "$VPN_PAUSE" = "1" ] || dns_enabled
 }
 
 # Запуск под замком: netwatch, watchdog, загрузка и WebUI могут позвать start
@@ -88,6 +89,8 @@ _start() {
   local args
   args=$(_startup_args)
   printf '%s\n' "$args" > "$ARGS_FILE"
+  # умному режиму — в какой он сети, до первого пакета
+  smart_net_update
 
   local dry_err
   if dry_run_known "$args"; then
@@ -160,6 +163,13 @@ _start() {
 stop() {
   rm -f "$DESIRED_FILE" "$STARTED_FILE" "$STARTED_CS_FILE"
   release_wakelock
+  # помощник умного режима — вместе со службой, его правила — здесь же: иначе
+  # умирающий помощник мог бы снять цепочку, которую уже завёл новый
+  if [ -f "$SK_PIDFILE" ]; then
+    kill -KILL "$(cat "$SK_PIDFILE" 2>/dev/null)" 2>/dev/null
+    rm -f "$SK_PIDFILE"
+    smartkill_chain del
+  fi
   firewall_stop
   if [ -f "$PIDFILE" ]; then
     local pid
@@ -229,9 +239,77 @@ ensure_helper() {
 }
 
 ensure_watchdog() {
+  # обрыв застрявших соединений — пока работает умный режим
+  is_running && ensure_helper "$SK_PIDFILE" smartkill smart_active
   watchers_wanted || return 0
   ensure_helper "$WD_PIDFILE" watchdog || return 0
   ensure_netwatch
+}
+
+# Умный режим замечает соединения, которые DPI оборвал посреди работы (телефон
+# переотправляет данные, ответа нет), и пишет их в state/smart_kill. Здесь они
+# обрываются по-настоящему: REJECT с tcp-reset в OUTPUT отвечает сокету телефона
+# сбросом, и приложение сразу открывает новое соединение — уже на другом
+# варианте обхода, — а не ждёт своего таймаута. Правила живут 15 секунд: старое
+# соединение к тому времени закрыто. Помощник спит по 3 секунды и сам выходит,
+# когда служба остановлена или выбрана другая стратегия
+SK_CHAIN=nfqws_smartkill
+smartkill_chain() { # <add|del>
+  local c
+  for c in iptables ip6tables; do
+    command -v "$c" >/dev/null 2>&1 || continue
+    if [ "$1" = add ]; then
+      $c -w -t filter -N $SK_CHAIN 2>/dev/null
+      $c -w -t filter -C OUTPUT -j $SK_CHAIN 2>/dev/null || $c -w -t filter -I OUTPUT 1 -j $SK_CHAIN 2>/dev/null
+    else
+      while $c -w -t filter -D OUTPUT -j $SK_CHAIN 2>/dev/null; do :; done
+      $c -w -t filter -F $SK_CHAIN 2>/dev/null
+      $c -w -t filter -X $SK_CHAIN 2>/dev/null
+    fi
+  done
+}
+smartkill() {
+  echo $$ > "$SK_PIDFILE"
+  protect_process
+  trap 'smartkill_exit; exit 0' TERM INT HUP
+  local w="$SMART_KILL_FILE.work" ver ip lp c up flush=0 n killed=0 logged=0
+  # заявки прошлого запуска — до того, как цепочка заработает: их порты уже
+  # могли достаться другим соединениям
+  rm -f "$SMART_KILL_FILE"
+  smartkill_chain add
+  while :; do
+    sleep 3
+    conf_refresh
+    is_running && smart_active || break
+    read -r up _ < /proc/uptime; up=${up%.*}
+    if [ -s "$SMART_KILL_FILE" ]; then
+      mv -f "$SMART_KILL_FILE" "$w" 2>/dev/null
+      n=0
+      while read -r ver ip lp; do
+        case "$ver" in 4) c=iptables ;; 6) c=ip6tables ;; *) continue ;; esac
+        case "$ip" in ''|*[!0-9a-fA-F.:]*) continue ;; esac
+        case "$lp" in ''|*[!0-9]*) continue ;; esac
+        $c -w -t filter -A $SK_CHAIN -p tcp -d "$ip" --sport "$lp" -j REJECT --reject-with tcp-reset 2>/dev/null && n=$((n + 1))
+      done < "$w"
+      rm -f "$w"
+      [ "$n" -gt 0 ] && { killed=$((killed + n)); flush=$((up + 15)); }
+    fi
+    # в журнал — сводкой, не чаще раза в минуту: обрывов бывает много подряд
+    if [ "$killed" -gt 0 ] && [ $((up - logged)) -ge 60 ]; then
+      log_msg "Умный режим: оборвано застрявших соединений — $killed (приложения переподключатся на другом варианте)"
+      killed=0; logged=$up
+    fi
+    if [ "$flush" -gt 0 ] && [ "$up" -ge "$flush" ]; then
+      iptables -w -t filter -F $SK_CHAIN 2>/dev/null; ip6tables -w -t filter -F $SK_CHAIN 2>/dev/null
+      flush=0
+    fi
+  done
+  smartkill_chain del
+  smartkill_exit
+}
+smartkill_exit() {
+  [ "$(cat "$SK_PIDFILE" 2>/dev/null)" = "$$" ] && rm -f "$SK_PIDFILE"
+  rm -f "$STATE_DIR/conf_seen.$$"
 }
 
 # Перечитать конфиг, только если он менялся с прошлого раза. netwatch опрашивает
@@ -324,6 +402,8 @@ netwatch() {
         else dns_start "смена сети"; fi
       fi
       netsig="$sig"
+      # умный режим переключается на выученное для новой сети сам, без перезапуска
+      smart_net_update
       if [ -f "$DESIRED_FILE" ] && is_running; then
         log_msg "netwatch: сеть изменилась (ip monitor) — пересобираю правила"
         firewall_start
@@ -357,6 +437,8 @@ watchdog() {
     tick=$((tick + 1))
     # once a minute: cmd wifi is the expensive part
     { [ "$HOME_WIFI" = "1" ] || [ "$VPN_PAUSE" = "1" ]; } && [ $((tick % 3)) -eq 0 ] && home_check
+    # сеть для умного режима — и там, где ip monitor не работает
+    [ $((tick % 3)) -eq 0 ] && is_running && smart_net_update
     # DNS — до проверки WATCHDOG: упавший dnsproxy с правилами перехвата
     # оставил бы телефон совсем без DNS
     dns_enabled && dns_check
@@ -481,6 +563,7 @@ case "$1" in
   ensure_watchdog)    ensure_watchdog ;;
   watchdog)           watchdog ;;
   netwatch)           netwatch ;;
+  smartkill)          smartkill ;;
   firewall_apply)     firewall_start ;;
   firewall_stop)      firewall_stop ;;
   dns_apply)          dns_start "настройки изменены" ;;
@@ -497,7 +580,7 @@ case "$1" in
     # служба «уже запущена», наблюдатель «уже работает», а stop убил бы чужое.
     # desired — «служба должна работать»: без сброса boot-completed поднимал бы
     # её и при выключенном автозапуске
-    rm -f "$PIDFILE" "$WD_PIDFILE" "$WN_PIDFILE" "$DESIRED_FILE" "$STARTED_FILE" "$STARTED_CS_FILE"
+    rm -f "$PIDFILE" "$WD_PIDFILE" "$WN_PIDFILE" "$SK_PIDFILE" "$DESIRED_FILE" "$STARTED_FILE" "$STARTED_CS_FILE"
     rm -f "$STATE_DIR"/conf_seen.*
     rmdir "$STATE_DIR/start.lock" 2>/dev/null
     until [ "$(getprop sys.boot_completed 2>/dev/null)" = "1" ]; do sleep 3; done

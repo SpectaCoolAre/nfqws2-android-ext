@@ -29,6 +29,12 @@ FIRST_STRATEGY=hardcorp74      # стратегия при первой уста
 HOME_FILE="$CONFDIR/home_wifi.list"
 HOME_PAUSED_FILE="$STATE_DIR/home_paused"      # paused by home network; holds SSID
 HOME_AT_FILE="$STATE_DIR/home_at"              # телефон в домашнем Wi‑Fi; SSID (для паузы DNS)
+SMART_DIR="$CONFDIR/smart"                     # умный режим: выученное по сетям (<сеть>.tsv)
+SMART_NET_FILE="$STATE_DIR/smart_net"          # id текущей сети для умного режима или offline
+SMART_TRAIN_FILE="$STATE_DIR/smart_train"      # ход обучения
+SMART_TRAIN_PID="$STATE_DIR/smart_train.pid"
+SK_PIDFILE="$STATE_DIR/smartkill.pid"          # обрыв застрявших соединений умного режима
+SMART_KILL_FILE="$STATE_DIR/smart_kill"        # их пишет оркестратор: «4|6 адрес локальный-порт»
 HOME_OVERRIDE_FILE="$STATE_DIR/home_override"  # user re-enabled on this network
 
 MARK_EXCLUDE="0x20000000/0x20000000"
@@ -1448,6 +1454,42 @@ on_wifi() {
   done
   return 1
 }
+# ── Умный режим ──────────────────────────────────────────────────────────
+# Стратегия с оркестратором smart (lua/zapret-smart.lua) учится, какой вариант
+# обхода работает для сайта, и запоминает это для каждой сети отдельно. Модуль
+# говорит ей, в какой сети телефон, и есть ли сеть вообще.
+smart_active() { case "$NFQWS_BASE_ARGS" in *zapret-smart.lua*) return 0 ;; esac; return 1; }
+
+# id и подпись сети: Wi‑Fi — по SSID, мобильная — по коду оператора. Нет
+# маршрута наружу — сети нет (offline): отказы тогда не считаются
+smart_net_id() {
+  local dev ssid op name
+  dev=$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
+  if [ -z "$dev" ]; then printf 'offline\t'; return 0; fi
+  if on_wifi && ssid=$(active_ssid) && [ -n "$ssid" ]; then
+    printf 'wifi-%s\t%s' "$(printf '%s' "$ssid" | cksum | cut -d' ' -f1)" "$ssid"
+    return 0
+  fi
+  case "$dev" in wlan*) printf 'wifi\tWi‑Fi'; return 0 ;; esac
+  op=$(getprop gsm.operator.numeric 2>/dev/null); op=${op%%,*}
+  name=$(getprop gsm.operator.alpha 2>/dev/null); name=${name%%,*}
+  case "$op" in
+    ''|*[!0-9]*) printf 'mobile\t%s' "${name:-mobile}" ;;
+    *) printf 'mobile-%s\t%s' "$op" "${name:-$op}" ;;
+  esac
+}
+smart_net_update() {
+  smart_active || return 0
+  mkdir -p "$SMART_DIR" "$STATE_DIR" 2>/dev/null
+  local line id label
+  line=$(smart_net_id); id=${line%%	*}; label=${line#*	}
+  [ "$id" = "$(cat "$SMART_NET_FILE" 2>/dev/null)" ] || printf '%s\n' "$id" > "$SMART_NET_FILE"
+  [ "$id" = offline ] && return 0
+  # подпись сети для WebUI — один раз
+  grep -q "^$id	" "$SMART_DIR/nets.tsv" 2>/dev/null || printf '%s\t%s\n' "$id" "$label" >> "$SMART_DIR/nets.tsv"
+  return 0
+}
+
 ssid_is_home() {
   if [ -z "$1" ] || [ ! -f "$HOME_FILE" ]; then return 1; fi
   grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$HOME_FILE" 2>/dev/null | grep -Fxq -- "$1"

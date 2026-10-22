@@ -69,6 +69,9 @@ pre.appear > * { animation: none; }
 .code-edit > textarea::placeholder { -webkit-text-fill-color: var(--md-sys-color-on-surface-variant); color: var(--md-sys-color-on-surface-variant); }
 .code-edit > textarea::selection { background: color-mix(in srgb, var(--md-sys-color-primary) 32%, transparent); }
 .code-edit.plain > pre { display: none; }
+/* во время выделения текст рисует сам textarea (см. editor.js, selectionchange) */
+.code-edit.selecting > pre { visibility: hidden; }
+.code-edit.selecting > textarea { color: var(--md-sys-color-on-surface); -webkit-text-fill-color: currentColor; }
 /* Поиск в редакторе: строка над текстом и рамка текущего совпадения — между
    подсветкой и прозрачным textarea, поэтому текст поверх неё виден */
 .find-bar { display: flex; align-items: center; gap: 8px; }

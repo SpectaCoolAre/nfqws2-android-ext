@@ -46,19 +46,20 @@ function startUptTimer(ms){
    происхождению, на одном листе, с заголовком над каждой. */
 let strategies = [{name: 'default', kind: 'builtin', mod: false}], currentStrategy = 'default', pendingStrategy = 'default';
 const STRATEGY_GROUPS = [
-  ['base', 'Базовая'], ['alt', 'Flowseal · ALT'], ['fake', 'Flowseal · FAKE TLS AUTO'],
+  ['smart', 'Умный режим'], ['base', 'Базовая'], ['alt', 'Flowseal · ALT'], ['fake', 'Flowseal · FAKE TLS AUTO'],
   ['simple', 'Flowseal · SIMPLE FAKE'], ['authors', 'Авторские'], ['user', 'Пользовательские']
 ];
 function strategyGroup(s){
   if(s.kind === 'import' || s.kind === 'user') return 'user';
   if(s.name === 'default') return 'base';
+  if(s.name === 'smart') return 'smart';
   if(/^alt\d*(_|$)/i.test(s.name)) return 'alt';
   if(/^fake_tls_auto/i.test(s.name)) return 'fake';
   if(/^simple_fake/i.test(s.name)) return 'simple';
   return 'authors';
 }
 const groupTitle = g => t((STRATEGY_GROUPS.find(x => x[0] === g) || ['', ''])[1]);
-const strategyName = s => s === 'default' ? t('По умолчанию') : String(s).replace(/^imp:/, '');
+const strategyName = s => s === 'default' ? t('По умолчанию') : s === 'smart' ? t('Умный режим') : String(s).replace(/^imp:/, '');
 const findStrategy = n => strategies.find(s => s.name === n);
 
 async function loadStrategies(){
@@ -177,6 +178,8 @@ async function applyStrategy(val){
   renderStrategyRow();
   if(S.running) await act('restart');
   else { toast(t('Стратегия «{0}» применится при следующем запуске', strategyName(val))); stat(); }
+  // умный режим без выученного в этой сети — предложить обучение
+  if(val === 'smart' && currentPage !== 'smart') smartOffer();
 }
 function editStrategy(name){
   // без пояснения внизу: с клавиатурой оно ехало вверх; что правку можно

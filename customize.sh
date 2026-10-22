@@ -92,7 +92,7 @@ DP="$CONF/dns/profiles"
 # один раз: метка .presets2 — дальше набор профилей целиком в руках пользователя
 if [ -d "$DP" ] && [ ! -f "$CONF/dns/.presets2" ]; then
   dflt=$(cat "$CONF/dns/default" 2>/dev/null)
-  for id in astracat dns-ai instagram ntc rutor supercell twitch xbox; do
+  for id in astracat dns-ai ntc rutor supercell twitch xbox; do
     f="$DP/$id.conf"
     [ -f "$f" ] || continue
     grep -q '^ENABLED=1' "$f" && continue

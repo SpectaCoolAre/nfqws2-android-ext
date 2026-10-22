@@ -31,21 +31,13 @@ function blobToB64(blob){
     r.readAsDataURL(blob);
   });
 }
-/* Папка для архива: в KernelSU/ReSukiSU WebView нет системного диалога
-   сохранения, поэтому спрашиваем путь сами и запоминаем его */
+/* Папка для архивов (журналы, резервная копия) — постоянная, без вопроса:
+   в KernelSU/ReSukiSU WebView нет системного диалога сохранения, а
+   спрашивать путь при каждом экспорте незачем */
 const SAVE_DIR_DEFAULT = '/sdcard/Download/nfqws2';
 function normSaveDir(d){
   d = String(d || '').trim().replace(/\/+$/, '') || SAVE_DIR_DEFAULT;
   return d.startsWith('/') ? d : '/sdcard/' + d;
-}
-async function askSaveDir(title){
-  let dir = normSaveDir(store.get('nfq_save_dir'));
-  if(typeof window === 'undefined' || !window.ksu) return dir;
-  const chosen = await mdPrompt(title, t('Укажите папку для сохранения архива:'), dir, t('Папка для сохранения'), {ok: t('Сохранить')});
-  if(chosen === null) return null;
-  dir = normSaveDir(chosen);
-  store.set('nfq_save_dir', dir);
-  return dir;
 }
 async function exportBlobFile(blob, filename, mimeType, localFilePath, targetDir){
   mimeType = mimeType || 'application/x-tar';
@@ -591,6 +583,8 @@ const PAGE_META = {
   test:     {title: 'Проверка доступности', child: true, parent: 'settings', init: () => testInit()},
   diag:     {title: 'Диагностика', child: true, parent: 'settings', init: () => diagInit(),
              actions: [{icon: 'refresh', label: 'Проверить снова', fn: () => diagInit()}]},
+  smart:    {title: 'Умный режим', child: true, parent: 'settings', init: () => smartInit(),
+             actions: [{icon: 'refresh', label: 'Обновить состояние', fn: () => smartLoad()}]},
   dns:      {title: 'DNS профили', child: true, parent: 'settings', init: () => dnsInit(),
              actions: [{icon: 'refresh', label: 'Обновить состояние', fn: () => dnsInit()}]},
   dnsprof:  {title: 'Профиль DNS', child: true, parent: 'dns', init: () => dnsProfInit()},

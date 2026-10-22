@@ -168,8 +168,9 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   await closeAll();
   await hold('#logs-btn');
   eq('settings', await cur(), 'holding the logs icon does not open the logs');
-  truthy(/Экспорт журналов/.test(await snack()), 'by default it exports them: ' + await snack());
-  await page.evaluate(() => { if ($('dialog-wrap').classList.contains('open')) dialogResolve(false); });
+  // папка постоянная — экспорт идёт сразу, без вопроса о пути
+  eq(1, await calls("'export-logs'"), 'by default it exports them, without asking for a folder');
+  eq(false, await page.evaluate(() => $('dialog-wrap').classList.contains('open')), 'no folder dialog');
   await page.click('#logs-btn'); await page.waitForTimeout(600);
   eq('logs', await cur(), 'a tap still opens the logs');
   eq('Экспорт логов', await page.textContent('#logs-long-value'), 'where the long-press action is set');

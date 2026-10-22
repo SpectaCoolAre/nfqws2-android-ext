@@ -225,6 +225,13 @@ $('panel-editor-text').addEventListener('input', () => {
   // текст изменился — найденные позиции больше не верны
   if(findRes) findReset(true);
 });
+/* Выделение пальцем: Android показывает лупу, и она снимает именно textarea, а
+   его текст прозрачный (виден слой подсветки под ним) — в лупе был чёрный фон.
+   Пока выделение не пустое, текст textarea видимый, а подсветка спрятана */
+document.addEventListener('selectionchange', () => {
+  const ta = $('panel-editor-text');
+  $('code-edit').classList.toggle('selecting', document.activeElement === ta && ta.selectionStart !== ta.selectionEnd);
+});
 $('panel-editor-text').addEventListener('scroll', () => {
   const ta = $('panel-editor-text'), pre = $('ce-hl');
   pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft;

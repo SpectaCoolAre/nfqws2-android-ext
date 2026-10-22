@@ -95,8 +95,7 @@ async function loadLog(){
   lg.scrollTop = lg.scrollHeight;
 }
 async function exportLogs(){
-  const dir = await askSaveDir(t('Экспорт журналов'));
-  if(dir === null) return;
+  const dir = SAVE_DIR_DEFAULT;
   const r = await withBusy(['export-logs'], 30000);
   if(r.code){ toast(errText(r, 'Не удалось экспортировать журналы')); return; }
   const parts = r.out.trim().split('\n')[0].split('\t');
