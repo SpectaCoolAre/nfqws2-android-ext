@@ -41,7 +41,7 @@ start_failed() {
 # должна работать (ему нужно знать, в какой он сети). Ничего из этого —
 # наблюдатели сами завершаются на следующем шаге, запуск службы поднимет снова
 watchers_wanted() {
-  { [ -f "$DESIRED_FILE" ] && { [ "$WATCHDOG" = "1" ] || smart_active; }; } || [ "$HOME_WIFI" = "1" ] || [ "$VPN_PAUSE" = "1" ] || dns_enabled
+  { [ -f "$DESIRED_FILE" ] && { [ "$WATCHDOG" = "1" ] || smart_active; }; } || [ "$HOME_WIFI" = "1" ] || [ "$VPN_PAUSE" = "1" ] || dns_enabled || hosts_watch_wanted
 }
 
 # Запуск под замком: netwatch, watchdog, загрузка и WebUI могут позвать start
@@ -436,7 +436,7 @@ watchdog() {
     watchers_wanted || break
     tick=$((tick + 1))
     # once a minute: cmd wifi is the expensive part
-    { [ "$HOME_WIFI" = "1" ] || [ "$VPN_PAUSE" = "1" ]; } && [ $((tick % 3)) -eq 0 ] && home_check
+    { [ "$HOME_WIFI" = "1" ] || [ "$VPN_PAUSE" = "1" ] || hosts_watch_wanted; } && [ $((tick % 3)) -eq 0 ] && home_check
     # сеть для умного режима — и там, где ip monitor не работает
     [ $((tick % 3)) -eq 0 ] && is_running && smart_net_update
     # DNS — до проверки WATCHDOG: упавший dnsproxy с правилами перехвата
@@ -486,8 +486,10 @@ home_check() {
   mkdir "$STATE_DIR/home.lock" 2>/dev/null || return 0
   # Пауза — домашний Wi‑Fi (в файле SSID) или VPN (метка @vpn). Ручной запуск
   # оставляет то же значение в override: оно действует, пока причина не уйдёт.
-  local ssid="" vpn=0 ovr="" want=""
-  [ "$HOME_WIFI" = "1" ] && ssid=$(active_ssid)
+  local ssid="" sampled=0 vpn=0 ovr="" want=""
+  if [ "$HOME_WIFI" = "1" ] || hosts_home_enabled; then
+    ssid=$(active_ssid); sampled=1
+  fi
   [ "$VPN_PAUSE" = "1" ] && vpn_active && vpn=1
   [ -f "$HOME_OVERRIDE_FILE" ] && ovr=$(cat "$HOME_OVERRIDE_FILE" 2>/dev/null)
   case "$ovr" in
@@ -526,6 +528,12 @@ home_check() {
     rm -f "$HOME_PAUSED_FILE"
     start >/dev/null 2>&1 || log_msg "Не удалось возобновить обход после паузы"
   fi
+  # DNS сначала принимает решение о VPN/домашней сети; сброс кэша после
+  # смены hosts не должен заполнить его ответами прежнего DNS-режима.
+  dns_enabled && dns_check
+  # Тумблер hosts мог включиться, пока выполнялся DNS: отсутствие выборки
+  # нельзя выдавать за реально прочитанный пустой SSID.
+  if [ "$sampled" = 1 ]; then hosts_check "$ssid"; else hosts_check; fi
   rmdir "$STATE_DIR/home.lock" 2>/dev/null
   return 0
 }
@@ -568,7 +576,8 @@ case "$1" in
   firewall_stop)      firewall_stop ;;
   dns_apply)          dns_start "настройки изменены" ;;
   dns_stop)           dns_stop ;;
-  hosts_off)          hosts_umount ;;
+  hosts_off)          hosts_off ;;
+  hosts_check)        hosts_boot ;;
   # boot-completed.sh: поднять службу, если она должна работать и не на
   # паузе дома. Не manual_start: тот дома запомнил бы «запущено вручную».
   boot_recover)       [ -f "$HOME_PAUSED_FILE" ] || start ;;
@@ -589,6 +598,7 @@ case "$1" in
     rm -f "$HOME_PAUSED_FILE" "$HOME_OVERRIDE_FILE" "$HOME_AT_FILE"
     rmdir "$STATE_DIR/home.lock" 2>/dev/null
     dns_boot_reset
+    hosts_boot_reset
     # Пауза DNS дома: SSID нужен до запуска DNS (два вызова Java — только
     # когда пауза включена)
     if [ -f "$DNS_HOME_FILE" ] && [ "$HOME_WIFI" = "1" ] && dns_enabled && ssid=$(active_ssid) && ssid_is_home "$ssid"; then
@@ -613,7 +623,7 @@ case "$1" in
     else
       update_description stopped
     fi
-    hosts_boot
+    hosts_boot || log_msg "Не удалось применить hosts при загрузке; состояние сохранено для повторной попытки"
     ensure_watchdog
     : > "$STATE_DIR/boot_done"
     ;;

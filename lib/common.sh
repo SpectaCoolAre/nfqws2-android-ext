@@ -1497,5 +1497,7 @@ ssid_is_home() {
 
 # DNS по профилям: без bin/dnsproxy dns_enabled всегда ложно, и всё dns_* молчит.
 . "$MODDIR/lib/dns.sh"
+# Обновление стандартных DNS-кэшей после смены hosts (best effort).
+. "$MODDIR/lib/dns-cache.sh"
 # Редактор hosts без перезагрузки (логика bindhosts)
 . "$MODDIR/lib/hosts.sh"

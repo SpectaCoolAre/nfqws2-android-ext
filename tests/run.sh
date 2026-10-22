@@ -144,8 +144,20 @@ printf 'node:   %s\n' "${NODE_BIN:-<not found>}"
 queue_suite "module: data integrity" sh "$HERE/module/test_data.sh"
 queue_suite "module: packaging" sh "$HERE/module/test_packaging.sh"
 
+# The optional Java fixture runner exits 77 without a JDK. Report a real SKIP,
+# rather than silently treating its exit as a passed test or failing every shell run.
+java_compiler=${JAVAC:-${JAVA_HOME:+$JAVA_HOME/bin/}javac}
+java_runtime=${JAVA:-${JAVA_HOME:+$JAVA_HOME/bin/}java}
+if "$java_compiler" -version >/dev/null 2>&1 && "$java_runtime" -version >/dev/null 2>&1; then
+  queue_suite "java: DNS cache resolver contract" sh "$HERE/java/dns-cache/run.sh"
+else
+  queue_skip "java: DNS cache resolver contract" "usable JDK unavailable (set JAVA_HOME)"
+fi
+
 for s in $SHELLS; do
   queue_suite "module: lib/common.sh under $s" "$s" "$HERE/module/test_common.sh"
+  queue_suite "module: hosts network pause under $s" "$s" "$HERE/module/test_hosts_pause.sh"
+  queue_suite "module: DNS cache refresh under $s" "$s" "$HERE/module/test_dns_cache.sh"
 done
 
 queue_suite "module: nfqws2-ctl" sh "$HERE/module/test_ctl.sh"
@@ -163,6 +175,7 @@ fi
 if [ -z "$NODE_BIN" ]; then
   queue_skip "webui: static invariants" "node not found"
   queue_skip "webui: app filter" "node not found"
+  queue_skip "webui: hosts network pause" "node not found"
   queue_skip "webui: monet palette" "node not found"
   queue_skip "webui: dpi detector" "node not found"
   queue_skip "webui: export & backup" "node not found"
@@ -171,6 +184,7 @@ if [ -z "$NODE_BIN" ]; then
 else
   queue_suite "webui: static invariants" "$NODE_BIN" "$HERE/webui/test_static.js"
   queue_suite "webui: app filter" "$NODE_BIN" "$HERE/webui/test_apps.js"
+  queue_suite "webui: hosts network pause" "$NODE_BIN" "$HERE/webui/test_hosts.js"
   queue_suite "webui: monet palette" "$NODE_BIN" "$HERE/webui/test_monet.js"
   queue_suite "webui: dpi detector" "$NODE_BIN" "$HERE/webui/test_dpi.js"
   queue_suite "webui: export & backup" "$NODE_BIN" "$HERE/webui/test_export.js"

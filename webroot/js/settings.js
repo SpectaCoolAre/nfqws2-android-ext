@@ -176,11 +176,13 @@ function renderWifi(){
   const on = S.home_wifi == 1;
   $('wifi-toggle').checked = on;
   $('wifi-main').classList.toggle('on', on);
-  $('wifi-body').classList.toggle('is-disabled', !on);
-  $('wifi-body').inert = !on;
+  // Список SSID общий: его можно настроить до включения паузы nfqws2 или hosts.
+  $('wifi-dns').classList.toggle('is-disabled', !on);
+  $('wifi-dns').inert = !on;
   $('wifi-dns').hidden = S.dns_available != 1;
   $('wifi-dns-toggle').checked = S.dns_home_pause == 1;
-  setHTML('wifi-suggest', on && currentSsid && !homeList.includes(currentSsid)
+  $('wifi-dns-toggle').disabled = !on;
+  setHTML('wifi-suggest', currentSsid && !homeList.includes(currentSsid)
     ? '<div class="suggest">' + icon('wifi', 's24') +
         '<span class="grow">' + esc(t('Сейчас телефон подключён к «{0}». Добавить эту сеть в домашние?', currentSsid)) + '</span>' +
         '<button class="btn tonal sm state" onclick="addHome(' + jsArg(currentSsid) + ')">' + esc(t('Добавить')) + '</button></div>'
