@@ -36,8 +36,20 @@ const flappy = (() => {
 
   /* Катсцена: копия логотипа поверх всего уезжает вправо, мимо кнопки журналов.
      Спрайты готовятся параллельно; игра начинается, когда готово и то и другое */
+  /* Пока идёт игра, фоновое обучение умного режима ускоряется в 8 раз (сайт
+     раз в 15 с): человек играет, а не сидит в сети, — запросы модуля не
+     мешают его трафику. Метка живёт 45 с и продлевается, пока игра открыта:
+     закрыли WebUI посреди игры — турбо выключится само */
+  let turboT = 0;
+  function turbo(on){
+    clearInterval(turboT); turboT = 0;
+    if(typeof ctlx !== 'function') return;
+    ctlx(['smart-turbo', on ? 'on' : 'off']).catch(() => {});
+    if(on) turboT = setInterval(() => { if(open) ctlx(['smart-turbo', 'on']).catch(() => {}); }, 20000);
+  }
   function launch(el){
     starting = true; open = true;
+    turbo(true);
     if(shakeAnim) shakeAnim.cancel();
     try { build(); } catch(e) { fail(e); return; }
     scheduleSync();
@@ -110,6 +122,7 @@ const flappy = (() => {
   function close(){
     if(!open) return;
     open = false; starting = false; gen++;
+    turbo(false);
     cancelAnimationFrame(raf);
     removeEventListener('resize', onResize);
     removeEventListener('keydown', onKey, true);

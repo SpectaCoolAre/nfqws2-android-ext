@@ -152,6 +152,8 @@ queue_suite "module: nfqws2-ctl" sh "$HERE/module/test_ctl.sh"
 [ -f "$REPO_DIR/lib/dns.sh" ] && queue_suite "module: DNS profiles (extended)" sh "$HERE/module/test_dns.sh"
 queue_suite "module: hosts editor" sh "$HERE/module/test_hosts.sh"
 queue_suite "module: smart mode" sh "$HERE/module/test_smart.sh"
+queue_suite "module: system theme colours" sh "$HERE/module/test_monet.sh"
+queue_suite "module: white lists" sh "$HERE/module/test_whitelist.sh"
 
 if [ "$FAST" = 1 ]; then
   queue_skip "module: service and firewall" "--fast"
@@ -197,6 +199,8 @@ else
     queue_suite "webui: uptime ticks evenly" "$NODE_BIN" "$HERE/webui/test_uptime.js"
     queue_suite "webui: easter egg game" "$NODE_BIN" "$HERE/webui/test_flappy.js"
     queue_suite "webui: quick actions on tabs" "$NODE_BIN" "$HERE/webui/test_navquick.js"
+    queue_suite "webui: settings before the first status" "$NODE_BIN" "$HERE/webui/test_settings_late.js"
+    queue_suite "webui: smart mode screen" "$NODE_BIN" "$HERE/webui/test_smart.js"
     [ -f "$REPO_DIR/webroot/js/dns.js" ] && queue_suite "webui: DNS profiles (extended)" "$NODE_BIN" "$HERE/webui/test_dns.js"
   fi
 fi

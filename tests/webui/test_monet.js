@@ -8,13 +8,11 @@
 //    - Completeness of all 42 required M3 color roles
 //    - Contrast & luminance hierarchy (onPrimary vs primary, onSurface vs surface)
 //    - AMOLED invariants (background/surface = #000000, container luminance > 0)
-// 3. Android system Monet color detection:
-//    - dumpsys wallpaper packed integer parsing: Color(-14329243) -> #257a65
-//    - dumpsys wallpaper float format: Color(0.2, 0.4, 0.8) -> #3366cc
-//    - ThemeOverlayController dump: mMainColor=-14329243 and mMainColor=0xffa8c7fa
-//    - settings get secure theme_customization_overlay_packages JSON string
-//    - Exclusion of dummy / monochrome artifacts (#ffffff, #000000, #e2e2e9)
-//    - Fallback cascade to systemSeed()
+// 3. Theme like the system: Android's own role colours (nfqws2-ctl monet-system)
+//    - parsing style, seed and per-mode roles
+//    - system colours used as they are; AMOLED blackens only background/surface
+//    - an own accent replaces them, reset brings them back
+//    - without role colours the palette follows the system style (VIBRANT, TONAL_SPOT…)
 // 4. Palette application & DOM injection:
 //    - CSS custom properties written to #theme-vars
 //    - meta[name="theme-color"] sync
@@ -100,6 +98,7 @@ const sandbox = {
   toast: () => {},
   store,
   sh: async () => ({ code: 0, out: dom.shMockOutput }),
+  ctlx: async () => ({ code: 0, out: dom.shMockOutput }),
   requestAnimationFrame: (cb) => { cb(); return 0; },
 };
 
@@ -182,50 +181,62 @@ eq('#000000', monoAmoledRoles.surface.toLowerCase(), 'monochrome AMOLED surface 
 eq('#000000', monoAmoledRoles.surfaceDim.toLowerCase(), 'monochrome AMOLED surfaceDim is pure black #000000');
 eq('#000000', monoAmoledRoles.surfaceContainerLowest.toLowerCase(), 'monochrome AMOLED surfaceContainerLowest is pure black #000000');
 
-// ── 3. Dynamic Android Monet color detection ────────────────────────────────
-sect('android monet detection');
+// ── 3. Тема как у системы: готовые цвета ролей Android ─────────────────────
+sect('system theme: Android\'s own role colours');
 
 (async () => {
-  // A. dumpsys wallpaper packed integer
-  dom.shMockOutput = `
-    Wallpaper wallpaper:
-      primary Color(-14329243) secondary Color(0) tertiary Color(0)
-  `;
-  await sandbox.detectSystemMonet(false);
-  eq('#255a65', vm.runInContext('currentSeed', sandbox), 'detectSystemMonet extracts packed integer Color(-14329243)');
+  const SYS_OUT = [
+    'style VIBRANT', 'seed #d4bee9',
+    'background dark #2a1340', 'surface dark #2a1340', 'on_surface dark #ecdcf6',
+    'surface_container dark #3b2552', 'surface_container_low dark #33204a', 'primary dark #e2c4ff',
+    'primary_container dark #5b3b7a', 'surface_dim dark #2a1340', 'surface_container_lowest dark #1f0d33',
+    'background light #fff7ff', 'primary light #6f4a8e', 'primary_fixed fixed #ebdcff', 'junk line'
+  ].join('\n');
+  const parsed = sandbox.parseSystemTheme(SYS_OUT);
+  eq('VIBRANT', parsed.style, 'the style is parsed');
+  eq('#d4bee9', parsed.seed, 'and the seed');
+  eq('#3b2552', parsed.dark.surfaceContainer, 'roles are camelCased per mode');
+  eq('#ebdcff', parsed.fixed.primaryFixed, 'fixed colours are kept apart');
+  eq(null, sandbox.parseSystemTheme('OK'), 'an empty answer is not a theme');
 
-  // B. dumpsys wallpaper float format
-  dom.shMockOutput = `
-    primary Color(0.2, 0.4, 0.8)
-  `;
+  // Без своего акцента — цвета Android как есть
+  delete dom.storage['m3_seed'];
+  dom.shMockOutput = SYS_OUT;
+  vm.runInContext("currentMode = 'dark'", sandbox);
   await sandbox.detectSystemMonet(false);
-  eq('#3366cc', vm.runInContext('currentSeed', sandbox), 'detectSystemMonet extracts float Color(0.2, 0.4, 0.8)');
+  const css = () => dom.themeVars.textContent;
+  truthy(css().includes('--md-sys-color-background:#2a1340'), 'the background is the system one, not a computed near-black');
+  truthy(css().includes('--md-sys-color-surface-container:#3b2552'), 'containers too');
+  truthy(css().includes('--md-sys-color-primary:#e2c4ff'), 'and the accent');
+  truthy(css().includes('--md-sys-color-primary-fixed:#ebdcff'), 'fixed colours come from Android');
+  truthy(css().includes('--md-sys-color-secondary:#'), 'roles Android did not give are computed');
+  eq('#d4bee9', vm.runInContext('currentSeed', sandbox), 'the picker shows the system seed');
+  eq(undefined, dom.storage['m3_seed'], 'no own accent is stored');
+  truthy(dom.storage['m3_sys'] && JSON.parse(dom.storage['m3_sys']).style === 'VIBRANT', 'the answer is remembered for the next start');
 
-  // C. theme_customization_overlay_packages JSON string
-  dom.shMockOutput = `
-    {"android.theme.customization.system_palette":"_A8C7FA","android.theme.customization.color_source":"home_wallpaper"}
-  `;
-  await sandbox.detectSystemMonet(false);
-  eq('#a8c7fa', vm.runInContext('currentSeed', sandbox), 'detectSystemMonet extracts hex from overlay packages JSON');
+  // AMOLED поверх цветов системы: фон чёрный, контейнеры — как у системы
+  sandbox.toggleAmoled(true);
+  truthy(css().includes('--md-sys-color-background:#000000'), 'AMOLED: the background turns black');
+  truthy(css().includes('--md-sys-color-surface-container:#3b2552'), 'AMOLED: containers keep the system colour, so the switch is visible');
+  sandbox.toggleAmoled(false);
+  truthy(css().includes('--md-sys-color-background:#2a1340'), 'AMOLED off: the system background is back');
 
-  // D. ThemeOverlayController dump
-  dom.shMockOutput = `
-    ThemeOverlayController:
-      mMainColor=0xffdeb0da
-  `;
-  await sandbox.detectSystemMonet(false);
-  eq('#deb0da', vm.runInContext('currentSeed', sandbox), 'detectSystemMonet extracts mMainColor from ThemeOverlayController');
+  // Свой акцент — своя палитра, система больше не подставляется
+  sandbox.applyMonet('#7bd0ff');
+  truthy(!css().includes('--md-sys-color-background:#2a1340'), 'an own accent replaces the system colours');
+  sandbox.resetTheme();
+  truthy(css().includes('--md-sys-color-background:#2a1340'), 'reset brings the system theme back');
 
-  // E. Ignore monochrome dummy colors (#ffffff, #000000, #e2e2e9)
-  dom.shMockOutput = `
-    Color(-1)
-    Color(0)
-    {"android.theme.customization.system_palette":"#ffffff"}
-    {"android.theme.customization.system_palette":"_E2E2E9"}
-    primary Color(-14329243)
-  `;
+  // Где Android цветов ролей не даёт — палитра по стилю системы
+  dom.shMockOutput = 'style VIBRANT\nseed #d4bee9';
   await sandbox.detectSystemMonet(false);
-  eq('#255a65', vm.runInContext('currentSeed', sandbox), 'detectSystemMonet filters out dummy white/black/gray values');
+  const vib = vm.runInContext('roles("#d4bee9", true, false, false, "VIBRANT")', sandbox);
+  const ton = vm.runInContext('roles("#d4bee9", true, false, false, "TONAL_SPOT")', sandbox);
+  const chroma = h => { const l = sandbox.rgbToLab(sandbox.hexToRgb(h)); return Math.hypot(l[1], l[2]); };
+  truthy(css().includes('--md-sys-color-background:' + vib.background), 'without role colours the style decides');
+  truthy(chroma(vib.surfaceContainer) > chroma(ton.surfaceContainer), 'a vibrant style tints surfaces more than the tonal one');
+  truthy(chroma(ton.surfaceContainer) > 3, 'even the tonal style tints them visibly (Android-like, not grey)');
+  vm.runInContext("currentMode = 'auto'", sandbox);
 
   // ── 4. Palette application and container settings ───────────────────────────
   sect('palette application & containers');

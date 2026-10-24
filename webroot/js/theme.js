@@ -61,14 +61,33 @@ function labToRgb(lab){
 }
 const inGamut = rgb => rgb[0] >= -.2 && rgb[0] <= 255.2 && rgb[1] >= -.2 && rgb[1] <= 255.2 && rgb[2] >= -.2 && rgb[2] <= 255.2;
 
-/* Хрома палитр по коэффициентам M3; тон 0..100 = L*. Масштаб хрома уменьшается
-   бисекцией, пока цвет не войдёт в sRGB. */
-const CHROMA = {primary: 1, secondary: .34, tertiary: .55, neutral: .05, neutralVariant: .12, error: .9};
-const TERTIARY_HUE = Math.PI / 3;
-function tone(lab, t, palette, hueShift){
+/* Стили Material You — как их называет Android (secure
+   theme_customization_overlay_packages, theme_style): хрома палитр и сдвиг тона
+   в градусах. Тон 0..100 = L*; хрома уменьшается бисекцией, пока цвет не
+   войдёт в sRGB. Свой акцент считается тональным стилем — как у Android по
+   умолчанию. CONTENT и FIDELITY берут хрому у самого цвета */
+const STYLES = {
+  TONAL_SPOT: {primary: [36, 0], secondary: [16, 0], tertiary: [24, 60], neutral: [6, 0], neutralVariant: [8, 0]},
+  VIBRANT: {primary: [200, 0], secondary: [24, 0], tertiary: [32, 60], neutral: [10, 0], neutralVariant: [12, 0]},
+  EXPRESSIVE: {primary: [40, 240], secondary: [24, 15], tertiary: [32, 60], neutral: [8, 0], neutralVariant: [12, 0]},
+  SPRITZ: {primary: [12, 0], secondary: [8, 0], tertiary: [16, 60], neutral: [2, 0], neutralVariant: [2, 0]},
+  RAINBOW: {primary: [48, 0], secondary: [16, 0], tertiary: [24, 60], neutral: [0, 0], neutralVariant: [0, 0]},
+  FRUIT_SALAD: {primary: [48, -50], secondary: [36, -50], tertiary: [36, 0], neutral: [10, 0], neutralVariant: [16, 0]},
+  MONOCHROMATIC: {primary: [0, 0], secondary: [0, 0], tertiary: [0, 0], neutral: [0, 0], neutralVariant: [0, 0]},
+  CONTENT: c => ({primary: [c, 0], secondary: [Math.max(c - 32, c / 2), 0], tertiary: [c / 2, 60], neutral: [c / 8, 0], neutralVariant: [c / 8 + 4, 0]})
+};
+STYLES.FIDELITY = STYLES.CONTENT;
+function tone(lab, t, palette, style){
   const seedC = Math.hypot(lab[1], lab[2]);
-  const chroma = seedC < .4 ? 0 : seedC * CHROMA[palette];
-  const hue = Math.atan2(lab[2], lab[1]) + (hueShift || 0);
+  let chroma, shift = 0;
+  if(palette === 'error') chroma = seedC * .9;
+  else {
+    const st = STYLES[style] || STYLES.TONAL_SPOT;
+    const spec = (typeof st === 'function' ? st(seedC) : st)[palette];
+    chroma = seedC < .4 ? 0 : spec[0];
+    shift = spec[1] * Math.PI / 180;
+  }
+  const hue = Math.atan2(lab[2], lab[1]) + shift;
   const at = s => labToRgb([t, Math.cos(hue) * chroma * s, Math.sin(hue) * chroma * s]);
   if(inGamut(at(1))) return rgbToHex.apply(null, at(1));
   let lo = 0, hi = 1;
@@ -115,10 +134,10 @@ function isDark(){
 function isMonochrome(){
   return store.get('m3_monochrome') === 'true' || currentSeed === '#757575';
 }
-function roles(seedHex, dark, amoled, monochrome){
+function roles(seedHex, dark, amoled, monochrome, style){
   const isMono = monochrome !== undefined ? !!monochrome : (String(seedHex).toLowerCase() === '#757575');
   const lab = rgbToLab(hexToRgb(seedHex));
-  const p = (t, pal, shift) => tone(lab, t, pal || 'primary', shift);
+  const p = (t, pal) => tone(lab, t, pal || 'primary', style);
   const e = t => tone(ERROR_LAB, t, 'error');
   const R = {};
   if(dark){
@@ -148,8 +167,8 @@ function roles(seedHex, dark, amoled, monochrome){
       R.primaryContainer = p(30); R.onPrimaryContainer = p(90);
       R.secondary = p(80, 'secondary'); R.onSecondary = p(20, 'secondary');
       R.secondaryContainer = p(30, 'secondary'); R.onSecondaryContainer = p(90, 'secondary');
-      R.tertiary = p(80, 'tertiary', TERTIARY_HUE); R.onTertiary = p(20, 'tertiary', TERTIARY_HUE);
-      R.tertiaryContainer = p(30, 'tertiary', TERTIARY_HUE); R.onTertiaryContainer = p(90, 'tertiary', TERTIARY_HUE);
+      R.tertiary = p(80, 'tertiary'); R.onTertiary = p(20, 'tertiary');
+      R.tertiaryContainer = p(30, 'tertiary'); R.onTertiaryContainer = p(90, 'tertiary');
       R.error = e(80); R.onError = e(20); R.errorContainer = e(30); R.onErrorContainer = e(90);
       R.background = amoled ? '#000000' : p(6, 'neutral'); R.onBackground = p(90, 'neutral');
       R.surface = amoled ? '#000000' : p(6, 'neutral'); R.onSurface = p(90, 'neutral');
@@ -194,8 +213,8 @@ function roles(seedHex, dark, amoled, monochrome){
       R.primaryContainer = p(90); R.onPrimaryContainer = p(10);
       R.secondary = p(40, 'secondary'); R.onSecondary = p(100, 'secondary');
       R.secondaryContainer = p(90, 'secondary'); R.onSecondaryContainer = p(10, 'secondary');
-      R.tertiary = p(40, 'tertiary', TERTIARY_HUE); R.onTertiary = p(100, 'tertiary', TERTIARY_HUE);
-      R.tertiaryContainer = p(90, 'tertiary', TERTIARY_HUE); R.onTertiaryContainer = p(10, 'tertiary', TERTIARY_HUE);
+      R.tertiary = p(40, 'tertiary'); R.onTertiary = p(100, 'tertiary');
+      R.tertiaryContainer = p(90, 'tertiary'); R.onTertiaryContainer = p(10, 'tertiary');
       R.error = e(40); R.onError = e(100); R.errorContainer = e(90); R.onErrorContainer = e(10);
       R.background = p(98, 'neutral'); R.onBackground = p(10, 'neutral');
       R.surface = p(98, 'neutral'); R.onSurface = p(10, 'neutral');
@@ -228,9 +247,9 @@ function roles(seedHex, dark, amoled, monochrome){
     R.onPrimaryFixed = p(10); R.onPrimaryFixedVariant = p(30);
     R.secondaryFixed = p(90, 'secondary'); R.secondaryFixedDim = p(80, 'secondary'); R.secondaryFixedVariant = p(30, 'secondary');
     R.onSecondaryFixed = p(10, 'secondary'); R.onSecondaryFixedVariant = p(30, 'secondary');
-    R.tertiaryFixed = p(90, 'tertiary', TERTIARY_HUE); R.tertiaryFixedDim = p(80, 'tertiary', TERTIARY_HUE);
-    R.tertiaryFixedVariant = p(30, 'tertiary', TERTIARY_HUE); R.onTertiaryFixed = p(10, 'tertiary', TERTIARY_HUE);
-    R.onTertiaryFixedVariant = p(30, 'tertiary', TERTIARY_HUE);
+    R.tertiaryFixed = p(90, 'tertiary'); R.tertiaryFixedDim = p(80, 'tertiary');
+    R.tertiaryFixedVariant = p(30, 'tertiary'); R.onTertiaryFixed = p(10, 'tertiary');
+    R.onTertiaryFixedVariant = p(30, 'tertiary');
     R.surfaceTint = R.primary; R.shadow = '#000000';
   }
   return R;
@@ -267,12 +286,61 @@ const ROLE_VAR = {
   tertiaryFixedVariant: '--md-sys-color-tertiary-fixed-variant', onTertiaryFixed: '--md-sys-color-on-tertiary-fixed',
   onTertiaryFixedVariant: '--md-sys-color-on-tertiary-fixed-variant'
 };
+/* ── Тема системы ────────────────────────────────────────────────────────
+   Пока акцент не выбран вручную, WebUI берёт у Android готовые цвета ролей
+   (nfqws2-ctl monet-system): с теми же стилем и контрастом, что у «Настроек».
+   Где их нет (Android до 14), палитра считается по сиду и стилю системы.
+   Ответ хранится и в браузере, чтобы тема была верной с первого кадра */
+let SYS = null;
+try { SYS = JSON.parse(store.get('m3_sys') || 'null'); } catch(e){ SYS = null; }
+const systemTheme = () => !/^#[0-9a-f]{6}$/.test((store.get('m3_seed') || '').toLowerCase());
+const camel = s => s.replace(/_([a-z])/g, (m, c) => c.toUpperCase());
+function parseSystemTheme(out){
+  const o = {style: '', seed: '', light: {}, dark: {}, fixed: {}};
+  String(out || '').split('\n').forEach(l => {
+    const f = l.trim().split(/\s+/);
+    if(f[0] === 'style' && f[1]) o.style = f[1];
+    else if(f[0] === 'seed' && /^#[0-9a-f]{6}$/.test(f[1])) o.seed = f[1];
+    else if(f.length === 3 && o[f[1]] && /^#[0-9a-f]{6}$/.test(f[2])) o[f[1]][camel(f[0])] = f[2];
+  });
+  return (o.seed || Object.keys(o.dark).length) ? o : null;
+}
+async function loadSystemTheme(){
+  const r = await ctlx(['monet-system'], 90000);
+  const o = r.code ? null : parseSystemTheme(r.out);
+  if(!o) return false;
+  SYS = o;
+  store.set('m3_sys', JSON.stringify(o));
+  if(systemTheme()){
+    if(o.seed) currentSeed = o.seed;
+    applyTheme();
+  }
+  return true;
+}
+// AMOLED: фон и поверхность — чёрные, контейнеры остаются цветными, как в системе
+function blacken(R){
+  R.background = R.surface = R.surfaceDim = R.surfaceContainerLowest = '#000000';
+}
+function themeRoles(dark, amoled){
+  const sys = systemTheme() && SYS;
+  const style = sys && SYS.style ? SYS.style : 'TONAL_SPOT';
+  const seed = sys && SYS.seed ? SYS.seed : currentSeed;
+  const own = sys ? SYS[dark ? 'dark' : 'light'] || {} : {};
+  const exact = Object.keys(own).length > 0;
+  const R = roles(seed, dark, amoled && !exact, sys ? style === 'MONOCHROMATIC' : isMonochrome(), style);
+  if(exact){
+    Object.assign(R, own, SYS.fixed || {});
+    R.surfaceTint = R.primary;
+    if(!own.inverseSurface) R.inverseSurface = R.onSurface;
+    if(amoled) blacken(R);
+  }
+  return R;
+}
 function applyTheme(skipUI){
   const dark = isDark();
   const amoled = store.get('m3_amoled') === 'true' && dark;
   const containers = store.get('m3_containers') !== 'false';
-  const monochrome = isMonochrome();
-  const R = roles(currentSeed, dark, amoled, monochrome);
+  const R = themeRoles(dark, amoled);
   // Палитра уходит в <style id="theme-vars">, а не инлайном на documentElement.
   // Инлайн-стиль нельзя переопределить из CSS — ни правилом компонента, ни
   // медиазапросом, — поэтому он закрывает тему наглухо. Отдельный блок в <head>
@@ -306,7 +374,7 @@ function drawThemeUI(){
     // вторичная и третичная снизу; в любой теме он читается одинаково.
     const isThisMono = p[1].toLowerCase() === '#757575';
     const r = roles(p[1], true, false, isThisMono);
-    const on = isThisMono ? mono : (!mono && p[1].toLowerCase() === currentSeed);
+    const on = !systemTheme() && (isThisMono ? mono : (!mono && p[1].toLowerCase() === currentSeed));
     return '<button class="swatch-dot state' + (on ? ' on' : '') + '" aria-pressed="' + on + '" title="' + esc(t(p[0])) + '"' +
       ' aria-label="' + esc(t(p[0])) + '" onclick="applyMonet(' + jsArg(p[1]) + ')"' +
       ' style="--sw-a:' + r.primary + ';--sw-b:' + r.secondary + ';--sw-c:' + r.tertiary + '">' +
@@ -405,43 +473,16 @@ function onHexInput(val){
 function resetTheme(){
   ['m3_seed', 'm3_mode', 'm3_amoled', 'm3_containers', 'm3_monochrome', 'm3_last_color_seed', 'm3_no_animations', 'm3_animations'].forEach(k => store.del(k));
   currentMode = 'auto';
-  currentSeed = systemSeed();
+  currentSeed = (SYS && SYS.seed) || systemSeed();
   applyTheme();
   toast(t('Тема сброшена к системной'));
+  loadSystemTheme();
 }
+/* «С обоев»: тема снова как у системы — цвета ролей у Android, без своего акцента */
 async function detectSystemMonet(showToastNotice){
-  const r = await sh(`
-    dumpsys wallpaper 2>/dev/null | grep -iE "Color\\(" | tail -n 4
-    settings get secure theme_customization_overlay_packages 2>/dev/null
-    dumpsys activity service com.android.systemui/.theme.ThemeOverlayController 2>/dev/null | grep -iE "color|accent|mMain" | tail -n 4
-  `);
-  const out = r.out || '';
-  let hex = '';
-  // 1. Packed integer colors: Color(-14329243) or mMainColor=-14329243
-  for(const m of Array.from(out.matchAll(/(?:Color\(|mMainColor\s*[:=]\s*)(-?\d{5,12})/gi)).reverse()){
-    const val = parseInt(m[1], 10);
-    if(isNaN(val) || val === 0 || val === -1) continue;
-    const rawHex = ((val >>> 0) & 0xFFFFFF).toString(16).padStart(6, '0');
-    if(rawHex !== '000000' && rawHex !== 'ffffff' && rawHex !== 'e2e2e9' && rawHex !== '111318'){ hex = '#' + rawHex; break; }
-  }
-  // 2. Float RGB colors: Color(0.2, 0.4, 0.8)
-  if(!hex){
-    for(const m of Array.from(out.matchAll(/Color\(\s*([\d.]+),\s*([\d.]+),\s*([\d.]+)/gi)).reverse()){
-      const to2 = v => { const x = parseFloat(v); return Math.round(x <= 1 ? x * 255 : x).toString(16).padStart(2, '0'); };
-      const c = '#' + to2(m[1]) + to2(m[2]) + to2(m[3]);
-      if(c !== '#000000' && c !== '#ffffff' && c !== '#e2e2e9'){ hex = c; break; }
-    }
-  }
-  // 3. Hex representations: _A8C7FA, #A8C7FA, "A8C7FA", 0xffA8C7FA, =A8C7FA
-  if(!hex){
-    for(const m of Array.from(out.matchAll(/(?:_|[#"'=:|]|(?:0x))([0-9a-fA-F]{6,8})\b/g)).reverse()){
-      let h = m[1];
-      if(h.length === 8) h = h.slice(2);
-      const c = ('#' + h).toLowerCase();
-      if(c !== '#e2e2e9' && c !== '#000000' && c !== '#ffffff' && c !== '#111318'){ hex = c; break; }
-    }
-  }
-  if(!hex) hex = systemSeed();
-  applyMonet(hex);
-  if(showToastNotice) toast(t('Акцент с обоев: {0}', hex.toUpperCase()));
+  store.del('m3_seed'); store.del('m3_monochrome');
+  currentSeed = (SYS && SYS.seed) || systemSeed();
+  applyTheme();
+  const ok = await loadSystemTheme();
+  if(showToastNotice) toast(ok && SYS.seed ? t('Акцент с обоев: {0}', SYS.seed.toUpperCase()) : t('Тема как у системы'));
 }

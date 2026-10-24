@@ -431,4 +431,24 @@ section "setup_cli_symlinks"
 setup_cli_symlinks
 assert_rc 0 $? "setup_cli_symlinks succeeds silently when APatch/KSU paths are absent"
 
+# ── conntrack: простаивающие соединения не забываются ────────────────────────
+section "system_config does not shorten the conntrack TCP timeout"
+cat > "$MOCKBIN/sysctl" <<'X'
+#!/bin/sh
+printf '%s\n' "$*" >> "$MOCK_DIR/sysctl.log"
+[ "$1" = "-n" ] && [ "$2" = "net.netfilter.nf_conntrack_tcp_timeout_established" ] && echo "${MOCK_EST:-432000}"
+exit 0
+X
+chmod 0755 "$MOCKBIN/sysctl"
+: > "$MOCK_DIR/sysctl.log"
+MOCK_EST=1200; export MOCK_EST
+system_config
+assert_contains "$(cat "$MOCK_DIR/sysctl.log")" "-w net.netfilter.nf_conntrack_tcp_timeout_established=432000" "a timeout shortened by an older version goes back to the kernel's"
+assert_not_contains "$(cat "$MOCK_DIR/sysctl.log")" "established=1200" "1200 s is never set: the push connection (28-min heartbeat) would be forgotten"
+: > "$MOCK_DIR/sysctl.log"
+MOCK_EST=432000
+system_config
+assert_not_contains "$(cat "$MOCK_DIR/sysctl.log")" "-w net.netfilter.nf_conntrack_tcp_timeout_established" "a normal timeout is left alone"
+cp "$TESTS_DIR/lib/mock/android-stub" "$MOCKBIN/sysctl"; chmod 0755 "$MOCKBIN/sysctl"
+
 harness_finish

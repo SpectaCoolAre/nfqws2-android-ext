@@ -2,21 +2,102 @@
    Скрипты подключаются из index.html обычными <script> по порядку и делят одну
    глобальную область: функции и let/const одного файла видны в остальных. */
 
-/* ══ КОНФИГУРАЦИЯ И ИМПОРТ ═══════════════════════════════════════════════ */
+/* ══ ОБХОД: СТРАТЕГИИ ИЛИ УМНЫЙ РЕЖИМ ════════════════════════════════════
+   Два режима работы. «Стратегии» — выбранная стратегия и её конфиг
+   nfqws2.conf: правка, проверка, импорт, прежний конфиг. «Умный режим» —
+   его статистика (smart.js). Переключатель — сверху вкладки; режим — это
+   просто текущая стратегия: smart или любая другая. */
 const IMPORT_EXTS = ['.txt', '.conf', '.ini', '.cfg', '.list', '.bat'];
-async function confInit(){ await Promise.all([loadImports(), checkConfModified()]); }
-/* «Сбросить» видна, только когда сбрасывать есть что: действующий конфиг
-   отличается от исходника текущей стратегии (без учёта переключателей). */
-async function checkConfModified(){
-  const [r, r2] = await Promise.all([ctlx(['conf-modified']), ctlx(['get-strategy'])]);
-  if(!r2.code && r2.out.trim()) currentStrategy = r2.out.trim();
-  const mod = !r.code && r.out.trim() === '1';
-  const row = $('conf-reset');
-  if(row.hidden === mod){
-    row.hidden = !mod;
-    if(mod){ row.classList.remove('appear-item'); void row.offsetWidth; row.classList.add('appear-item'); }
+let BYP = null;
+const isSmartMode = () => currentStrategy === 'smart';
+async function confInit(){
+  const r = await ctlx(['bypass-info']);
+  try { BYP = JSON.parse(r.out); } catch(e){ BYP = null; }
+  if(BYP && BYP.strategy) currentStrategy = BYP.strategy;
+  renderBypass();
+  if(isSmartMode()) await smartLoad();
+}
+/* Значок вкладки, переключатель и строка на главной — по режиму */
+function updateModeUi(){
+  const smart = isSmartMode();
+  const ic = $('nav-bypass-ic');
+  if(ic) ic.setAttribute('href', smart ? '#i-auto' : '#i-config');
+  document.querySelectorAll('#mode-seg .seg').forEach(b => {
+    const on = (b.dataset.mode === 'smart') === smart;
+    b.classList.toggle('selected', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+  });
+}
+function renderBypass(){
+  const smart = isSmartMode();
+  updateModeUi();
+  $('bypass-strat').hidden = smart;
+  $('bypass-smart').hidden = !smart;
+  if(!smart) renderStrat();
+}
+function renderStrat(){
+  const b = BYP || {imports: [], modified: 0, stat: {}, meta: {}};
+  const s = findStrategy(currentStrategy) || {name: currentStrategy, kind: /^imp:/.test(currentStrategy) ? 'import' : 'builtin'};
+  const st = b.stat || {}, mt = b.meta || {};
+  const parts = [];
+  // карточка стратегии: сменить; сбросить — только если конфиг правили
+  parts.push('<div class="smart-hero strat-hero">' +
+    '<span class="strat-hero-ic">' + icon('globe', 's24') + '</span>' +
+    '<div class="smart-hero-text">' +
+      '<span class="smart-hero-sub">' + esc(groupTitle(strategyGroup(s))) + '</span>' +
+      '<span class="smart-hero-level">' + esc(strategyName(currentStrategy)) + '</span>' +
+      '<span class="row strat-hero-acts">' +
+        '<button type="button" class="btn tonal sm state" onclick="openStrategySheet()">' + esc(t('Сменить')) + '</button>' +
+        (b.modified == 1 ? '<button type="button" class="btn text sm state danger" onclick="resetConf()">' + esc(t('Сбросить правки')) + '</button>' : '') +
+      '</span>' +
+    '</div></div>');
+  // откуда стратегия: из модуля (meta.tsv), правка её не стирает
+  if(mt.author || mt.repo || mt.date){
+    parts.push('<div class="strat-src">' + icon('info', 's20') + '<span>' +
+      esc([mt.author ? t('Автор: {0}', mt.author) : '', mt.repo, mt.date ? t('обновлена {0}', fmtDate(mt.date)) : ''].filter(Boolean).join(' · ')) +
+      (mt.edited ? '<br>' + esc(t('Ваша правка от {0}', fmtDate(mt.edited))) : '') + '</span></div>');
   }
-  $('conf-reset-sub').textContent = t('Отменить ручные правки и вернуть стратегию «{0}»', strategyName(currentStrategy));
+  // статистика соединений на этой стратегии (наблюдатель smartstat)
+  const ok = +st.ok || 0, err = +st.err || 0, p = pct(ok, err);
+  parts.push('<h2 class="subhead">' + esc(t('Как работает')) + '</h2>');
+  parts.push('<div class="smart-tiles">' + [
+    {icon: 'check', title: 'Удачные', value: String(ok), sub: t('соединений открылось'), on: ''},
+    {icon: 'warn', title: 'Ошибки', value: String(err), sub: t('сбросы и повторы без ответа'), on: '', tone: err > ok && err ? 'warn' : ''},
+    {icon: 'status', title: 'Успешность', value: p == null ? '—' : p + '%', sub: p == null ? t('появится по ходу работы') : t('доля удачных соединений'), on: ''},
+    // выбранная стратегия — файлом, как «Поделиться» в списке по долгому нажатию
+    {icon: 'share', title: 'Поделиться', value: String(currentStrategy).replace(/^imp:/, '') + '.conf', sub: t('отправить стратегию файлом'),
+      on: 'shareStrategy(currentStrategy)'}
+  ].map(smartTile).join('') + '</div>');
+  setHTML('strat-body', parts.join(''), false);
+}
+function fmtDate(d){
+  const m = /^(\d{4})-(\d\d)-(\d\d)$/.exec(d || '');
+  return m ? new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString(LANG === 'en' ? 'en-GB' : 'ru-RU', {day: 'numeric', month: 'long', year: 'numeric'}) : (d || '');
+}
+/* Совместимость: правка конфига и импорт обновляют вкладку */
+async function checkConfModified(){ if(currentPage === 'config') await confInit(); }
+async function loadImports(){
+  if(currentPage === 'config') await confInit();
+  // импорты — в листе стратегий, группа «Пользовательские»
+  if(openSheetId === 'strategy-sheet'){ await loadStrategies(); renderStrategyList(true); }
+}
+/* Импорт — из листа стратегий: файлом или вставленным текстом */
+function importPick(anchor){
+  openMenu(anchor, [
+    {label: t('Файлом'), sub: '.txt, .conf, .bat, .ini', icon: 'file', onClick: () => $('impFile').click()},
+    {label: t('Текстом'), sub: t('Вставить конфиг nfqws2-keenetic'), icon: 'edit', onClick: () => { closeSheet(); importPaste(); }}
+  ]);
+}
+async function setBypassMode(mode){
+  if((mode === 'smart') === isSmartMode()) return;
+  const target = mode === 'smart' ? 'smart' : ((BYP && BYP.last) || 'hardcorp74');
+  updateModeUi();
+  const ok = await mdConfirm(mode === 'smart' ? t('Включить умный режим?') : t('Вернуться к стратегиям?'),
+    S.running ? t('Служба будет перезапущена в другом режиме работы.') : t('Режим включится при следующем запуске службы.'),
+    {ok: S.running ? t('Перезапустить') : t('Переключить')});
+  if(!ok) return;
+  await applyStrategy(target);
+  await confInit();
 }
 async function resetConf(){
   const ok = await mdConfirm(t('Сбросить конфиг?'),
@@ -26,32 +107,8 @@ async function resetConf(){
   const r = await withBusy(['reset-conf']);
   toast(r.code ? errText(r, 'Не удалось сбросить') : t('Конфиг сброшен'),
     !r.code && S.running ? {label: t('Перезапустить'), fn: restartSvc} : null);
-  checkConfModified();
+  confInit();
   stat();
-}
-async function loadImports(){
-  const r = await ctlx(['list-imports']);
-  const names = r.code ? [] : r.out.split('\n').map(s => s.trim()).filter(Boolean);
-  setHTML('impList', names.length ? names.map(n =>
-    '<div class="list-item clickable state" role="button" tabindex="0" data-imp="' + esc(n) + '"' +
-      ' onclick="openImport(this.dataset.imp)">' +
-      '<span class="li-icon">' + icon('file', 's24') + '</span>' +
-      '<span class="li-text"><span class="li-primary truncate">' + esc(n) + '</span></span>' +
-      '<button class="icon-btn sm state" aria-haspopup="menu" aria-label="' + esc(t('Действия с конфигом {0}', n)) + '"' +
-        ' data-imp="' + esc(n) + '" onclick="event.stopPropagation(); importMenu(this, this.dataset.imp)">' +
-        icon('more', 's24') + '</button>' +
-    '</div>').join('')
-    : '<div class="empty"><span class="empty-icon">' + icon('upload', 's24') + '</span>' +
-      '<span>' + esc(t('Импортированные конфиги появятся здесь и в выборе стратегии, в группе «Пользовательские».')) + '</span></div>');
-}
-function importMenu(anchor, name){
-  openMenu(anchor, [
-    {label: t('Применить как стратегию'), icon: 'check', onClick: () => applyStrategy('imp:' + name)},
-    {label: t('Открыть'), icon: 'edit', onClick: () => openImport(name)},
-    {label: t('Переименовать'), icon: 'tune', onClick: () => renameImport(name)},
-    '-',
-    {label: t('Удалить'), icon: 'trash', onClick: () => delImport(name)}
-  ]);
 }
 async function openImport(name){
   const r = await withBusy(['get-import-merged-b64', name]);

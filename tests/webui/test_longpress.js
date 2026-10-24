@@ -83,20 +83,17 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   const calls = re => page.evaluate(r => window.__calls.filter(c => new RegExp(r).test(c)).length, re);
   const closeAll = () => page.evaluate(() => { closeMenu(); closeSheet(); $('prompt-container').classList.remove('show'); });
 
-  sect('status card → DNS, home Wi‑Fi');
-  await hold('#sub [data-go="dns"]');
-  eq('dns', await cur(), 'holding «DNS включён» in the status line opens the DNS screen');
+  sect('status card → DNS tile, home Wi‑Fi');
+  eq(0, await page.$$eval('#sub [data-go="dns"]', r => r.length), 'DNS is no longer a part of the status line');
+  await page.click('#live-tiles .smart-tile:has(svg use[href="#i-dns"])'); await page.waitForTimeout(500);
+  eq('dns', await cur(), 'the DNS tile opens the DNS screen');
   await page.evaluate(() => goBack()); await page.waitForTimeout(500);
   eq('control', await cur(), 'and back returns to the status screen, not to settings');
   await page.click('#sub'); await page.waitForTimeout(300);
-  eq('control', await cur(), 'a plain tap on it does nothing');
-  {
-    const r = await page.$eval('#sub', e => { const b = e.getBoundingClientRect(); return [b.x + 6, b.y + b.height / 2]; });
-    await page.mouse.move(r[0], r[1]); await page.mouse.down(); await page.waitForTimeout(650); await page.mouse.up(); await page.waitForTimeout(350);
-  }
-  eq('control', await cur(), 'holding «Режим auto» does nothing either');
+  eq('control', await cur(), 'a plain tap on the status line does nothing');
+  await page.waitForTimeout(700); // the status poll that returning started
   await page.evaluate(() => { S.running = false; S.paused = 'MyNet'; renderStatus(); });
-  eq('Домашний Wi‑Fi · DNS включён', await page.textContent('#sub'), 'on a home Wi‑Fi pause the line is «Домашний Wi‑Fi» (masculine)');
+  eq('Домашний Wi‑Fi', await page.textContent('#sub'), 'on a home Wi‑Fi pause the line is «Домашний Wi‑Fi» (masculine)');
   await hold('#sub [data-go="wifi"]');
   eq('wifi', await cur(), 'and holding it opens the home Wi‑Fi settings');
   await page.evaluate(() => goBack()); await page.waitForTimeout(500);

@@ -30,7 +30,7 @@ assert_contains "$ctl_out" '"pid":""' "reports an empty pid"
 assert_contains "$ctl_out" '"uptime":0' "reports uptime 0"
 
 for key in running pid uptime strategy version mode pkt_limit_out pkt_limit_in \
-           block_quic app_mode autostart watchdog ipv6 log_level qdrop queue \
+           block_quic app_mode autostart ipv6 log_level qdrop queue \
            app_uids counts; do
   assert_contains "$ctl_out" "\"$key\":" "json-status exposes $key"
 done
@@ -51,7 +51,7 @@ section "json-status: numeric fields stay numeric"
 
 # These are spliced into the JSON without quotes; a non-numeric value would make
 # the whole document unparseable and take the WebUI down with it.
-for key in pkt_limit_out pkt_limit_in block_quic autostart watchdog ipv6 log_level qdrop queue app_uids; do
+for key in pkt_limit_out pkt_limit_in block_quic autostart ipv6 log_level qdrop queue app_uids; do
   assert_match "$ctl_out" "\"$key\":[0-9]+" "$key is emitted as a bare number"
 done
 
@@ -286,6 +286,34 @@ assert_rc 0 "$ctl_rc" "set-strategy default works"
 ctl get-strategy
 assert_eq "default" "$ctl_out" "the active strategy is back to default"
 
+# ── два режима: стратегии и умный режим ───────────────────────────────────────
+section "strategies mode and smart mode"
+ctl set-strategy alt13
+ctl set-strategy smart
+ctl last-strategy
+assert_eq "alt13" "$ctl_out" "smart mode remembers the strategy to go back to"
+ctl bypass-info
+printf '%s' "$ctl_out" > "$SANDBOX/byp.json"
+node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$SANDBOX/byp.json" 2>/dev/null
+assert_rc 0 $? "bypass-info is valid JSON"
+assert_contains "$ctl_out" '"strategy":"smart","last":"alt13","modified":0' "with the strategy, the one to go back to and whether the config was edited"
+printf 'alt13\t42\t5\t1700000000\n' > "$STATE_DIR/strat_stat"
+echo alt13 > "$ACTIVE_FILE"
+ctl bypass-info
+assert_contains "$ctl_out" '"stat":{"ok":42,"err":5,"since":1700000000}' "the strategy's connection statistics"
+assert_contains "$ctl_out" '"meta":{"author":"Flowseal","repo":"rndnaame/nfqws-menu","date":"' "and where it comes from"
+assert_contains "$ctl_out" '"edited":""' "not edited by the user"
+ctl live-status
+printf '%s' "$ctl_out" > "$SANDBOX/live.json"
+node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$SANDBOX/live.json" 2>/dev/null
+assert_rc 0 $? "live-status is valid JSON"
+assert_contains "$ctl_out" '"conn":{"ok":42,"err":5}' "the status screen gets this strategy's connections"
+rm -f "$LAST_STRATEGY_FILE"
+echo smart > "$ACTIVE_FILE"
+ctl last-strategy
+assert_eq "hardcorp74" "$ctl_out" "nothing remembered: the first-install strategy"
+ctl set-strategy default
+
 # ── imports ───────────────────────────────────────────────────────────────────
 section "imports"
 
@@ -444,6 +472,27 @@ ctl domain-check sub.exact.example
 assert_not_contains "$ctl_out" "^exact.example" "but not its subdomains, as nfqws2 matches it"
 ctl domain-check 'bad host'
 assert_rc 1 "$ctl_rc" "a malformed domain is refused"
+
+# Сайт с защитой от ботов: без куки — переадресация по кругу (curl: 47),
+# с хранилищем куки (-b/-c одного файла) — открывается
+cat > "$MOCKBIN/curl" <<'X'
+#!/bin/sh
+b=""; c=""
+while [ $# -gt 0 ]; do case "$1" in -b) b="$2"; shift 2 ;; -c) c="$2"; shift 2 ;; *) shift ;; esac; done
+echo "$b" >> "$MOCK_DIR/curl.jars"
+[ -n "$b" ] && [ "$b" = "$c" ] && exit 0
+exit 47
+X
+chmod 0755 "$MOCKBIN/curl"
+: > "$MOCK_DIR/curl.jars"
+ctl domain-check cookie.example
+assert_match "$ctl_out" "R	[123]	ok" "a site that sets a cookie by redirecting to itself opens: curl keeps cookies like a browser"
+jar=$(head -n 1 "$MOCK_DIR/curl.jars")
+assert_contains "$jar" "$STATE_DIR/probe.ck." "the cookie jar lives in the module state"
+assert_no_file "$jar" "and is removed after the attempt"
+printf '#!/bin/sh\nexit 47\n' > "$MOCKBIN/curl"
+ctl domain-check loop.example
+assert_match "$ctl_out" "R	[123]	ok" "endless redirects still mean the server answered — not a DPI block"
 rm -f "$MOCKBIN/ping" "$MOCKBIN/curl"
 
 # ── поделиться файлом ─────────────────────────────────────────────────────────

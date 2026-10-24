@@ -4,9 +4,20 @@
 
 /* ══ ЖУРНАЛЫ ═════════════════════════════════════════════════════════════ */
 const LOG_SOURCES = [['summary', 'Краткая статистика'], ['service', 'Служба'], ['nfqws', 'Процесс'],
-  ['auto', 'Автообучение'], ['debug', 'Отладка'], ['dns', 'DNS']];
+  ['auto', 'Автообучение'], ['debug', 'Отладка'], ['dns', 'DNS'], ['smart', 'Умный режим']];
 /* Журнал DNS — только если в модуле есть dnsproxy */
 const logSources = () => LOG_SOURCES.filter(s => s[0] !== 'dns' || S.dns_available == 1);
+function openSmartLog(){ logSource = 'smart'; store.set('nfq_log_src', 'smart'); navigate('logs'); }
+/* Кнопка журналов в шапке открывает журнал того, что сейчас на экране:
+   «Состояние» — краткая статистика, «Списки» — автообучение, «Обход» —
+   процесс nfqws2 (стратегии) или журнал умного режима; на остальных экранах —
+   последний выбранный */
+const LOG_FOR_PAGE = {control: 'summary', lists: 'auto', dns: 'dns', dnsprof: 'dns'};
+function openLogsHere(){
+  const k = currentPage === 'config' ? (isSmartMode() ? 'smart' : 'nfqws') : LOG_FOR_PAGE[currentPage];
+  if(k && logSources().some(s => s[0] === k)){ logSource = k; store.set('nfq_log_src', k); }
+  navigate('logs');
+}
 let logSource = store.get('nfq_log_src') || 'service', logLines = '100', logErrors = false;
 if(!LOG_SOURCES.some(s => s[0] === logSource)) logSource = 'service';
 function renderLogChips(){
@@ -96,12 +107,15 @@ async function loadLog(){
 }
 async function exportLogs(){
   const dir = SAVE_DIR_DEFAULT;
-  const r = await withBusy(['export-logs'], 30000);
-  if(r.code){ toast(errText(r, 'Не удалось экспортировать журналы')); return; }
-  const parts = r.out.trim().split('\n')[0].split('\t');
+  // в KernelSU файл отдаётся по пути: base64 архива не нужен (большой вывод
+  // мост отдаёт пустым — было пустое уведомление)
+  const r = await withBusy(window.ksu ? ['export-logs', 'path'] : ['export-logs'], 30000);
+  const out = (r.out || '').trim();
+  if(r.code || !out){ toast(errText(r, 'Не удалось экспортировать журналы')); return; }
+  const parts = out.split('\n')[0].split('\t');
   // без архива (нет tar) ctl кладёт файлы в папку и пишет одну строку о ней
-  if(parts.length < 3 || !parts[2]){ toast(r.out.trim()); return; }
-  await exportBlobFile(b64toBlob(parts[2], 'application/x-tar'), parts[0], 'application/x-tar', parts[1], dir);
+  if(parts.length < 2 || !parts[1]){ toast(out); return; }
+  await exportBlobFile(parts[2] ? b64toBlob(parts[2], 'application/x-tar') : null, parts[0], 'application/x-tar', parts[1], dir);
 }
 async function clearLogs(){
   if(!await mdConfirm(t('Очистить журналы?'), t('service.log, nfqws2.log, отладочный, журнал автообучения и журнал DNS будут обнулены.'),

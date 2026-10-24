@@ -72,7 +72,7 @@ async function exportBlobFile(blob, filename, mimeType, localFilePath, targetDir
       if(e && e.name === 'AbortError') return false;
     }
   }
-  try {
+  if(blob) try {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -474,15 +474,22 @@ function onLongPress(root, sel, fn){
 
 /* ── Индикатор занятости (linear progress под app bar) ─────────────────── */
 let busyCount = 0;
-function busy(on){
+/* Полоска загрузки сверху — только для действий пользователя и только если
+   ждать дольше полсекунды. Загрузка данных экрана при переходе (pageLoading)
+   её не показывает: экран и так проявляется по мере загрузки */
+let pageLoading = 0, loudCount = 0, busyShowT = 0;
+function busy(on, quiet){
+  if(quiet === undefined) quiet = on ? pageLoading > 0 : false;
   busyCount = Math.max(0, busyCount + (on ? 1 : -1));
-  const idle = busyCount === 0;
-  $('progress-top').hidden = idle;
-  $('content').setAttribute('aria-busy', idle ? 'false' : 'true');
+  if(!quiet) loudCount = Math.max(0, loudCount + (on ? 1 : -1));
+  $('content').setAttribute('aria-busy', busyCount === 0 ? 'false' : 'true');
+  if(loudCount === 0){ clearTimeout(busyShowT); busyShowT = 0; $('progress-top').hidden = true; }
+  else if(!busyShowT && $('progress-top').hidden) busyShowT = setTimeout(() => { busyShowT = 0; if(loudCount) $('progress-top').hidden = false; }, 500);
+  return quiet;
 }
 async function withBusy(a, ms){
-  busy(true);
-  try { return await ctlx(a, ms); } finally { busy(false); }
+  const quiet = busy(true);
+  try { return await ctlx(a, ms); } finally { busy(false, quiet); }
 }
 
 /* Перерисовка без лишнего мигания: содержимое меняется только если оно
@@ -572,21 +579,21 @@ $('dialog-wrap').addEventListener('keydown', e => {
    (приложения, проверка, диагностика, DNS, hosts): shared axis X вперёд/назад,
    стрелка «Назад», панель навигации скрыта. */
 const PAGE_META = {
-  control:  {title: 'Состояние', init: () => { renderStatus(); stat(); initStrategySelector(); }},
+  control:  {title: 'Состояние', init: () => { renderStatus(); stat(); initStrategySelector(); loadLive(); }},
   lists:    {title: 'Списки', init: () => { renderMode(); renderListFiles(); stat(); }},
   settings: {title: 'Настройки', init: () => renderSettings()},
-  config:   {title: 'Конфиг', init: () => confInit()},
+  config:   {title: 'Обход', init: () => confInit(),
+             actions: [{icon: 'refresh', label: 'Обновить', fn: () => confInit()}]},
   logs:     {title: 'Журналы', child: true, init: () => { renderLogsLong(); loadLog(); }},
-  wifi:     {title: 'Отключать на Wi‑Fi', child: true, parent: 'settings', init: () => wifiInit()},
+  work:     {title: 'Работа модуля', child: true, parent: 'settings', init: () => { renderWork(); return stat(true).then(renderWork); }},
+  wifi:     {title: 'Отключать на Wi‑Fi', child: true, parent: 'work', init: () => wifiInit()},
   apps:     {title: 'Фильтр приложений', child: true, parent: 'settings', init: () => appsInit(),
              actions: [{icon: 'refresh', label: 'Обновить список приложений', fn: () => loadPk(true)}]},
   test:     {title: 'Проверка доступности', child: true, parent: 'settings', init: () => testInit()},
   diag:     {title: 'Диагностика', child: true, parent: 'settings', init: () => diagInit(),
              actions: [{icon: 'refresh', label: 'Проверить снова', fn: () => diagInit()}]},
-  smart:    {title: 'Умный режим', child: true, parent: 'settings', init: () => smartInit(),
-             actions: [{icon: 'refresh', label: 'Обновить состояние', fn: () => smartLoad()}]},
   dns:      {title: 'DNS профили', child: true, parent: 'settings', init: () => dnsInit(),
-             actions: [{icon: 'refresh', label: 'Обновить состояние', fn: () => dnsInit()}]},
+             actions: [{icon: 'logs', label: 'Журнал DNS', fn: () => openDnsLog()}]},
   dnsprof:  {title: 'Профиль DNS', child: true, parent: 'dns', init: () => dnsProfInit()},
   hosts:    {title: 'Редактор hosts', child: true, parent: 'settings', init: () => hostsInit(),
              actions: [{icon: 'refresh', label: 'Обновить состояние', fn: () => hostsInit()}]}
@@ -722,8 +729,17 @@ function slidePages(from, to, opt){
    иначе страницы возвращаются на место. На крайних вкладках — упругий
    отказ. */
 const swipe = {st: 0}, pageInited = new Set(['control']);   // «Состояние» готовит init.js
+/* Идёт ввод или выделение текста: ползунки выделения висят под строкой, и
+   касание приходится уже не на поле — его нельзя принимать за жест страницы
+   (страница уезжала, и проглядывала соседняя — чёрным) */
+function textBusy(){
+  const a = document.activeElement;
+  if(a && (a.matches('input:not([type=checkbox]):not([type=radio]):not([type=range]), textarea, [contenteditable="true"]'))) return true;
+  const sel = document.getSelection && document.getSelection();
+  return !!(sel && !sel.isCollapsed && String(sel).length);
+}
 function swipeBlocked(t){
-  if(!t || !t.closest || !t.closest('#content') || t.closest('.no-swipe')) return true;
+  if(!t || !t.closest || !t.closest('#content') || t.closest('.no-swipe') || textBusy()) return true;
   // поле в фокусе — там двигают курсор и выделяют текст; ползунок тянут вбок
   const ed = t.closest('input, textarea, select, [contenteditable="true"]');
   if(ed && (ed === document.activeElement || ed.type === 'range')) return true;
@@ -755,8 +771,12 @@ function swipePeek(dir){
   const pg = TOP_PAGES[i];
   if(!pageInited.has(pg)){ pageInited.add(pg); Promise.resolve(PAGE_META[pg].init()).catch(() => {}); }
 }
+/* Есть ли вкладка в эту сторону: dir 1 — следующая (палец влево), -1 — прежняя */
+const swipeHasPage = dir => { const i = TOP_PAGES.indexOf(currentPage) + dir; return i >= 0 && i < TOP_PAGES.length; };
 function swipeMove(dx){
-  if(!swipe.peek) dx = Math.sign(dx) * Math.min(Math.abs(dx) * .25, 64);   // крайняя вкладка: упругость
+  // туда, где вкладки нет, страница не едет вовсе (раньше — упругость, и
+  // вкладка дрожала у края)
+  if(!swipe.peek) dx = 0;
   swipe.dx = dx;
   swipe.from.style.transform = 'translateX(' + dx + 'px)';
   if(swipe.peek) swipe.peek.style.transform = 'translateX(' + (dx + swipe.peekDir * innerWidth) + 'px)';
@@ -769,7 +789,8 @@ function swipeEnd(commit, v){
     navigate(peek.dataset.page, {dir, dx, v, box: swipe.box});
     return;
   }
-  const timing = {duration: slideDuration(dx), easing: SLIDE_EASE};
+  // возврат на место — мягче и не короче 220 мс: лёгкий свайп не дёргает страницу
+  const timing = {duration: Math.max(220, slideDuration(dx) * 1.2), easing: 'cubic-bezier(.3, 0, 0, 1)'};
   const back = [{transform: 'translateX(' + dx + 'px)'}, {transform: 'none'}];
   from.style.transform = '';
   from.animate(back, timing);
@@ -792,6 +813,8 @@ document.addEventListener('pointermove', e => {
   if(swipe.st === 1){
     if(Math.abs(dy) > 24 || (Math.abs(dy) > 8 && Math.abs(dy) * 2 >= Math.abs(dx))){ swipe.st = 0; return; }
     if(Math.abs(dx) < 16 || Math.abs(dx) <= Math.abs(dy) * 2) return;
+    // с крайней вкладки в пустоту — не жест: ни сдвига, ни дрожи
+    if(!swipeHasPage(dx < 0 ? 1 : -1)){ swipe.st = 0; return; }
     swipe.st = 2;
     swipe.from = document.querySelector('.page.active');
     swipe.box = pageBox(swipe.from);
@@ -801,9 +824,11 @@ document.addEventListener('pointermove', e => {
     document.querySelectorAll('.ripple').forEach(r => r.remove());
   }
   const d = dx - swipe.slop;
+  // сторона меняется с запасом в 12 px: у нуля палец дрожит, и соседняя
+  // вкладка то появлялась, то пропадала
   const dir = d < 0 ? 1 : -1;
-  if(dir !== swipe.peekDir) swipePeek(dir);
-  swipeMove(d);
+  if(dir !== swipe.peekDir && (!swipe.peekDir || Math.abs(d) > 12)) swipePeek(dir);
+  swipeMove(dir === swipe.peekDir || !swipe.peekDir ? d : 0);
   swipe.trail.push([e.timeStamp, e.clientX]);
   if(swipe.trail.length > 6) swipe.trail.shift();
 });
@@ -866,9 +891,13 @@ function navigate(page, slide){
     // в его конец; дотягиваем, если пользователь за это время не листал.
     const want = pageScroll[target] || 0, had = scrollPos();
     pageInited.add(target);
-    Promise.resolve(PAGE_META[target].init()).then(() => {
+    // и синхронная, и асинхронная часть загрузки — без полоски
+    pageLoading++;
+    let p;
+    try { p = Promise.resolve(PAGE_META[target].init()); } catch(e){ p = Promise.reject(e); }
+    p.then(() => {
       if(currentPage === target && want > had && scrollPos() === had) scrollToY(want);
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => { pageLoading--; });
   });
   scheduleSync();
 }
@@ -911,7 +940,7 @@ function bindNavTap(b, go){
 // «Настройки» — свой обработчик ниже (долгое нажатие)
 document.querySelectorAll('.nav-dest:not([data-page="settings"])').forEach(b => bindNavTap(b, () => navigate(b.dataset.page)));
 
-$('logs-btn').onclick = () => navigate('logs');
+$('logs-btn').onclick = () => openLogsHere();
 
 /* ── Быстрые действия: долгое нажатие на вкладку ─────────────────────────
    Меню как у «трёх точек»: висит, пока не выбрано действие или не нажато
@@ -933,8 +962,7 @@ const NAV_QUICK = {
     {icon: 'restart', label: t('Перезапуск'), onClick: () => goThen('control', restartSvc)},
     S.running
       ? {icon: 'stop', label: t('Остановить'), onClick: () => goThen('control', () => act('stop'))}
-      : {icon: 'play', label: t('Запустить'), onClick: () => goThen('control', () => act('start'))},
-    {icon: 'tune', label: t('Выбор стратегии'), onClick: () => goThen('control', openStrategySheet)}
+      : {icon: 'play', label: t('Запустить'), onClick: () => goThen('control', () => act('start'))}
   ],
   lists: () => {
     const m = prevListMode();
@@ -948,10 +976,13 @@ const NAV_QUICK = {
     {icon: 'edit', label: t('Редактор hosts'), onClick: () => goThen('settings', () => navigate('hosts'))},
     {icon: 'test', label: t('Проверка доступности'), onClick: () => goThen('settings', () => navigate('test'))}
   ],
-  config: () => [
+  config: () => isSmartMode() ? [
+    {icon: 'share', label: t('Поделиться обучением'), onClick: () => goThen('config', () => smartExport())},
+    {icon: 'upload', label: t('Загрузить обучение'), onClick: () => goThen('config', () => $('smart-imp').click())}
+  ] : [
     {icon: 'edit', label: t('Редактировать'), onClick: () => goThen('config', () => openSlideEditor('conf'))},
     {icon: 'upload', label: t('Импортировать'), onClick: () => goThen('config', () => $('impFile').click())},
-    {icon: 'share', label: t('Поделиться'), onClick: () => goThen('config', () => shareFileMenu($('conf-share'), CONFFILE_PATH))}
+    {icon: 'share', label: t('Поделиться'), onClick: () => goThen('config', () => shareFileMenu($('mode-seg'), CONFFILE_PATH))}
   ]
 };
 document.querySelectorAll('.nav-dest').forEach(b => onLongPress(b, null, () => {
@@ -1000,7 +1031,8 @@ const stretch = {el: null, pull: 0, y: 0};
 function stretchApply(){
   const el = stretch.el, p = stretch.pull;
   if(!el) return;
-  const k = 1 + .06 * (1 - Math.exp(-Math.abs(p) / 450));
+  // отзывчивее у начала: 100 px — уже ~2,5%, предел — 9%
+  const k = 1 + .09 * (1 - Math.exp(-Math.abs(p) / 300));
   // точка упора: верх страницы или нижний край экрана в её координатах
   const oy = p > 0 ? 0 : scroller.clientHeight - el.getBoundingClientRect().top;
   el.style.transformOrigin = '50% ' + oy + 'px';
@@ -1054,7 +1086,7 @@ function stretchRelease(){
 document.addEventListener('touchstart', e => {
   stretchRelease();
   if(e.touches.length !== 1 || !e.target.closest || !e.target.closest('#content')) return;
-  if(openSheetId || editorCtx || transitionCleanup || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if(openSheetId || editorCtx || transitionCleanup || textBusy() || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   // внутри своей прокрутки (журнал, редактор, листаемые блоки) — не наше
   for(let el = e.target; el && el.id !== 'content'; el = el.parentElement){
     if(el.scrollHeight > el.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(el).overflowY)) return;
@@ -1070,7 +1102,9 @@ document.addEventListener('touchmove', e => {
   const y = e.touches[0].clientY, dy = y - stretch.y;
   stretch.y = y;
   const maxY = scroller.scrollHeight - scroller.clientHeight;
-  const atTop = scrollPos() <= 0, atBottom = scrollPos() >= maxY - 1;
+  // край — с запасом в 2 px: прокрутка бывает дробной, и у самого верха
+  // растяжение иногда не включалось
+  const atTop = scrollPos() <= 2, atBottom = scrollPos() >= maxY - 2;
   let p = stretch.pull;
   if(p > 0 || (p === 0 && dy > 0 && atTop)) p = Math.max(0, p + dy);
   else if(p < 0 || (p === 0 && dy < 0 && atBottom)) p = Math.min(0, p + dy);

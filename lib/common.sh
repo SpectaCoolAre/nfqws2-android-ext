@@ -17,12 +17,15 @@ NFQWS_BIN="$MODDIR/bin/nfqws2"
 PIDFILE="$STATE_DIR/nfqws2.pid"
 WD_PIDFILE="$STATE_DIR/watchdog.pid"
 WN_PIDFILE="$STATE_DIR/netwatch.pid"
+WL_PIDFILE="$STATE_DIR/wlwatch.pid"
+WL_FILE="$STATE_DIR/whitelist"                  # мобильный оператор включил белые списки (время)
 DESIRED_FILE="$STATE_DIR/desired"
 ARGS_FILE="$STATE_DIR/last.args"
 APP_UIDS_FILE="$STATE_DIR/app_uids"
 SERVICE_LOG="$LOG_DIR/service.log"
 NFQWS_LOG="$LOG_DIR/nfqws2.log"
 ACTIVE_FILE="$STATE_DIR/active_strategy"
+LAST_STRATEGY_FILE="$STATE_DIR/last_strategy"   # последняя не умная стратегия (режим «Стратегии»)
 FIRST_STRATEGY=hardcorp74      # стратегия при первой установке
 
 # Home Wi-Fi: bypass pauses on these networks (HOME_WIFI=1)
@@ -31,8 +34,10 @@ HOME_PAUSED_FILE="$STATE_DIR/home_paused"      # paused by home network; holds S
 HOME_AT_FILE="$STATE_DIR/home_at"              # телефон в домашнем Wi‑Fi; SSID (для паузы DNS)
 SMART_DIR="$CONFDIR/smart"                     # умный режим: выученное по сетям (<сеть>.tsv)
 SMART_NET_FILE="$STATE_DIR/smart_net"          # id текущей сети для умного режима или offline
-SMART_TRAIN_FILE="$STATE_DIR/smart_train"      # ход обучения
-SMART_TRAIN_PID="$STATE_DIR/smart_train.pid"
+SMART_LEARN_FILE="$STATE_DIR/smart_learn"      # фоновое обучение: сколько открыто, последний сайт
+SMART_LEARN_EVERY=120                          # сек между сайтами фонового обучения
+SMART_TURBO_FILE="$STATE_DIR/smart_turbo"      # до какого времени обучение ускорено (игра)
+SMART_TURBO_EVERY=15
 SK_PIDFILE="$STATE_DIR/smartkill.pid"          # обрыв застрявших соединений умного режима
 SMART_KILL_FILE="$STATE_DIR/smart_kill"        # их пишет оркестратор: «4|6 адрес локальный-порт»
 HOME_OVERRIDE_FILE="$STATE_DIR/home_override"  # user re-enabled on this network
@@ -96,6 +101,8 @@ set_defaults() {
   : "${DNS_PUSH:=1}"
   : "${EXTRA_RKN:=0}"
   : "${EXTRA_FLOWSEAL:=0}"
+  : "${SMART_LEARN:=1}"
+  : "${WL_PAUSE:=1}"
 }
 
 log_msg() {
@@ -136,7 +143,7 @@ rotate_file() {
 
 rotate_logs() {
   local max=$(( ${LOG_MAX_KB:-512} * 1024 )) f
-  for f in "$SERVICE_LOG" "$NFQWS_LOG" "$LOG_DIR/auto.log" "$LOG_DIR/dns.log"; do rotate_file "$f" "$max"; done
+  for f in "$SERVICE_LOG" "$NFQWS_LOG" "$LOG_DIR/auto.log" "$LOG_DIR/dns.log" "$LOG_DIR/smart.log"; do rotate_file "$f" "$max"; done
   if [ "$1" = "start" ]; then
     f="$LOG_DIR/nfqws2-debug.log"
     # truncate when debug on, rotate when off; && ... || would rotate on failed truncate
@@ -167,6 +174,7 @@ load_conf() {
       cp -f "$MODDIR/defaults/nfqws2.conf" "$CONFFILE" 2>/dev/null
     fi
   fi
+  smart_conf_sync
   local err
   err=$(validate_conf "$CONFFILE" 2>&1) || {
     log_msg "Конфиг $CONFFILE содержит ошибки: $err"
@@ -177,6 +185,27 @@ load_conf() {
   . "$CONFFILE"
   set_defaults
   return 0
+}
+
+# Умный режим — стратегия модуля: её конфиг держится вровень с модулем. Вышла
+# новая раскладка (SMART_CONF_VER в strategies/smart.conf) — действующий конфиг
+# пересобирается сам, с настройками пользователя (USER_KEYS). Свою правку
+# smart.conf (копия в strategies пользователя) не трогаем
+smart_conf_sync() {
+  local want have tmp="$STATE_DIR/smart_sync.$$"
+  [ "$(head -n 1 "$ACTIVE_FILE" 2>/dev/null | tr -d '\r\n')" = smart ] || return 0
+  [ -f "$USER_STRATEGIES_DIR/smart.conf" ] && return 0
+  # конфиги — shell: значение берётся так же, как его прочтёт служба
+  want=$(SMART_CONF_VER=; . "$STRATEGIES_DIR/smart.conf" >/dev/null 2>&1; echo "$SMART_CONF_VER")
+  have=$(SMART_CONF_VER=; . "$CONFFILE" >/dev/null 2>&1; echo "$SMART_CONF_VER")
+  if [ -z "$want" ] || [ "$want" = "$have" ]; then return 0; fi
+  if render_strategy smart > "$tmp.raw" 2>/dev/null && [ -s "$tmp.raw" ] &&
+     merge_user_keys "$tmp.raw" "$CONFFILE" > "$tmp" && validate_conf "$tmp" >/dev/null 2>&1; then
+    cp -f "$CONFFILE" "$CONFFILE.bak" 2>/dev/null
+    mv -f "$tmp" "$CONFFILE" && chmod 0644 "$CONFFILE"
+    log_msg "Умный режим: конфиг обновлён до раскладки $want"
+  fi
+  rm -f "$tmp" "$tmp.raw"
 }
 
 validate_args_conf() {
@@ -448,7 +477,47 @@ _startup_args() {
   [ -n "$ipset" ] && args="$args $tcp $ipset --ipset-ip=0.0.0.0 --new"
   args="$args $tcp $extra"
 
-  printf '%s' "$args" | tr -s ' '
+  printf '%s' "$args" | tr -s ' ' | stat_inject
+}
+
+# Режим «Стратегии»: статистика соединений (lua smartstat). Первым экземпляром
+# каждого TCP-профиля с обходом встаёт наблюдатель со своими диапазонами, за
+# ним — значения nfqws2 по умолчанию (--in-range=x --out-range=a --payload=all),
+# поэтому экземпляры стратегии работают ровно как без него. Ставится перед
+# первым --in-range/--out-range/--payload/--lua-desync профиля: их стратегия
+# задаёт после него сама. Умный режим считает сам — ему не нужно
+stat_inject() {
+  local name
+  name=$(head -n 1 "$ACTIVE_FILE" 2>/dev/null | tr -d '\r\n')
+  if [ "$name" = smart ]; then cat; return 0; fi
+  awk -v name="${name:-default}" -v home="$CONFDIR" -v lua="$LUA_DIR" '
+    function flush(   i, tcp, lua_any, at) {
+      tcp = 0; lua_any = 0; at = 0
+      for (i = 1; i <= n; i++) {
+        if (p[i] ~ /^--filter-tcp=/) tcp = 1
+        if (p[i] ~ /^--lua-desync=/) lua_any = 1
+        if (!at && p[i] ~ /^--(in-range|out-range|payload|lua-desync)=/) at = i
+      }
+      for (i = 1; i <= n; i++) {
+        if (tcp && lua_any && i == at)
+          out = out " --in-range=-s19000 --out-range=-s34228 --payload=all --lua-desync=smartstat:home=" home ":name=" name " --in-range=x --out-range=a --payload=all"
+        out = out " " p[i]
+        if (p[i] ~ /^--lua-init=/) { lastinit = length(out); if (p[i] ~ /zapret-auto\.lua$/) hasauto = 1; if (p[i] ~ /zapret-smart\.lua$/) hassmart = 1; if (p[i] ~ /zapret-lib\.lua$/) haslib = 1 }
+      }
+      n = 0
+    }
+    { for (j = 1; j <= NF; j++) { if ($j == "--new") { flush(); out = out " --new" } else p[++n] = $j } }
+    END {
+      flush()
+      if (!haslib || !lastinit) { print substr(original, 2); exit }
+      add = ""
+      if (!hasauto) add = add " --lua-init=@" lua "/zapret-auto.lua"
+      if (!hassmart) add = add " --lua-init=@" lua "/zapret-smart.lua"
+      out = substr(out, 1, lastinit) add substr(out, lastinit + 1)
+      print substr(out, 2)
+    }
+    { original = original " " $0 }
+  '
 }
 
 # Дополнительные списки: id -> адрес и файл. Скачиваются по запросу из WebUI
@@ -1116,12 +1185,19 @@ system_config() {
   sysctl -w net.core.rmem_default=2097152 >/dev/null 2>&1
   sysctl -w net.core.netdev_max_backlog=16384 >/dev/null 2>&1
 
-  # Values proven stable on the reference router (1200 / 16384). Android defaults
-  # can expire idle long-lived connections; their packets then look INVALID and
-  # are silently dropped.
-  local cur_max
+  # Время жизни простаивающего TCP-соединения в conntrack — не укорачиваем.
+  # Раньше здесь стояло 1200 с, «как на эталонном роутере», но телефон — не
+  # роутер: соединение push-уведомлений Google (mtalk.google.com) молчит между
+  # сигналами «я на связи» до 28 минут, и через 20 минут ядро его забывало.
+  # Уведомления копились у Google и приходили пачкой при следующем
+  # переподключении. Укороченное прежними версиями — возвращаем к значению ядра
+  local cur_max cur_est
   cur_max=$(sysctl -n net.netfilter.nf_conntrack_max 2>/dev/null)
-  sysctl -w net.netfilter.nf_conntrack_tcp_timeout_established=1200 >/dev/null 2>&1
+  cur_est=$(sysctl -n net.netfilter.nf_conntrack_tcp_timeout_established 2>/dev/null)
+  if [ -n "$cur_est" ] && [ "$cur_est" -lt 7200 ] 2>/dev/null; then
+    log_msg "conntrack: nf_conntrack_tcp_timeout_established было $cur_est, возвращаем 432000 (значение ядра): короткое время рвало соединение push-уведомлений"
+    sysctl -w net.netfilter.nf_conntrack_tcp_timeout_established=432000 >/dev/null 2>&1
+  fi
   if [ -n "$cur_max" ] && [ "$cur_max" -lt 16384 ] 2>/dev/null; then
     log_msg "conntrack: nf_conntrack_max было $cur_max, поднимаем до 16384 (как на эталонном роутере)"
     sysctl -w net.netfilter.nf_conntrack_max=16384 >/dev/null 2>&1
@@ -1297,7 +1373,11 @@ update_description() { # running | stopped | paused <ssid>
       strat=$(cat "$ACTIVE_FILE" 2>/dev/null); strat="${strat#imp:}"
       mode=$(current_mode)
       d="✅ Работает · ${strat:-default}${mode:+ · $mode}" ;;
-    paused) if [ "$2" = "@vpn" ]; then d="⏸ Пауза: включён VPN"; else d="⏸ Пауза: домашний Wi-Fi «$2»"; fi ;;
+    paused) case "$2" in
+              @vpn) d="⏸ Пауза: включён VPN" ;;
+              @wl)  d="⏸ Пауза: белые списки у оператора" ;;
+              *)    d="⏸ Пауза: домашний Wi-Fi «$2»" ;;
+            esac ;;
     *)      d="⛔ Остановлено" ;;
   esac
   d=$(printf '%s' "$d | $DESC_BASE" | tr -d '\n\r')
@@ -1349,7 +1429,7 @@ render_strategy() {
 
 # Module settings (same across strategies) are carried over whole from the live
 # config on strategy change/reset. NFQWS_EXTRA_ARGS only for standard $MODE_* refs.
-USER_KEYS="DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH EXTRA_RKN EXTRA_FLOWSEAL NFQWS_EXTRA_ARGS"
+USER_KEYS="DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH EXTRA_RKN EXTRA_FLOWSEAL SMART_LEARN WL_PAUSE NFQWS_EXTRA_ARGS"
 merge_user_keys() { # <generated config> <settings source config>  -> stdout
   awk -v keys=" $USER_KEYS " -v src="$2" '
     function quotes(str,   t) { t = str; return gsub(/"/, "", t) }
@@ -1447,6 +1527,34 @@ vpn_active() {
 }
 # Телефон подключён к Wi‑Fi: интерфейс wlan* в состоянии up (associated).
 # Без Wi‑Fi трафик (и VPN поверх него) идёт через мобильную сеть
+# Белые списки мобильного оператора: открываются только разрешённые
+# российские сервисы, а к остальным адресам нет даже TCP-соединения — обходу
+# DPI тут нечего делать, и умный режим учил бы одни ошибки. Признак: ни к
+# одному зарубежному адресу, который в обычном интернете в России открыт, не
+# установилось соединение (TCP, до TLS — его DPI не трогает), а к российским
+# сервисам — установилось. -> normal | whitelist | offline | partial | unknown
+WL_FOREIGN="github.com www.microsoft.com www.apple.com www.wikipedia.org www.cloudflare.com"
+WL_ALLOWED="ya.ru vk.com www.gosuslugi.ru mail.ru"
+wl_probe() {
+  command -v curl >/dev/null 2>&1 || { echo unknown; return 0; }
+  local d="$STATE_DIR/wlprobe.$$" h f=0 w=0
+  rm -rf "$d"; mkdir -p "$d" || { echo unknown; return 0; }
+  for h in $WL_FOREIGN; do
+    ( curl -s -k -o /dev/null -m 6 --connect-timeout 5 -w '%{time_connect}' "https://$h/" > "$d/f.$h" 2>/dev/null ) &
+  done
+  for h in $WL_ALLOWED; do
+    ( curl -s -k -o /dev/null -m 6 --connect-timeout 5 -w '%{time_connect}' "https://$h/" > "$d/w.$h" 2>/dev/null ) &
+  done
+  wait
+  for h in "$d"/f.*; do awk '{ exit !($1 + 0 > 0) }' "$h" 2>/dev/null && f=$((f + 1)); done
+  for h in "$d"/w.*; do awk '{ exit !($1 + 0 > 0) }' "$h" 2>/dev/null && w=$((w + 1)); done
+  rm -rf "$d"
+  if [ "$f" -ge 2 ]; then echo normal
+  elif [ "$f" = 0 ] && [ "$w" -ge 2 ]; then echo whitelist
+  elif [ "$f" = 0 ] && [ "$w" = 0 ]; then echo offline
+  else echo partial; fi
+}
+
 on_wifi() {
   local d n="${NFQWS_SYSNET:-/sys/class/net}"
   for d in "$n"/wlan*; do
@@ -1479,7 +1587,6 @@ smart_net_id() {
   esac
 }
 smart_net_update() {
-  smart_active || return 0
   mkdir -p "$SMART_DIR" "$STATE_DIR" 2>/dev/null
   local line id label
   line=$(smart_net_id); id=${line%%	*}; label=${line#*	}

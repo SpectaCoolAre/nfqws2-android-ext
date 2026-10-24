@@ -60,6 +60,9 @@ mkdir -p "$CONF/lists" "$CONF/state" "$CONF/logs" "$CONF/imports" "$CONF/strateg
 
 if [ -f "$CONF/nfqws2.conf" ]; then
   ui_print "- Keeping existing config: $CONF/nfqws2.conf"
+  # watchdog больше не выключается: без него упавшая служба и сброшенные
+  # системой правила не поднимаются — выключенный включаем обратно
+  sed -i 's/^WATCHDOG=.*/WATCHDOG=1/' "$CONF/nfqws2.conf" 2>/dev/null
   cp -f "$MODPATH/defaults/nfqws2.conf" "$CONF/nfqws2.conf.dist" ||
     abort "! Failed to save the default config"
 else

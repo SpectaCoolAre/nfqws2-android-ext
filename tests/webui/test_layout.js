@@ -104,6 +104,8 @@ const VIEWPORTS = [
         if (typeof devMode !== 'undefined') devMode = true;
         if (typeof renderParams === 'function' && typeof S !== 'undefined') renderParams(S);
         if (typeof renderMode === 'function') renderMode();
+        // the switches live on «Работа модуля» (Settings), built on demand
+        if (typeof renderWork === 'function') renderWork();
       });
       await page.waitForTimeout(300);
 
@@ -156,7 +158,7 @@ const VIEWPORTS = [
         out.settingsTab = !!q('#nav-settings');
         out.heroLeft = Math.round(box(q('.hero')).left);
 
-        const sws = [...document.querySelectorAll('#sws .list-item')];
+        const sws = [...document.querySelectorAll('#work-sws .list-item')];
         out.swsFirstRadius = radii(sws[0]);
         out.swsLastRadius = radii(sws[sws.length - 1]);
         out.swsMiddleRadius = sws.length > 2 ? radii(sws[1]) : [];
@@ -167,12 +169,10 @@ const VIEWPORTS = [
         out.swsSwitchRows = sws.filter(r => r.querySelector('input.switch')).length;
         out.swsSwitchWithSecondary = sws.filter(r => r.querySelector('input.switch') && r.querySelector('.li-secondary')).length;
         out.swsHasIcons = sws.some(r => r.querySelector('.li-icon'));
-        out.swsHeight = box(sws[0]).height;
 
         // The strategy row renders into #strategy-current; the doctor moved to the
         // diagnostics page and is not on this screen any more.
-        const stratSpan = q('#strategy-current');
-        out.strategyRowRadius = stratSpan ? radii(stratSpan.closest('.list-item'))[0] : undefined;
+        out.strategyRowRadius = radii(q('#strategy-row.mode-card'))[0];
 
         // The only text field is the search bar, and it lives on the apps page —
         // hidden while this screen is up, so getBoundingClientRect returns 0. Read
@@ -222,7 +222,7 @@ const VIEWPORTS = [
       });
 
       // ── hero ──
-      eq('Служба работает', geo.statusText, 'the service state is rendered from json-status');
+      eq('Работает', geo.statusText, 'the service state is rendered from json-status');
       eq(0, geo.heroCounters, 'the hero carries no counters');
       eq('nfqws2-android-ext', geo.titleText, 'top level: the module name instead of the section title');
       truthy(geo.titleLeftOff <= 24, 'the name sits in the left corner: ' + geo.titleLeftOff + ' px from the edge');
@@ -236,16 +236,23 @@ const VIEWPORTS = [
       // project targets; the old 12dp was the baseline card corner.
       eq(16, geo.cardRadius, 'cards use the 16dp corner (--shape-large)');
       eq(28, geo.heroRadius, 'the hero follows the extra-large corner (28dp)');
-      eq(16, geo.strategyRowRadius, 'the strategy row is rounded (16dp, --shape-large)');
+      eq(28, geo.strategyRowRadius, 'the mode card follows the hero corner (28dp)');
       eq('16,16,4,4', geo.swsFirstRadius.join(','), 'the first list row has 16dp outer corners');
       eq('4,4,16,16', geo.swsLastRadius.join(','), 'the last list row has 16dp outer corners');
       eq('4,4,4,4', geo.swsMiddleRadius.join(','), 'the middle list rows use 4dp inner corners');
-      // #sws holds the four switches (calls bypass moved to developer settings). The conventions are about the switches.
+      // #work-sws holds the four switches (calls bypass moved to developer settings). The conventions are about the switches.
       eq(4, geo.swsRows, 'the list holds the four switches');
       eq(4, geo.swsSwitchRows, 'all four of those rows are switches');
       eq(false, geo.swsHasIcons, 'switch rows carry no leading icons');
       eq(0, geo.swsSwitchWithSecondary, 'switch rows carry no descriptions');
-      eq(56, geo.swsHeight, 'switch rows are single-line (56dp)');
+      const swsHeight = await page.evaluate(async () => {
+        navigate('work'); await new Promise(r => setTimeout(r, 400));
+        const row = document.querySelector('#work-sws .list-item');
+        const h = row ? Math.round(row.getBoundingClientRect().height) : 0;
+        navigate('control'); await new Promise(r => setTimeout(r, 400));
+        return h;
+      });
+      eq(56, swsHeight, 'switch rows are single-line (56dp)');
 
       // ── fields, segmented ──
       // The only text field on this screen is the search bar: 56dp tall and a pill,
@@ -351,17 +358,21 @@ const VIEWPORTS = [
       document.querySelectorAll('.page').forEach(s => s.classList.toggle('active', s.dataset.page === 'config'));
     });
     await page.waitForTimeout(150);
-    await page.evaluate(() => loadImports());
-    await page.waitForTimeout(300);
-    eq(1, await page.evaluate(() => document.querySelectorAll('#impList .li-primary').length),
+    // импорты — в листе стратегий, группа «Пользовательские»
+    await page.evaluate(() => openStrategySheet());
+    await page.waitForTimeout(700);
+    await page.evaluate(n => { strategies.push({name: 'imp:' + n, kind: 'import', mod: false}); renderStrategyList(false); }, HOSTILE_IMPORT);
+    await page.waitForTimeout(200);
+    eq(1, await page.evaluate(n => [...document.querySelectorAll('#strategy-list .li-primary')].filter(e => e.textContent === n).length, HOSTILE_IMPORT),
       'the hostile import name is rendered as a row');
     await page.evaluate(() => {
-      const b = document.querySelector('#impList button[aria-label="Удалить импорт"]');
-      if (b) b.click();
+      const r = [...document.querySelectorAll('#strategy-list .list-item')].pop();
+      if (r) r.click();
     });
     await page.waitForTimeout(300);
+    await page.evaluate(() => closeSheet());
     eq(undefined, await page.evaluate(() => window.__pwned),
-      'clicking the delete button does not run the name as code');
+      'choosing it does not run the name as code');
 
     // ── a superseded dialog resolves instead of hanging ──
     // One dialog is on screen at a time but each call has its own promise, so
@@ -422,7 +433,8 @@ const VIEWPORTS = [
       await wait();
       const modeCall = window.__calls.find(c => c.indexOf('set-mode') >= 0) || '';
       window.__calls = [];
-      const sw = document.querySelector('#sws input.switch');
+      if (typeof renderWork === 'function') renderWork();
+      const sw = document.querySelector('#work-sws input.switch');
       if (sw) sw.click();
       await wait();
       const swCall = window.__calls.filter(c => c.indexOf("'set'") >= 0)[0] || '';
@@ -460,8 +472,9 @@ const VIEWPORTS = [
       openMonetModal(); await wait();
       const toggle = document.querySelector('#containers-toggle');
       if (!toggle) return { found: false };
+      if (typeof renderWork === 'function') renderWork();
       toggle.click(); await wait();
-      const row = document.querySelector('#sws .list-item');
+      const row = document.querySelector('#work-sws .list-item');
       const offRadius = getRadii(row);
       toggle.click(); await wait();
       const onRadius = getRadii(row);
@@ -579,7 +592,7 @@ const VIEWPORTS = [
     await page.goto(INDEX, { waitUntil: 'load' });
     await page.waitForTimeout(2000);
     const running = await page.evaluate(() => ({ h: document.querySelector('#hero-status').offsetHeight, st: $('st').textContent }));
-    eq('Служба работает', running.st, 'starts as running');
+    eq('Работает', running.st, 'starts as running');
     const base = Object.assign({}, await page.evaluate(() => S), { dns_available: 1, dns_enabled: 1 });
     const t0 = Date.now();
     await page.evaluate(st => {
@@ -596,7 +609,7 @@ const VIEWPORTS = [
     });
     eq('Пауза', paused.st, 'the pause shows up');
     truthy(dt < 2500, 'within about a second and a half, not on the 5 s poll: ' + dt + ' ms');
-    truthy(paused.sub.includes('DNS включён'), 'the paused card tells the DNS state: ' + paused.sub);
+    truthy(!paused.sub.includes('DNS'), 'DNS has its own tile, not a part of the subtitle: ' + paused.sub);
     truthy(paused.oneLine, 'the subtitle stays on one line');
     truthy(await page.evaluate(() => $('hero-stats').hidden), 'no uptime row while paused');
     eq('#i-pause', await page.evaluate(() => $('hero-ic').getAttribute('href')), 'the pause icon in the card');
@@ -604,10 +617,10 @@ const VIEWPORTS = [
     truthy(paused.title.includes('возобновится'), 'the full explanation is in the title');
     await page.evaluate(st => { window.__st = Object.assign({}, st, { paused: '@vpn', running: false }); window.__sig = 'p:@vpn'; }, base);
     await page.waitForFunction(() => $('sub').textContent.startsWith('Включён VPN'), null, { timeout: 4000 }).catch(() => {});
-    eq('Включён VPN · DNS включён', await page.evaluate(() => $('sub').textContent), 'a VPN pause reads short too');
+    eq('Включён VPN', await page.evaluate(() => $('sub').textContent), 'a VPN pause reads short too');
     const t1 = Date.now();
     await page.evaluate(st => { window.__st = st; window.__sig = 'run 4711'; }, base);
-    await page.waitForFunction(() => $('st').textContent === 'Служба работает', null, { timeout: 4000 }).catch(() => {});
+    await page.waitForFunction(() => $('st').textContent === 'Работает', null, { timeout: 4000 }).catch(() => {});
     truthy(Date.now() - t1 < 2500, 'resuming shows up as fast: ' + (Date.now() - t1) + ' ms');
     eq('#i-shield', await page.evaluate(() => $('hero-ic').getAttribute('href')), 'running: the shield icon');
     truthy(await page.evaluate(() => !$('hero-stats').hidden), 'the uptime row is back');

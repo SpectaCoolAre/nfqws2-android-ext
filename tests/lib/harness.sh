@@ -132,6 +132,10 @@ sandbox_init() {
     cp "$TESTS_DIR/lib/mock/android-stub" "$MOCKBIN/$n"
   done
   cp "$TESTS_DIR/lib/mock/nfqws2" "$MODDIR/bin/nfqws2"
+  # curl по умолчанию — «нет сети»: помощники модуля (белые списки, фоновое
+  # обучение) не должны ходить из тестов в настоящий интернет. Тесты, которым
+  # нужен ответ, кладут свой curl поверх
+  printf '#!/bin/sh\nexit 7\n' > "$MOCKBIN/curl"
   chmod 0755 "$MOCKBIN"/* "$MODDIR/bin/nfqws2"
 
   MOCK_IPT_STORE="$MOCK_DIR/ipt"

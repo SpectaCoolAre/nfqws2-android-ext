@@ -86,7 +86,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   sect('menu and blur');
   await hold(nav('control'));
   eq('control', await cur(), 'holding a tab does not switch to it by itself');
-  eq('Перезапуск,Остановить,Выбор стратегии', (await items()).join(), 'Состояние: restart, stop, strategy');
+  eq('Перезапуск,Остановить', (await items()).join(), 'Состояние: restart, stop (the strategy is chosen in «Bypass»)');
   eq(true, await scrim(), 'the rest of the window is blurred');
   const z = await page.evaluate(() => [getComputedStyle($('nav-scrim')).zIndex, getComputedStyle($('nav-bar')).zIndex, getComputedStyle($('app-bar')).zIndex].map(Number));
   truthy(z[0] < z[1] && z[0] > z[2], 'under the tab capsule but over the app bar: ' + z.join(','));
@@ -101,11 +101,6 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
 
   sect('Состояние');
   await page.evaluate(() => navigate('lists')); await page.waitForTimeout(600);
-  await hold(nav('control'));
-  await page.click('.menu .mi:nth-child(3)'); await page.waitForTimeout(900);
-  eq('control', await cur(), '«Выбор стратегии» opens the status tab');
-  eq('strategy-sheet', await page.evaluate(() => openSheetId), 'and the strategy sheet');
-  await page.evaluate(() => closeSheet()); await page.waitForTimeout(400);
   await hold(nav('control'));
   await page.click('.menu .mi:nth-child(1)'); await page.waitForTimeout(600);
   eq(1, await calls("'restart'"), '«Перезапуск» restarts the service');

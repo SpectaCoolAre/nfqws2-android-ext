@@ -418,13 +418,14 @@ body.swiping .state::after { opacity: 0 !important; }
   letter-spacing: var(--tr-body-medium); opacity: .8;
   /* одна строка: длинное имя сети не растягивает карточку */
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* Статистика службы (сейчас — только время работы), по центру карточки */
-.hero-stats { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; width: 100%; }
-.hstat { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 2px; min-width: 0; }
-.hstat-label { width: 100%; text-align: center; font-size: var(--ts-label-medium); line-height: var(--lh-label-medium); font-weight: var(--w-medium);
-  opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hstat-value { width: 100%; text-align: center; font-size: var(--ts-title-large); line-height: var(--lh-title-large); font-weight: var(--w-emph);
-  font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Время работы — справа от состояния: карточка одной высоты при работе,
+   паузе и остановке */
+.hero-stats { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; min-width: 0; }
+.hero-stats[hidden] { display: none; }
+.hstat-label { font-size: var(--ts-label-medium); line-height: var(--lh-label-medium); font-weight: var(--w-medium);
+  opacity: .75; white-space: nowrap; }
+.hstat-value { font-size: var(--ts-title-large); line-height: var(--lh-title-large); font-weight: var(--w-emph);
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* Основное действие растянуто; перезапуск — outlined icon button рядом (M3 button group) */
 .hero-actions { display: flex; align-items: center; gap: 8px; }
 .hero-actions #bt {

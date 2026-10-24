@@ -46,7 +46,8 @@ function startUptTimer(ms){
    происхождению, на одном листе, с заголовком над каждой. */
 let strategies = [{name: 'default', kind: 'builtin', mod: false}], currentStrategy = 'default', pendingStrategy = 'default';
 const STRATEGY_GROUPS = [
-  ['smart', 'Умный режим'], ['base', 'Базовая'], ['alt', 'Flowseal · ALT'], ['fake', 'Flowseal · FAKE TLS AUTO'],
+  // умный режим — отдельный режим работы (вкладка «Обход»), в выборе стратегий его нет
+  ['base', 'Базовая'], ['alt', 'Flowseal · ALT'], ['fake', 'Flowseal · FAKE TLS AUTO'],
   ['simple', 'Flowseal · SIMPLE FAKE'], ['authors', 'Авторские'], ['user', 'Пользовательские']
 ];
 function strategyGroup(s){
@@ -76,10 +77,73 @@ async function initStrategySelector(){
   await loadStrategies();
   renderStrategyRow();
 }
+/* Карточка режима на главной: стратегия или умный режим (насколько обучен).
+   Выбирается режим и стратегия во вкладке «Обход» — нажатие ведёт туда */
 function renderStrategyRow(){
+  const smart = isSmartMode();
+  $('strategy-head').textContent = smart ? t('Умный режим') : t('Стратегии');
+  $('strategy-ic').setAttribute('href', smart ? '#i-auto' : '#i-globe');
+  if(typeof updateModeUi === 'function') updateModeUi();
+  if(smart){
+    $('strategy-current').textContent = strategyRowSmart || t('Сам подбирает обход');
+    $('strategy-group').textContent = t('Для каждого сайта и сети');
+    smartRowProgress();
+    return;
+  }
+  strategyRowSmart = '';
   const s = findStrategy(currentStrategy) || {name: currentStrategy, kind: /^imp:/.test(currentStrategy) ? 'import' : 'builtin'};
   $('strategy-current').textContent = strategyName(currentStrategy);
   $('strategy-group').textContent = groupTitle(strategyGroup(s)) + (s.mod ? ' · ' + t('изменена') : '');
+}
+let strategyRowSmart = '';
+async function smartRowProgress(){
+  const r = await ctlx(['smart-status']);
+  let m; try { m = JSON.parse(r.out); } catch(e){ return; }
+  if(!isSmartMode()) return;
+  strategyRowSmart = t('Обучен на {0}%', smartProgress(m).p);
+  $('strategy-current').textContent = strategyRowSmart;
+}
+function strategyRowClick(){ navigate('config'); }
+
+/* Живые данные модуля — плитки под режимом, раз в 5 секунд, пока экран открыт:
+   DNS, сеть, удачные соединения режима, списки, память и пакеты nfqws2 */
+let LIVE = null, liveT = 0;
+async function loadLive(){
+  clearTimeout(liveT);
+  const r = await ctlx(['live-status']);
+  try { LIVE = JSON.parse(r.out); } catch(e){}
+  renderLive();
+  liveT = setTimeout(() => { if(currentPage === 'control' && !document.hidden) loadLive(); else liveT = 0; }, 5000);
+}
+function fmtShort(n){
+  n = +n || 0;
+  if(n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace('.', LANG === 'en' ? '.' : ',') + ' ' + t('млн');
+  if(n >= 1e4) return Math.round(n / 1e3) + ' ' + t('тыс.');
+  return String(n);
+}
+function renderLive(){
+  const L = LIVE || {}, j = S || {}, tiles = [];
+  if(j.dns_available == 1){
+    const on = j.dns_enabled == 1, paused = on && (j.dns_paused === 'vpn' || j.dns_paused === 'home');
+    tiles.push({icon: 'dns', title: 'DNS', value: !on ? t('Выключен') : paused ? t('Пауза') : t('Включён'),
+      sub: on && !paused && L.dns_hits >= 0 ? t('перехвачено запросов: {0}', fmtShort(L.dns_hits)) : paused ? (j.dns_paused === 'vpn' ? t('пока включён VPN') : t('в домашнем Wi‑Fi')) : t('свои DNS для доменов'),
+      on: "openFrom('dns')"});
+  }
+  const net = L.net || '';
+  tiles.push({icon: net === 'offline' ? 'warn' : /^mobile/.test(net) ? 'globe' : 'wifi', title: 'Сеть',
+    value: !net ? '—' : net === 'offline' ? t('Нет связи') : /^mobile/.test(net) ? t('Мобильная') : 'Wi‑Fi',
+    sub: L.net_label || (net === 'offline' ? t('обход ждёт сеть') : ''), on: ''});
+  const c = L.conn || {}, p = pct(+c.ok || 0, +c.err || 0);
+  tiles.push({icon: 'check', title: 'Соединения', value: p == null ? '—' : p + '%',
+    sub: p == null ? t('статистика появится по ходу работы') : t('удачных {0} · ошибок {1}', fmtShort(c.ok), fmtShort(c.err)), on: "navigate('config')"});
+  const cnt = j.counts || {};
+  tiles.push({icon: 'list', title: 'Списки', value: j.mode || '—',
+    sub: t('user: {0} · auto: {1}', cnt.user != null ? cnt.user : '—', cnt.auto != null ? cnt.auto : '—'), on: "navigate('lists')"});
+  tiles.push({icon: 'medical', title: 'Память', value: j.running && L.rss ? (L.rss / 1024).toFixed(1).replace('.', LANG === 'en' ? '.' : ',') + ' ' + t('МБ') : '—',
+    sub: j.running && L.hwm ? t('пик {0} МБ', (L.hwm / 1024).toFixed(1).replace('.', LANG === 'en' ? '.' : ',')) : t('служба не работает'), on: ''});
+  tiles.push({icon: 'status', title: 'Пакеты', value: j.running ? fmtShort(L.packets) : '—',
+    sub: L.drops > 0 ? t('сброшено ядром: {0}', fmtShort(L.drops)) : t('прошло через nfqws2'), on: '', tone: L.drops > 0 ? 'warn' : ''});
+  setHTML('live-tiles', tiles.map(smartTile).join(''), false);
 }
 function strategyItem(s){
   const sel = s.name === pendingStrategy;
@@ -126,6 +190,21 @@ function renderStrategyList(animate){
    правка — для тех, кто знает про удержание (подсказка — над списком). */
 function strategyMenu(row){
   const name = row.querySelector('input.radio').value;
+  // умный режим живёт только в этом модуле (свой lua, выученное в файлах
+  // модуля): ни правка, ни «поделиться» ему не нужны — у него кнопка «Статистика»
+  if(name === 'smart') return;
+  // импорт — ещё переименовать и удалить
+  if(/^imp:/.test(name)){
+    const n = name.slice(4);
+    openMenu(row, [
+      {label: t('Открыть'), icon: 'edit', onClick: () => { closeSheet(); openImport(n); }},
+      {label: t('Поделиться'), icon: 'share', onClick: () => shareStrategy(name)},
+      {label: t('Переименовать'), icon: 'tune', onClick: () => renameImport(n)},
+      '-',
+      {label: t('Удалить'), icon: 'trash', onClick: () => delImport(n)}
+    ]);
+    return;
+  }
   openMenu(row, [
     {label: t('Изменить'), icon: 'edit', onClick: () => {
       if(name === 'default'){ closeSheet(); navigate('config'); toast(t('Стандартная стратегия — это nfqws2.conf во вкладке «Конфиг»')); }
@@ -155,7 +234,8 @@ onLongPress($('sub'), '[data-go]', el => openFrom(el.dataset.go));
 async function openStrategySheet(){
   pendingStrategy = currentStrategy;
   renderStrategyList(false);
-  $('strategy-apply').innerHTML = icon('check', 's18') + esc(S.running ? t('Применить и перезапустить') : t('Применить'));
+  // всегда «Применить»: у работающей службы перезапуск — по этой же кнопке
+  $('strategy-apply').innerHTML = icon('check', 's18') + esc(t('Применить'));
   openSheet('strategy-sheet');
   const list = $('strategy-list'), sel = list.querySelector('.selected');
   if(sel) list.scrollTop = sel.offsetTop - list.offsetTop - (list.clientHeight - sel.offsetHeight) / 2;
@@ -176,10 +256,12 @@ async function applyStrategy(val){
   if(r.code){ toast(errText(r, 'Не удалось применить стратегию')); return; }
   currentStrategy = val;
   renderStrategyRow();
+  // «Обход» показывает новую стратегию сразу, а не после перезапуска:
+  // карточка — из того, что известно, остальное — следом из bypass-info
+  if(BYP && !isSmartMode()){ BYP = Object.assign({}, BYP, {strategy: val, modified: 0, stat: {}, meta: {}}); renderBypass(); }
+  if(BYP) confInit();
   if(S.running) await act('restart');
   else { toast(t('Стратегия «{0}» применится при следующем запуске', strategyName(val))); stat(); }
-  // умный режим без выученного в этой сети — предложить обучение
-  if(val === 'smart' && currentPage !== 'smart') smartOffer();
 }
 function editStrategy(name){
   // без пояснения внизу: с клавиатурой оно ехало вверх; что правку можно
@@ -213,10 +295,10 @@ const SW = [
 // Меняют аргументы nfqws2 — служба перезапускается сама, без вопроса
 const RESTART_KEYS = {CALLS_BYPASS: 1};
 const DEV_SW = [
-  ['WATCHDOG', 'Watchdog', 'watchdog'],
   ['META_QUIC_REJECT', 'Отказ QUIC для Instagram', 'meta_quic'],
   ['CALLS_BYPASS', 'Обход звонков (не тестировалось)', 'calls_bypass'],
-  ['DNS_PUSH', 'Push-уведомления через DNS Google', 'dns_push']
+  ['DNS_PUSH', 'Push-уведомления через DNS Google', 'dns_push'],
+  ['WL_PAUSE', 'Отключать при белых списках', 'wl_pause']
 ];
 /* Переключатели разработчика, доступные в этой сборке: DNS_PUSH — только
    при DNS профилях (сборка с dnsproxy) */
@@ -254,7 +336,7 @@ function switchRow(k, label, on){
 }
 function renderParams(j){
   j = j || {};
-  setHTML('sws', SW.map(([k, label, jk]) => switchRow(k, label, j[jk] == 1)).join(''), false);
+  if($('work-sws')) setHTML('work-sws', SW.map(([k, label, jk]) => switchRow(k, label, j[jk] == 1)).join(''), false);
   if($('dev-sws') && devMode){
     const lim = LIMITS.map(([k, label, hint, jk]) =>
       '<div class="list-item two-line clickable state" role="button" tabindex="0" aria-haspopup="dialog"' +
@@ -279,25 +361,23 @@ function renderStatus(){
   if(j.strategy) currentStrategy = j.strategy;
   $('hero-status').className = 'hero' + (j.running ? ' running' : (paused ? ' paused' : ''));
   heroIcon(j.running ? 'shield' : (paused ? 'pause' : 'stop'));
-  // На паузе времени работы нет — строка с прочерком только занимала место
-  $('hero-stats').hidden = paused;
-  $('st').textContent = j.running ? t('Служба работает') : (paused ? t('Пауза') : t('Служба остановлена'));
-  // Вместо лимита (он зависит от ядра и виден в «Диагностике») — состояние DNS
-  // Части подписи с data-go открываются долгим нажатием: DNS — экран DNS,
-  // «Домашний Wi‑Fi» — его настройки
-  const part = (text, go) => go ? '<span data-go="' + go + '">' + esc(text) + '</span>' : esc(text);
-  const dns = j.dns_available == 1 ? ' · ' + part(j.dns_enabled != 1 ? t('DNS выключен')
-    : (j.dns_paused === 'vpn' ? t('DNS на паузе при VPN') : j.dns_paused === 'home' ? t('DNS на паузе дома') : t('DNS включён')), 'dns') : '';
-  // Подпись — одна строка; подробности паузы — в title.
+  // Время работы — только у работающей службы
+  $('hero-stats').hidden = !j.running;
+  $('st').textContent = j.running ? t('Работает') : (paused ? t('Пауза') : t('Остановлена'));
+  // «Домашний Wi‑Fi» в подписи открывает его настройки долгим нажатием;
+  // DNS — своя плитка ниже. Подпись — одна строка; подробности паузы — в title.
+  const part = (text, go) => '<span data-go="' + go + '">' + esc(text) + '</span>';
   const sub = paused
-    ? (j.paused === '@vpn' ? esc(t('Включён VPN')) : part(t('Домашний Wi‑Fi'), 'wifi')) + dns
-    : esc(t('Режим') + ' ' + (j.mode || '—')) + dns;
+    ? (j.paused === '@vpn' ? esc(t('Включён VPN')) : j.paused === '@wl' ? esc(t('Белые списки')) : part(t('Домашний Wi‑Fi'), 'wifi'))
+    : esc(t('Режим') + ' ' + (j.mode || '—'));
   setHTML('sub', sub, false);
   $('sub').title = paused ? (j.paused === '@vpn' ? t('Включён VPN. Обход возобновится, когда VPN отключится.')
+    : j.paused === '@wl' ? t('Мобильный оператор включил белые списки: открываются только разрешённые сервисы, обход тут не поможет. Обход возобновится, когда белые списки выключат.')
     : t('Домашний Wi‑Fi «{0}». Обход возобновится, когда телефон уйдёт из этой сети.', j.paused)) : '';
   if(j.running) startUptTimer(j.uptime_ms != null ? j.uptime_ms : (j.uptime || 0) * 1000); else stopUptTimer();
   renderHeroActions();
   renderParams(j);
+  renderLive();
   $('dbg').checked = (j.log_level == 1);
 
   let w = '';
@@ -313,16 +393,16 @@ let statPending = null;
 async function stat(quiet){
   if(statPending) return statPending;
   statPending = (async () => {
-    if(!quiet) busy(true);
+    const bq = quiet ? null : busy(true);
     const raw = await ctl(['json-status']);
-    if(!quiet) busy(false);
+    if(!quiet) busy(false, bq);
     let j = null, a = raw.indexOf('{'), b = raw.lastIndexOf('}');
     if(a >= 0 && b > a){ try { j = JSON.parse(raw.slice(a, b + 1)); } catch(e) {} }
     if(!j){
       if(quiet) return;
       $('hero-status').className = 'hero offline';
       heroIcon('error');
-      $('hero-stats').hidden = false;
+      $('hero-stats').hidden = true;
       $('st').textContent = t('Нет связи с модулем');
       $('sub').textContent = t('Проверьте root-доступ и наличие {0}', CTL);
       stopUptTimer();
@@ -333,6 +413,9 @@ async function stat(quiet){
     S = j;
     renderStatus();
     if(currentPage === 'lists'){ renderMode(); renderListFiles(); }
+    // строки настроек зависят от состояния (DNS профили — только при dnsproxy):
+    // открытые раньше первого ответа, они иначе остались бы без них
+    if(currentPage === 'settings') renderSettings();
   })();
   try { return await statPending; } finally { statPending = null; }
 }
@@ -386,7 +469,7 @@ async function setp(k, v){
   const r = await withBusy(['set', k, String(v)]);
   // не сохранилось — S прежний, разметка та же, и setHTML не вернул бы
   // переключатель на место: сбрасываем его кэш
-  if(r.code) ['sws', 'dev-sws'].forEach(id => { const el = $(id); if(el) el._html = ''; });
+  if(r.code) ['work-sws', 'dev-sws'].forEach(id => { const el = $(id); if(el) el._html = ''; });
   if(!r.code && RESTART_KEYS[k] && S.running){
     const rr = await withBusy(['restart'], 60000);
     toast(rr.code ? errText(rr, 'Не удалось перезапустить службу') : t('Сохранено, служба перезапущена'));

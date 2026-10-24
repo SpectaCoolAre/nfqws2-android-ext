@@ -28,16 +28,12 @@ function settingsRow(o){
 function renderSettings(){
   const homeN = S.home_wifi == 1 ? t('Включено') : t('Выключено');
   const groups = [
-    ['Работа', [
-      {icon: 'home', title: 'Отключать на Wi‑Fi', sub: t('Пауза обхода в домашних сетях') + ' · ' + homeN, on: "navigate('wifi')", chevron: true},
-      {icon: 'shield', title: 'Отключать при VPN', sub: t('Пауза обхода, пока включён VPN'), sw: true, checked: S.vpn_pause == 1, on: 'toggleVpnPause(this.checked)'}
-    ]],
     ['Инструменты', (S.dns_available == 1 ? [
       // только если в модуле есть dnsproxy
       {icon: 'dns', title: 'DNS профили', sub: t('Свои DoH, DoT и DNS-серверы для выбранных доменов'), on: "navigate('dns')", chevron: true, long: 'dns'}
     ] : []).concat([
-      {icon: 'auto', title: 'Умный режим', sub: S.smart == 1 ? t('Включён · сам подбирает обход для каждого сайта и сети') : t('Сам подбирает обход для каждого сайта и сети'), on: "navigate('smart')", chevron: true},
       {icon: 'edit', title: 'Редактор hosts', sub: t('Обход ограничений и блокировка рекламы — без перезагрузки'), on: "navigate('hosts')", chevron: true},
+      {icon: 'tune', title: 'Работа модуля', sub: t('Паузы на Wi‑Fi и при VPN, автозапуск, IPv6, QUIC, точка доступа') + ' · ' + homeN, on: "navigate('work')", chevron: true},
       {icon: 'apps', title: 'Фильтр приложений', sub: t('Обход только для выбранных приложений или для всех, кроме них'), on: "navigate('apps')", chevron: true},
       {icon: 'test', title: 'Проверка доступности', sub: t('Открывает адреса из probe_hosts.list через обход'), on: "navigate('test')", chevron: true},
       {icon: 'medical', title: 'Диагностика', sub: t('Ядро, правила iptables и аргументы запуска'), on: "navigate('diag')", chevron: true}
@@ -250,15 +246,14 @@ async function createBackup(){
   const dir = SAVE_DIR_DEFAULT;
   const ui = {};
   UI_KEYS.forEach(k => { const v = store.get(k); if(v != null) ui[k] = v; });
-  const r = await withBusy(['backup-create', b64(JSON.stringify(ui))], 60000);
+  const r = await withBusy(window.ksu ? ['backup-create', b64(JSON.stringify(ui)), 'path'] : ['backup-create', b64(JSON.stringify(ui))], 60000);
   if(r.code){ toast(errText(r, 'Не удалось создать копию')); return; }
   const parts = r.out.trim().split('\n')[0].split('\t');
   const filename = parts[0] || ('nfqws2-backup-' + Date.now() + '.tar');
   const filePath = parts[1] || '';
   const b64Data = parts[2] || '';
-  if(b64Data){
-    const blob = b64toBlob(b64Data, 'application/x-tar');
-    await exportBlobFile(blob, filename, 'application/x-tar', filePath, dir);
+  if(b64Data || (window.ksu && filePath)){
+    await exportBlobFile(b64Data ? b64toBlob(b64Data, 'application/x-tar') : null, filename, 'application/x-tar', filePath, dir);
   } else {
     toast(t('Копия сохранена: {0}', filename));
   }
@@ -330,12 +325,43 @@ async function restoreBackup(name){
   toast(t('Копия восстановлена'));
 }
 
+/* ══ Работа модуля ═══════════════════════════════════════════════════════
+   Когда обход работает и что он обрабатывает: паузы (домашний Wi‑Fi — своя
+   строка: нажатие — его настройки, тумблер справа — вкл/выкл, как в
+   настройках Android), автозапуск, IPv6, QUIC, точка доступа */
+function renderWork(){
+  if(!$('work-body')) return;
+  const j = S || {}, on = j.home_wifi == 1;
+  setHTML('work-body',
+    '<h2 class="subhead">' + esc(t('Пауза обхода')) + '</h2><div class="list">' +
+      '<div class="list-item two-line split-sw">' +
+        '<div class="split-main clickable state" role="button" tabindex="0" onclick="navigate(\'wifi\')">' +
+          '<span class="li-icon">' + icon('home', 's24') + '</span>' +
+          '<span class="li-text"><span class="li-primary">' + esc(t('Отключать на Wi‑Fi')) + '</span>' +
+            '<span class="li-secondary">' + esc(t('Пауза обхода в домашних сетях')) + '</span></span>' +
+        '</div>' +
+        '<span class="split-div" aria-hidden="true"></span>' +
+        '<label class="split-sw-box"><input type="checkbox" class="switch" role="switch" id="work-wifi" aria-label="' + esc(t('Отключать на Wi‑Fi')) + '"' +
+          (on ? ' checked' : '') + ' onchange="workHomeWifi(this.checked)"></label>' +
+      '</div>' +
+      settingsRow({icon: 'shield', title: 'Отключать при VPN', sub: t('Пауза обхода, пока включён VPN'), sw: true, checked: j.vpn_pause == 1, on: 'toggleVpnPause(this.checked)'}) +
+    '</div>' +
+    '<h2 class="subhead">' + esc(t('Запуск и трафик')) + '</h2>' +
+    '<div class="list" id="work-sws">' + SW.map(([k, label, jk]) => switchRow(k, label, j[jk] == 1)).join('') + '</div>', false);
+}
+async function workHomeWifi(on){
+  $('wifi-toggle').checked = on;
+  await setHomeWifi(on);
+  renderWork();
+}
 async function toggleVpnPause(on){
   const r = await withBusy(['set', 'VPN_PAUSE', on ? '1' : '0'], 40000);
   // не сохранилось — та же разметка, и setHTML её не перерисовал бы: сброс кэша
   if(r.code){ toast(errText(r, 'Не удалось сохранить')); $('settings-body')._html = ''; }
   else { S.vpn_pause = on ? 1 : 0; toast(on ? t('Обход встанет на паузу, пока включён VPN') : t('Сохранено')); stat(); }
+  if(r.code && $('work-body')) $('work-body')._html = '';
   renderSettings();
+  renderWork();
 }
 
 /* ══ Что нового ══════════════════════════════════════════════════════════

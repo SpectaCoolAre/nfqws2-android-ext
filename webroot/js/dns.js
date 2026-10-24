@@ -167,6 +167,20 @@ async function dnsInit(){
   if(ok) renderDns();
   await stat(true);
   renderDnsDoh();
+  dnsPollArm();
+}
+/* Пока экран DNS открыт — состояние раз в 3 секунды само (кнопки «Обновить»
+   больше нет). Не трогает экран, пока выбирают профили или открыт лист */
+let dnsPollT = 0;
+function dnsPollArm(){
+  clearTimeout(dnsPollT);
+  dnsPollT = setTimeout(async () => {
+    if(currentPage !== 'dns') return;
+    if(!document.hidden && !dnsSel && !openSheetId && !openMenuEntry && !$('dialog-wrap').classList.contains('open')){
+      if(await loadDnsState() && currentPage === 'dns' && !dnsSel) renderDns();
+    }
+    dnsPollArm();
+  }, 3000);
 }
 
 /* Обход блокировки DoT/DoH — настройка службы обхода, а не dnsproxy: работает
@@ -263,8 +277,7 @@ function renderDns(){
   setHTML('dns-general',
     settingsRow({icon: 'globe', title: 'DNS по умолчанию', sub: dnsDefaultLabel() + ' · ' + t('для доменов вне профилей'),
       on: 'pickDnsDefault(this)', menu: true}) +
-    (dnsLoaded && on ? dnsStateRow() : '') +
-    settingsRow({icon: 'logs', title: 'Журнал DNS', sub: t('Запуски, перезапуски и ошибки dnsproxy'), on: 'openDnsLog()'}),
+    (dnsLoaded && on ? dnsStateRow() : ''),
     false);
   const max = dnsMax('profiles', 32);
   $('dns-count').textContent = dnsSt.profiles.length ? dnsSt.profiles.length + ' / ' + max : '';

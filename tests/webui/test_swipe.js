@@ -146,7 +146,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   }
   await page.click('.nav-dest[data-page="control"]'); await page.waitForTimeout(600);
   await touch(line(100, 300, 330, 300, 12));
-  eq('control', await cur(), 'the first tab has nothing on the left: an elastic bounce');
+  eq('control', await cur(), 'the first tab has nothing on the left: the swipe does nothing');
   let midR = '';
   await touch(line(100, 300, 300, 302, 10), { mid: async () => { midR = await navGeo(); } });
   eq(NAV0, midR, 'dragging right (the page overhangs the right edge) does not widen the document or shift the navigation bar');

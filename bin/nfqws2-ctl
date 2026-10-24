@@ -141,7 +141,78 @@ set_strategy() {
   mv -f "$tmp" "$CONFFILE"
   chmod 0644 "$CONFFILE"
   echo "$name" > "$ACTIVE_FILE"
+  # к какой стратегии вернуться из умного режима
+  [ "$name" = smart ] || echo "$name" > "$LAST_STRATEGY_FILE"
   echo "Применена стратегия: ${name#imp:}"
+}
+
+# Живые данные для «Состояния» -> JSON: память nfqws2 (сейчас и пик), сколько
+# пакетов прошло через очередь и сколько отброшено, сеть, перехваченные DNS-
+# запросы и удачные/ошибочные соединения режима (стратегии — state/strat_stat,
+# умный режим — выученное в текущей сети). Дёшево: читается раз в несколько секунд
+cmd_live_status() {
+  local pid rss=0 hwm=0 pk=0 dr=0 net label="" hits=-1 ok=0 err=0 key f cur
+  if is_running; then
+    pid=$(cat "$PIDFILE" 2>/dev/null)
+    rss=$(awk '/^VmRSS:/ { print $2 }' "/proc/$pid/status" 2>/dev/null)
+    hwm=$(awk '/^VmHWM:/ { print $2 }' "/proc/$pid/status" 2>/dev/null)
+    set -- $(awk -v q="$NFQUEUE_NUM" '$1 == q { print $8, $6 + $7 }' /proc/net/netfilter/nfnetlink_queue 2>/dev/null)
+    pk=${1:-0}; dr=${2:-0}
+  fi
+  net=$(cat "$SMART_NET_FILE" 2>/dev/null)
+  [ -n "$net" ] && label=$(awk -F'\t' -v k="$net" '$1 == k { print $2; exit }' "$SMART_DIR/nets.tsv" 2>/dev/null)
+  if command -v dns_enabled >/dev/null 2>&1 && dns_enabled; then hits=$(dns_hits); fi
+  cur=$(get_current_strategy)
+  # режим — как во вкладке «Обход»: по выбранной стратегии
+  if [ "$cur" = smart ]; then
+    f="$SMART_DIR/$net.tsv"
+    smart_valid_net "$net" && [ -f "$f" ] && set -- $(awk -F'\t' '
+      function sum(s,   a, k, i, p, r) { r = 0; k = split(s, a, ","); for (i = 1; i <= k; i++) { split(a[i], p, ":"); r += p[2] } return r }
+      !/^#/ { o += sum($4); e += sum($5) } END { printf "%d %d", o + 0.5, e + 0.5 }' "$f") && { ok=$1; err=$2; }
+  else
+    key=$(printf '%s' "$cur" | sed 's/[^A-Za-z0-9._-]/_/g')
+    [ -f "$STATE_DIR/strat_stat" ] && set -- $(awk -F'\t' -v k="$key" '$1 == k { print $2, $3; exit }' "$STATE_DIR/strat_stat") && { ok=${1:-0}; err=${2:-0}; }
+  fi
+  printf '{"rss":%d,"hwm":%d,"packets":%d,"drops":%d,"net":"%s","net_label":"%s","dns_hits":%d,"conn":{"ok":%d,"err":%d}}\n' \
+    "${rss:-0}" "${hwm:-0}" "${pk:-0}" "${dr:-0}" "$(json_str "$net")" "$(json_str "$label")" "$hits" "${ok:-0}" "${err:-0}"
+}
+# Стратегия режима «Стратегии»: последняя выбранная не умная, иначе та, что
+# ставит первая установка
+last_strategy() {
+  local s
+  s=$(head -n 1 "$LAST_STRATEGY_FILE" 2>/dev/null | tr -d '\r\n')
+  if [ -z "$s" ]; then s=$(get_current_strategy); [ "$s" = smart ] && s=""; fi
+  if [ -n "$s" ] && { [ "$s" = default ] || strategy_file "$s" >/dev/null; }; then printf '%s\n' "$s"
+  else printf '%s\n' "$FIRST_STRATEGY"; fi
+}
+
+# Вкладка «Обход» в режиме стратегий -> JSON: стратегия, к какой вернуться из
+# умного режима, правлен ли конфиг, импорты, статистика соединений (lua
+# smartstat, state/strat_stat) и откуда стратегия: автор, репозиторий и дата
+# изменения в источнике (strategies/meta.tsv — из модуля, правка стратегии её
+# не трогает); у своей правки — ещё и дата правки
+cmd_bypass_info() {
+  local cur first=1 n key ok=0 err=0 since=0 author="" repo="" date="" edited="" f
+  cur=$(get_current_strategy)
+  key=$(printf '%s' "$cur" | sed 's/[^A-Za-z0-9._-]/_/g')
+  if [ -f "$STATE_DIR/strat_stat" ]; then
+    set -- $(awk -F'\t' -v k="$key" '$1 == k { print $2, $3, $4; exit }' "$STATE_DIR/strat_stat")
+    ok=${1:-0}; err=${2:-0}; since=${3:-0}
+  fi
+  case "$cur" in
+    imp:*) author=$(M 'импорт' 'import'); f="$IMPORTS_DIR/${cur#imp:}.conf"; [ -f "$f" ] && date=$(date -r "$f" '+%Y-%m-%d' 2>/dev/null) ;;
+    *) set -- $(awk -F'\t' -v k="$cur" '!/^#/ && $1 == k { print $2, $3, $4; exit }' "$STRATEGIES_DIR/meta.tsv" 2>/dev/null)
+       author=$1; repo=$2; date=$3
+       [ -f "$USER_STRATEGIES_DIR/$cur.conf" ] && edited=$(date -r "$USER_STRATEGIES_DIR/$cur.conf" '+%Y-%m-%d' 2>/dev/null) ;;
+  esac
+  printf '{"strategy":"%s","last":"%s","modified":%s,"stat":{"ok":%d,"err":%d,"since":%d},"meta":{"author":"%s","repo":"%s","date":"%s","edited":"%s"},"imports":[' \
+    "$(json_str "$cur")" "$(json_str "$(last_strategy)")" "$(conf_modified)" "$ok" "$err" "$since" \
+    "$(json_str "$author")" "$(json_str "$repo")" "$(json_str "$date")" "$(json_str "$edited")"
+  for n in $(list_imports); do
+    [ "$first" = 1 ] || printf ','; first=0
+    printf '"%s"' "$(json_str "$n")"
+  done
+  printf ']}\n'
 }
 
 # 1 — действующий конфиг отличается от того, что дала бы повторная установка
@@ -221,9 +292,9 @@ cmd_json_status() {
   [ -f "$HOME_OVERRIDE_FILE" ] && IFS= read -r override < "$HOME_OVERRIDE_FILE"
   cat <<JSON
 {"running":$run,"pid":"$pid","uptime":$uptime,"uptime_ms":$upms,"strategy":"$(json_str "$cur_strat")","version":"$(json_str "$ver")","mode":"$(json_str "$(current_mode)")",
-"pkt_limit_out":$PKT_LIMIT_OUT,"pkt_limit_in":$PKT_LIMIT_IN,"block_quic":$BLOCK_QUIC,"app_mode":"$(json_str "$APP_MODE")","autostart":$AUTOSTART,"watchdog":$WATCHDOG,
+"pkt_limit_out":$PKT_LIMIT_OUT,"pkt_limit_in":$PKT_LIMIT_IN,"block_quic":$BLOCK_QUIC,"app_mode":"$(json_str "$APP_MODE")","autostart":$AUTOSTART,
 "ipv6":$IPV6_ENABLED,"log_level":$LOG_LEVEL,"qdrop":$qdrop,"queue":$NFQUEUE_NUM,"app_uids":$appn,
-"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":$DOH_BYPASS,"meta_quic":$META_QUIC_REJECT,"calls_bypass":$CALLS_BYPASS,"dns_push":$DNS_PUSH,"extra_rkn":$EXTRA_RKN,"extra_flowseal":$EXTRA_FLOWSEAL,"smart":$(smart_active && echo 1 || echo 0),"dns_paused":"$dnspause","dns_home_pause":$([ -f "$DNS_HOME_FILE" ] && echo 1 || echo 0),"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")",
+"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":$DOH_BYPASS,"meta_quic":$META_QUIC_REJECT,"calls_bypass":$CALLS_BYPASS,"dns_push":$DNS_PUSH,"extra_rkn":$EXTRA_RKN,"extra_flowseal":$EXTRA_FLOWSEAL,"wl_pause":$WL_PAUSE,"dns_paused":"$dnspause","dns_home_pause":$([ -f "$DNS_HOME_FILE" ] && echo 1 || echo 0),"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")",
 "counts":{"user":$cnt_user,"auto":$cnt_auto,"exclude":$cnt_excl,"ipset":$cnt_ipset,"ipset_exclude":$cnt_ipset_excl,"apps":$cnt_apps,"rkn":$cnt_rkn,"flowseal":$cnt_flowseal}}
 JSON
 }
@@ -292,7 +363,12 @@ cmd_doctor() {
     est=$(sysctl -n net.netfilter.nf_conntrack_tcp_timeout_established 2>/dev/null)
     cnt=$(sysctl -n net.netfilter.nf_conntrack_count 2>/dev/null)
     mx=$(sysctl -n net.netfilter.nf_conntrack_max 2>/dev/null)
-    row ok conntrack "timeout_established=${est:-?}$(M с s), $(M записей entries) ${cnt:-?}/${mx:-?}"
+    # меньше получаса — соединение push-уведомлений (сигнал раз в 28 минут) рвётся
+    if [ -n "$est" ] && [ "$est" -lt 1800 ] 2>/dev/null; then
+      row warn conntrack "timeout_established=${est}$(M с s) — $(M 'мало: push-уведомления будут приходить пачками' 'too short: push notifications will arrive in bursts')"
+    else
+      row ok conntrack "timeout_established=${est:-?}$(M с s), $(M записей entries) ${cnt:-?}/${mx:-?}"
+    fi
   else
     row warn conntrack "$(M 'нет nf_conntrack sysctl' 'no nf_conntrack sysctl')"
   fi
@@ -339,6 +415,9 @@ cmd_doctor() {
     row info cgroup "${_cg:-$(M недоступно unavailable)}"
   elif [ "$(cat "$HOME_PAUSED_FILE" 2>/dev/null)" = "@vpn" ]; then
     row info process "$(M 'пауза: включён VPN' 'paused: VPN is on')"
+    row info "$(M 'ОЗУ' 'RAM')" "$(M 'пауза' 'paused')"
+  elif [ "$(cat "$HOME_PAUSED_FILE" 2>/dev/null)" = "@wl" ]; then
+    row info process "$(M 'пауза: у оператора белые списки' 'paused: the operator turned on white lists')"
     row info "$(M 'ОЗУ' 'RAM')" "$(M 'пауза' 'paused')"
   elif [ -f "$HOME_PAUSED_FILE" ]; then
     row info process "$(M "пауза: домашний Wi-Fi «$(cat "$HOME_PAUSED_FILE")»" "paused: home Wi-Fi “$(cat "$HOME_PAUSED_FILE")”")"
@@ -458,7 +537,7 @@ cmd_get_logs() { # <источник> <строк> [errors]
   [ "$1" = "summary" ] && { cmd_log_summary; return; }
   case "$1" in
     nfqws) f="$NFQWS_LOG" ;; debug) f="$LOG_DIR/nfqws2-debug.log" ;; auto) f="$LOG_DIR/auto.log" ;;
-    args) f="$ARGS_FILE" ;; dns) f="$LOG_DIR/dns.log" ;; *) f="$SERVICE_LOG" ;;
+    args) f="$ARGS_FILE" ;; dns) f="$LOG_DIR/dns.log" ;; smart) f="$LOG_DIR/smart.log" ;; *) f="$SERVICE_LOG" ;;
   esac
   if [ ! -s "$f" ]; then echo "$(M '(пусто)' '(empty)')"; return 0; fi
   if [ "$3" = "errors" ]; then
@@ -529,12 +608,14 @@ cmd_log_summary() {
   fi
 }
 
-cmd_export_logs() {
+cmd_export_logs() { # [path — без содержимого архива, см. cmd_backup_create]
   local tmp="$STATE_DIR/export_logs.$$" name="nfqws2-logs-$(date '+%Y%m%d-%H%M%S').tar"
   rm -rf "$tmp"; mkdir -p "$tmp" 2>/dev/null || return 1
   cp -f "$LOG_DIR"/* "$tmp"/ 2>/dev/null
   cp -f "$ARGS_FILE" "$tmp/last.args" 2>/dev/null
   cmd_doctor > "$tmp/doctor.txt" 2>&1
+  # выученное умным режимом: по нему видно, какие варианты где работают
+  [ -d "$SMART_DIR" ] && { mkdir -p "$tmp/smart"; cp -f "$SMART_DIR"/* "$tmp/smart"/ 2>/dev/null; }
   iptables-save -t mangle 2>/dev/null | grep -i nfqws > "$tmp/iptables-nfqws.txt"
   # Счётчики пакетов по правилам и состояние очереди: по ним видно, доходит ли
   # трафик до правил и до nfqws2, даже когда журнал самого nfqws2 молчит.
@@ -550,12 +631,14 @@ cmd_export_logs() {
   mkdir -p "$BACKUP_DIR" 2>/dev/null
   local out_file="$BACKUP_DIR/$name"
   if (cd "$tmp" && tar_cmd -cf "$out_file" .) 2>/dev/null; then
-    printf '%s\t%s\t' "$name" "$out_file"; b64e < "$out_file" | tr -d '\n'; echo
+    printf '%s\t%s\t' "$name" "$out_file"
+    [ "$1" = path ] || b64e < "$out_file" | tr -d '\n'
+    echo
   else
     rm -f "$out_file"   # недописанный архив выглядел бы как настоящий
     local d="$BACKUP_DIR/nfqws2-logs"
     mkdir -p "$d" 2>/dev/null
-    cp -f "$tmp"/* "$d"/ 2>/dev/null
+    cp -Rf "$tmp"/* "$d"/ 2>/dev/null
     echo "Логи сохранены в $d"
   fi
   rm -rf "$tmp"
@@ -631,7 +714,7 @@ BACKUP_LISTS="user exclude ipset ipset_exclude auto probe_hosts tcp16 probe_dns 
 tar_cmd() {
   if command -v tar >/dev/null 2>&1; then tar "$@"; else busybox tar "$@"; fi
 }
-cmd_backup_create() { # [ui.json в base64]
+cmd_backup_create() { # [ui.json в base64] [path — без содержимого архива]
   local tmp="$STATE_DIR/backup.$$" name f
   name="nfqws2-backup-$(date '+%Y%m%d-%H%M%S').tar"
   mkdir -p "$BACKUP_DIR" 2>/dev/null || { echo "Нет доступа к $BACKUP_DIR" >&2; return 1; }
@@ -655,7 +738,11 @@ cmd_backup_create() { # [ui.json в base64]
   rm -rf "$tmp"
   # base64 архива — потоком: в переменной и аргументом printf он упирался в
   # предел длины аргумента («Argument list too long»)
-  printf '%s\t%s\t' "$name" "$BACKUP_DIR/$name"; b64e < "$BACKUP_DIR/$name" | tr -d '\n'; echo
+  # WebUI в KernelSU берёт файл по пути (path): base64 ему не нужен, а большой
+  # вывод мост KernelSU отдаёт пустым
+  printf '%s\t%s\t' "$name" "$BACKUP_DIR/$name"
+  [ "$2" = path ] || b64e < "$BACKUP_DIR/$name" | tr -d '\n'
+  echo
 }
 cmd_backup_list() {
   backup_migrate
@@ -748,9 +835,15 @@ probe_attempt() { # <вид> <путь к утилите> <host[/путь]>  -> 
   command -v timeout >/dev/null 2>&1 && to="timeout 12"
   t0=$(uptime_cs)
   if [ "$kind" = "curl" ]; then
-    # -o /dev/null: тело страницы не нужно, хватает кода и адреса переадресации
-    out=$($to "$bin" -s -k -L --max-redirs 3 -m 10 --connect-timeout 6 -o /dev/null -A 'Mozilla/5.0' \
-      -w "\nREDIRECT_URL:%{redirect_url}\n" "$url" 2>&1); rc=$?
+    # -o /dev/null: тело страницы не нужно, хватает кода и адреса переадресации.
+    # Куки — как у браузера, на время одной попытки: сайты с защитой от ботов
+    # (mi.com, currenttime.tv) ставят куку переадресацией на самих себя, и без
+    # неё curl ходил по кругу. Файл свой у каждой попытки — они идут параллельно
+    local jar
+    jar=$(mktemp "$STATE_DIR/probe.ck.XXXXXX" 2>/dev/null) || jar="$STATE_DIR/probe.ck.$$.$(uptime_cs)"
+    out=$($to "$bin" -s -k -L --max-redirs 5 -m 10 --connect-timeout 6 -o /dev/null -A 'Mozilla/5.0' \
+      -b "$jar" -c "$jar" -w "\nREDIRECT_URL:%{redirect_url}\n" "$url" 2>&1); rc=$?
+    rm -f "$jar"
   else
     out=$($to "$bin" wget -q -T 6 -O /dev/null -U 'Mozilla/5.0' --no-check-certificate "$url" 2>&1); rc=$?
   fi
@@ -763,6 +856,9 @@ probe_attempt() { # <вид> <путь к утилите> <host[/путь]>  -> 
       return ;;
   esac
   if [ "$rc" = 0 ]; then echo "ok $(( (t1 - t0) * 10 ))"; return; fi
+  # переадресаций больше пяти (сайт так и не принял куку) — но сервер отвечал
+  # по HTTP раз за разом, значит, DPI соединение пропустил: сайт доступен
+  [ "$kind:$rc" = "curl:47" ] && { echo "ok $(( (t1 - t0) * 10 ))"; return; }
   case "$kind:$rc:$out" in
     wget:*"server returned error"*) echo "ok $(( (t1 - t0) * 10 ))" ;;
     curl:35:*)
@@ -1159,24 +1255,22 @@ reload_after_change() {
 # Выученное — в $SMART_DIR/<сеть>.tsv (пишет lua/zapret-smart.lua), подписи
 # сетей — в nets.tsv, имена вариантов — в шапке strategies/smart.conf (#@slot N имя)
 smart_valid_net() { case "$1" in ''|*[!a-z0-9-]*) return 1 ;; esac; return 0; }
-smart_train_running() {
-  local p
-  p=$(cat "$SMART_TRAIN_PID" 2>/dev/null)
-  [ -n "$p" ] && kill -0 "$p" 2>/dev/null
-}
-# Файл сети (формат v2): slot host cur ok err cool seen; ok и err — «вариант:вес»
-# через запятую, вес события со временем убывает
-cmd_smart_status() {
-  local act=0 net off=0 tr=0
+# Файл сети (формат v4, как v3): slot host cur ok err cool seen flags; ok и err —
+# «вариант:вес» через запятую, вес события со временем убывает; flags «e» —
+# сайт хоть раз открылся. v2 — то же без flags
+cmd_smart_status() { # [сеть — чью статистику показать; без неё — текущей]
+  local act=0 net off=0 view
   smart_active && act=1
   net=$(cat "$SMART_NET_FILE" 2>/dev/null)
   [ "$net" = offline ] && off=1
-  smart_train_running && tr=1
-  printf '{"active":%s,"running":%s,"net":"%s","offline":%s,"training":%s,' \
-    "$act" "$(is_running && echo 1 || echo 0)" "$(json_str "$net")" "$off" "$tr"
-  # ход обучения: строки ключ=значение
-  printf '"train":{'
-  [ -f "$SMART_TRAIN_FILE" ] && awk -F= 'NF >= 2 { k = $1; sub(/^[^=]*=/, ""); gsub(/["\\]/, ""); printf "%s\"%s\":\"%s\"", (n++ ? "," : ""), k, $0 }' "$SMART_TRAIN_FILE"
+  view="$net"
+  smart_valid_net "$1" && view="$1"
+  # paused — служба на паузе (дом, VPN, белые списки): обучение ждёт её
+  printf '{"active":%s,"running":%s,"paused":%s,"net":"%s","view":"%s","offline":%s,"learn":%s,' \
+    "$act" "$(is_running && echo 1 || echo 0)" "$([ -f "$HOME_PAUSED_FILE" ] && echo 1 || echo 0)" "$(json_str "$net")" "$(json_str "$view")" "$off" "${SMART_LEARN:-1}"
+  # фоновое обучение: сколько сайтов открыто и какой последний
+  printf '"bg":{'
+  [ -f "$SMART_LEARN_FILE" ] && awk -F= 'NF >= 2 { k = $1; sub(/^[^=]*=/, ""); gsub(/["\\]/, ""); printf "%s\"%s\":\"%s\"", (n++ ? "," : ""), k, $0 }' "$SMART_LEARN_FILE"
   printf '},"nets":['
   # сети: подпись, сколько сайтов выучено (есть удачи), удачи и ошибки в сумме
   local first=1 id label f
@@ -1187,7 +1281,7 @@ cmd_smart_status() {
       [ "$first" = 1 ] || printf ','
       first=0
       printf '{"id":"%s","label":"%s",%s,"current":%s}' "$id" "$(json_str "$label")" \
-        "$( { [ -f "$f" ] && head -n 1 "$f" | grep -q '^#v2' && cat "$f"; } | awk -F'\t' '
+        "$( { [ -f "$f" ] && head -n 1 "$f" | grep -q '^#v[234]' && cat "$f"; } | awk -F'\t' '
           function sum(s,   a, k, i, p, r) { r = 0; k = split(s, a, ","); for (i = 1; i <= k; i++) { split(a[i], p, ":"); r += p[2] } return r }
           !/^#/ { o = sum($4); e = sum($5); if (o >= 0.5) n++; ok += o; err += e }
           END { printf "\"sites\":%d,\"ok\":%d,\"err\":%d", n, ok + 0.5, err + 0.5 }')" \
@@ -1195,24 +1289,43 @@ cmd_smart_status() {
     done < "$SMART_DIR/nets.tsv"
   fi
   printf '],'
-  # варианты текущей сети (удачи, ошибки, сколько сайтов на варианте) и
-  # сайты, у которых на текущем варианте ошибок больше, чем удач
-  f="$SMART_DIR/$net.tsv"
-  if smart_valid_net "$net" && [ -f "$f" ] && head -n 1 "$f" | grep -q '^#v2'; then
+  # варианты сети (удачи, ошибки, сколько сайтов на варианте) и сайты, у
+  # которых на текущем варианте ошибок больше, чем удач
+  f="$SMART_DIR/$view.tsv"
+  if smart_valid_net "$view" && [ -f "$f" ] && head -n 1 "$f" | grep -q '^#v[234]'; then
+    # до v4 «не похоже на блокировку» ставилось по ложным ошибкам — не показываем
+    local v3=0
+    head -n 1 "$f" | grep -q '^#v4' && v3=1
     sed -n 's/^#@\([a-z]*\) \([0-9]*\) \(.*\)$/N\t\1\t\2\t\3/p' "$STRATEGIES_DIR/smart.conf" 2>/dev/null |
-      cat - "$f" | awk -F'\t' -v now="$(date +%s)" '
+      cat - "$f" | awk -F'\t' -v now="$(date +%s)" -v v3="$v3" '
         function get(s, v,   a, k, i, p) { k = split(s, a, ","); for (i = 1; i <= k; i++) { split(a[i], p, ":"); if (p[1] == v) return p[2] } return 0 }
         function add(s, arr, slot,   a, k, i, p) { k = split(s, a, ","); for (i = 1; i <= k; i++) { split(a[i], p, ":"); arr[slot "|" p[1]] += p[2]; seen[slot "|" p[1]] = 1 } }
         function q(s) { gsub(/["\\]/, "", s); return s }
+        # имя варианта: tls_cf, tls_16… берут имена у tls; подстройка — имя
+        # основы и что в ней изменено
+        function bname(slot, v,   b) {
+          if ((slot "|" v) in name) return name[slot "|" v]
+          b = slot; sub(/_.*/, "", b)
+          return name[b "|" v]
+        }
+        function nm(slot, v,   c) {
+          if (!((slot "|" v) in mb)) return bname(slot, v)
+          c = mc[slot "|" v]; gsub(/[0-9]+\./, "", c); gsub(/;/, ", ", c)
+          return bname(slot, mb[slot "|" v]) " · подстройка: " c
+        }
         $1 == "N" { name[$2 "|" $3] = $4; next }
+        $1 == "#m" { mb[$2 "|" $3] = $4; mc[$2 "|" $3] = $5; next }
         /^#/ { next }
+        function sum(s,   a, k, i, p, r) { r = 0; k = split(s, a, ","); for (i = 1; i <= k; i++) { split(a[i], p, ":"); r += p[2] } return r }
         {
           add($4, ok, $1); add($5, err, $1)
           sites[$1 "|" $3]++; seen[$1 "|" $3] = 1; slots[$1] = 1
           o = get($4, $3); e = get($5, $3)
+          # точность — без сайтов «не похоже на блокировку»: там не DPI
+          if (!(v3 && get($6, 0) + 0 > now + 0)) { aok += sum($4); aerr += sum($5) }
           # «0:время» в столбце остывания — не похоже на блокировку: умный режим
           # такой сайт не трогает, и в «сайты с ошибками» он не идёт
-          if (get($6, 0) + 0 > now + 0) { nq++; qh[nq] = $2 }
+          if (v3 && get($6, 0) + 0 > now + 0) { nq++; qh[nq] = $2 }
           else if (e >= 1 && e > o) { np++; ph[np] = $2; ps[np] = $1; pv[np] = $3; po[np] = o; pe[np] = e }
         }
         END {
@@ -1223,19 +1336,19 @@ cmd_smart_status() {
             nv = 0
             for (key in seen) {
               split(key, z, "|"); if (z[1] != s) continue
-              printf "%s{\"n\":%d,\"name\":\"%s\",\"ok\":%d,\"err\":%d,\"sites\":%d}", (nv++ ? "," : ""), z[2], q(name[key]), ok[key] + 0.5, err[key] + 0.5, sites[key] + 0
+              printf "%s{\"n\":%d,\"name\":\"%s\",\"ok\":%d,\"err\":%d,\"sites\":%d}", (nv++ ? "," : ""), z[2], q(nm(s, z[2])), ok[key] + 0.5, err[key] + 0.5, sites[key] + 0
             }
             printf "]"
           }
           printf "},\"problems\":["
           for (i = 1; i <= np && i <= 30; i++)
-            printf "%s{\"host\":\"%s\",\"slot\":\"%s\",\"n\":%d,\"name\":\"%s\",\"ok\":%d,\"err\":%d}", (i > 1 ? "," : ""), q(ph[i]), ps[i], pv[i], q(name[ps[i] "|" pv[i]]), po[i] + 0.5, pe[i] + 0.5
+            printf "%s{\"host\":\"%s\",\"slot\":\"%s\",\"n\":%d,\"name\":\"%s\",\"ok\":%d,\"err\":%d}", (i > 1 ? "," : ""), q(ph[i]), ps[i], pv[i], q(nm(ps[i], pv[i])), po[i] + 0.5, pe[i] + 0.5
           printf "],\"nodpi\":["
           for (i = 1; i <= nq && i <= 30; i++) printf "%s\"%s\"", (i > 1 ? "," : ""), q(qh[i])
-          printf "]"
+          printf "],\"acc\":{\"ok\":%d,\"err\":%d}", aok + 0.5, aerr + 0.5
         }'
   else
-    printf '"top":{},"problems":[],"nodpi":[]'
+    printf '"top":{},"problems":[],"nodpi":[],"acc":{"ok":0,"err":0}'
   fi
   printf '}\n'
 }
@@ -1252,80 +1365,163 @@ cmd_smart_reset() {
   smart_net_update
   echo OK
 }
-smart_train_state() { # ключ=значение... — ход обучения для WebUI
-  local tmp="$SMART_TRAIN_FILE.tmp"
-  printf '%s\n' "$@" > "$tmp" && mv -f "$tmp" "$SMART_TRAIN_FILE"
+# Сайты сети для экрана умного режима: <сеть> <tls|google|quic|problems|nodpi|all>
+# -> JSON-массив {host, slot, n, name, ok, err, e} — по удачам, до 300
+cmd_smart_sites() {
+  local f="$SMART_DIR/$1.tsv" grp="${2:-all}"
+  smart_valid_net "$1" || { echo "Неверная сеть" >&2; return 1; }
+  case "$grp" in tls|google|quic|problems|nodpi|all) ;; *) echo "tls|google|quic|problems|nodpi|all" >&2; return 1 ;; esac
+  if ! { [ -f "$f" ] && head -n 1 "$f" | grep -q '^#v4'; }; then echo '[]'; return 0; fi
+  sed -n 's/^#@\([a-z_]*\) \([0-9]*\) \(.*\)$/N\t\1\t\2\t\3/p' "$STRATEGIES_DIR/smart.conf" 2>/dev/null |
+    cat - "$f" | awk -F'\t' -v now="$(date +%s)" -v grp="$grp" '
+      function get(s, v,   a, k, i, p) { k = split(s, a, ","); for (i = 1; i <= k; i++) { split(a[i], p, ":"); if (p[1] == v) return p[2] } return 0 }
+      function q(s) { gsub(/["\\]/, "", s); return s }
+      function bname(slot, v,   b) { if ((slot "|" v) in name) return name[slot "|" v]; b = slot; sub(/_.*/, "", b); return name[b "|" v] }
+      function nm(slot, v,   c) {
+        if (!((slot "|" v) in mb)) return bname(slot, v)
+        c = mc[slot "|" v]; gsub(/[0-9]+\./, "", c); gsub(/;/, ", ", c)
+        return bname(slot, mb[slot "|" v]) " · подстройка: " c
+      }
+      $1 == "N" { name[$2 "|" $3] = $4; next }
+      $1 == "#m" { mb[$2 "|" $3] = $4; mc[$2 "|" $3] = $5; next }
+      /^#/ { next }
+      {
+        b = $1; sub(/_.*/, "", b)
+        o = get($4, $3); e = get($5, $3); nd = get($6, 0) + 0 > now + 0
+        if (grp == "nodpi") { if (!nd) next }
+        else if (nd) next
+        else if (grp == "problems") { if (!(e >= 1 && e > o)) next }
+        else if (grp != "all" && b != grp) next
+        printf "%.3f\t{\"host\":\"%s\",\"slot\":\"%s\",\"n\":%d,\"name\":\"%s\",\"ok\":%d,\"err\":%d,\"e\":%d}\n", \
+          (grp == "problems" ? e : o), q($2), $1, $3, q(nm($1, $3)), o + 0.5, e + 0.5, ($8 == "e")
+      }' | sort -t "$(printf '\t')" -k1,1nr | head -n 300 | cut -f2- | awk 'BEGIN { printf "[" } { printf "%s%s", (NR > 1 ? "," : ""), $0 } END { print "]" }'
 }
-# Обучение — DPI-детектор для умного режима: сайты из «Проверки доступности»
-# и smart-train.list по очереди, каждый до удачи или 10 попыток. Сам перебор
-# делает nfqws2 (пока идёт обучение, вариант меняется после первого отказа),
-# здесь — только трафик. Нет сети — ждём её, а не перебираем впустую
-cmd_smart_train_run() {
-  local tool kind bin tmp
-  echo $$ > "$SMART_TRAIN_PID"
-  tmp="$STATE_DIR/smart_train.d"; rm -rf "$tmp"; mkdir -p "$tmp"
-  trap 'rm -f "$SMART_TRAIN_PID" "$STATE_DIR/smart_training"; rm -rf "$tmp"; cleanup_probe_app_rule' EXIT
-  trap 'smart_train_state state=stopped; exit 143' INT TERM
+# Поделиться обучением: файл выученного в сети -> «имя<TAB>путь<TAB>[base64]»
+cmd_smart_export() { # <сеть> [path]
+  local f="$SMART_DIR/$1.tsv" name out
+  smart_valid_net "$1" && [ -f "$f" ] || { echo "$(M 'В этой сети ещё ничего не выучено' 'Nothing learned on this network yet')" >&2; return 1; }
+  mkdir -p "$BACKUP_DIR" 2>/dev/null || { echo "Нет доступа к $BACKUP_DIR" >&2; return 1; }
+  name="nfqws2-smart-$1-$(date '+%Y%m%d-%H%M%S').tsv"; out="$BACKUP_DIR/$name"
+  cp -f "$f" "$out" || return 1
+  printf '%s\t%s\t' "$name" "$out"
+  [ "$2" = path ] || b64e < "$out" | tr -d '\n'
+  echo
+}
+# Чужое обучение — в текущую сеть: сайты, которых здесь ещё нет, с их
+# подстройками (номера подстроек — свои, совпадающие не дублируются). Своё
+# выученное важнее: сайты, что уже есть, не трогаются. Остывание и «не похоже
+# на блокировку» чужой сети не переносятся
+cmd_smart_import_b64() { # <base64 файла> -> число добавленных сайтов
+  local net f tmp src n
+  net=$(cat "$SMART_NET_FILE" 2>/dev/null)
+  smart_valid_net "$net" || { echo "$(M 'Сеть ещё не определена — подключитесь к сети' 'The network is not known yet — connect first')" >&2; return 1; }
+  mkdir -p "$SMART_DIR" "$STATE_DIR" || return 1
+  src="$STATE_DIR/smart_import.$$"; f="$SMART_DIR/$net.tsv"; tmp="$f.imp.$$"
+  b64d "$1" | tr -d '\r' > "$src"
+  head -n 1 "$src" | grep -q '^#v4' || { rm -f "$src"; echo "$(M 'Это не файл обучения умного режима' 'Not a smart mode learning file')" >&2; return 1; }
+  { [ -f "$f" ] && head -n 1 "$f" | grep -q '^#v4'; } || printf '#v4 slot\thost\tcur\tok\terr\tcool\tseen\tflags\n' > "$f"
+  awk -F'\t' -v OFS='\t' -v cnt="$tmp.n" '
+    function ids(slot, s,   a, k, i, p) { k = split(s, a, ","); for (i = 1; i <= k; i++) { split(a[i], p, ":"); if (p[1] + 0 > mx[slot]) mx[slot] = p[1] + 0 } }
+    function rid(slot, v) { if (v + 0 <= 100) return v; return ((slot "|" v) in map) ? map[slot "|" v] : "" }
+    function remap(slot, s,   a, k, i, p, out, x) {
+      k = split(s, a, ","); out = ""
+      for (i = 1; i <= k; i++) { split(a[i], p, ":"); x = rid(slot, p[1]); if (x != "") out = out (out == "" ? "" : ",") x ":" p[2] }
+      return out
+    }
+    FNR == 1 { file++; if (file == 1) print; next }
+    file == 1 {
+      print
+      if ($1 == "#m") { mk[$2 "|" $4 "|" $5] = $3; if ($3 + 0 > mx[$2]) mx[$2] = $3 + 0 }
+      else if ($0 !~ /^#/) { have[$1 "|" $2] = 1; if ($3 + 0 > mx[$1]) mx[$1] = $3 + 0; ids($1, $4); ids($1, $5) }
+      next
+    }
+    $1 == "#m" {
+      k = $2 "|" $4 "|" $5
+      if (!(k in mk)) {
+        if (mx[$2] < 100) mx[$2] = 100
+        mk[k] = ++mx[$2]
+        print "#m", $2, mk[k], $4, $5, $6
+      }
+      map[$2 "|" $3] = mk[k]
+      next
+    }
+    /^#/ || NF < 7 { next }
+    !(($1 "|" $2) in have) {
+      have[$1 "|" $2] = 1
+      c = rid($1, $3); if (c == "") c = 1
+      print $1, $2, c, remap($1, $4), remap($1, $5), "", $7, $8
+      n++
+    }
+    END { print n + 0 > cnt }
+  ' "$f" "$src" > "$tmp" && mv -f "$tmp" "$f"
+  n=$(cat "$tmp.n" 2>/dev/null); rm -f "$src" "$tmp" "$tmp.n"
+  # в памяти nfqws2 своё выученное — служба перезапускается, иначе записала бы его поверх
+  if is_running && smart_active; then sh "$SERVICE" restart >/dev/null 2>&1; fi
+  echo "${n:-0}"
+}
+# Фоновое обучение: один случайный сайт — из своего списка, «Проверки
+# доступности», обучения и сайтов пользователя. Зовёт помощник умного режима
+# (service.sh smartkill) раз в SMART_LEARN_EVERY секунд
+cmd_smart_learn_once() {
+  local tool kind bin h r n=0 ok=0
+  [ "$(cat "$SMART_NET_FILE" 2>/dev/null)" = offline ] && return 0
   tool=$(probe_tool); kind="${tool%% *}"; bin="${tool#* }"
-  [ "$kind" = none ] && { smart_train_state state=error reason=tool; return 1; }
-  : > "$STATE_DIR/smart_training"
+  [ "$kind" = none ] && return 0
+  h=$({ grep -hv -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$MODDIR/defaults/smart-learn.list" \
+        "$LISTS_DIR/probe_hosts.list" "$LISTS_DIR/user.list" "$LISTS_DIR/auto.list" 2>/dev/null; } |
+      tr -d '\r' | awk '$1 !~ /[*^$]/ && $1 ~ /\./ && !seen[$1]++ { print $1 }' |
+      awk -v seed="$$$(date +%s)" 'BEGIN { srand(seed % 2147483647) } { a[NR] = $1 } END { if (NR) print a[int(rand() * NR) + 1] }')
+  [ -n "$h" ] || return 0
+  [ -f "$SMART_LEARN_FILE" ] && { n=$(sed -n 's/^n=//p' "$SMART_LEARN_FILE"); ok=$(sed -n 's/^ok=//p' "$SMART_LEARN_FILE"); }
   setup_probe_app_rule
-  { grep -hv -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$LISTS_DIR/probe_hosts.list" "$MODDIR/defaults/smart-train.list" 2>/dev/null; } |
-    tr -d '\r' | awk '!seen[$1]++ { print $1 }' > "$tmp/targets"
-  local total done=0 ok=0 fail=0 skip=0 h r i quiet=0
-  total=$(grep -c . "$tmp/targets")
-  smart_train_state state=running total="$total" done=0 ok=0 fail=0
-  while IFS= read -r h; do
-    [ -n "$h" ] || continue
-    i=0; r=""
-    while [ "$i" -lt 10 ]; do
-      # сети нет — ждём до 5 минут, перебор без сети бессмыслен
-      local w=0
-      while [ "$(cat "$SMART_NET_FILE" 2>/dev/null)" = offline ] || ! ip route get 1.1.1.1 >/dev/null 2>&1; do
-        [ "$w" -ge 300 ] && { smart_train_state state=offline total="$total" done="$done" ok="$ok" fail="$fail"; return 0; }
-        smart_train_state state=waiting total="$total" done="$done" ok="$ok" fail="$fail" host="$h"
-        sleep 5; w=$((w + 5))
-      done
-      r=$(probe_attempt "$kind" "$bin" "$h" </dev/null)
-      i=$((i + 1))
-      case "$r" in
-        ok*) break ;;
-        # сайт не существует или закрыт — DPI тут ни при чём
-        *dns_fail*|*refused*) break ;;
-      esac
-    done
-    done=$((done + 1))
-    case "$r" in
-      ok*) ok=$((ok + 1)); quiet=0 ;;
-      *dns_fail*|*refused*) skip=$((skip + 1)) ;;
-      *) fail=$((fail + 1)); quiet=$((quiet + 1)) ;;
-    esac
-    # пять сайтов подряд не открылись ни одним вариантом — похоже, связь
-    # пропала, хоть маршрут и есть: полминуты паузы
-    [ "$quiet" -ge 5 ] && { smart_train_state state=waiting total="$total" done="$done" ok="$ok" fail="$fail"; sleep 30; quiet=0; }
-    smart_train_state state=running total="$total" done="$done" ok="$ok" fail="$fail" skip="$skip" host="$h"
-  done < "$tmp/targets"
-  smart_train_state state=done total="$total" done="$done" ok="$ok" fail="$fail" skip="$skip"
+  r=$(probe_attempt "$kind" "$bin" "$h" </dev/null)
+  cleanup_probe_app_rule
+  n=$((${n:-0} + 1)); case "$r" in ok*) ok=$((${ok:-0} + 1)) ;; esac
+  printf 'n=%s\nok=%s\nlast=%s\nt=%s\n' "$n" "${ok:-0}" "$h" "$(date +%s)" > "$SMART_LEARN_FILE.tmp" && mv -f "$SMART_LEARN_FILE.tmp" "$SMART_LEARN_FILE"
 }
-cmd_smart_train() {
-  case "$1" in
-    start)
-      smart_active || { echo "$(M 'Умный режим не выбран' 'Smart mode is not selected')" >&2; exit 1; }
-      is_running || { echo "$(M 'Служба не запущена' 'The service is not running')" >&2; exit 1; }
-      smart_train_running && { echo OK; return 0; }
-      smart_train_state state=starting
-      if command -v setsid >/dev/null 2>&1; then setsid sh "$MODDIR/bin/nfqws2-ctl" smart-train-run </dev/null >/dev/null 2>&1 &
-      else sh "$MODDIR/bin/nfqws2-ctl" smart-train-run </dev/null >/dev/null 2>&1 & fi
-      echo OK ;;
-    stop)
-      local p
-      p=$(cat "$SMART_TRAIN_PID" 2>/dev/null)
-      if [ -n "$p" ]; then pkill -TERM -P "$p" 2>/dev/null; kill -TERM "$p" 2>/dev/null; fi
-      rm -f "$SMART_TRAIN_PID" "$STATE_DIR/smart_training"
-      smart_train_state state=stopped
-      echo OK ;;
-    *) echo "start|stop" >&2; exit 1 ;;
-  esac
+# ---------------------------------------------------------------- цвета системы
+# Тема WebUI «как у системы»: готовые цвета ролей Material You (Android 14+:
+# android:color/system_<роль>_light|_dark и *_fixed) — их Android считает сам,
+# со стилем прошивки (тональный, яркий, выразительный…) и контрастом, поэтому
+# WebUI выглядит как «Настройки». cmd overlay lookup — по процессу на цвет, это
+# секунды, поэтому ответ хранится в state/monet.cache, пока не сменятся обои
+# или стиль (secure theme_customization_overlay_packages). Вывод: строки
+# «style ИМЯ», «seed #rrggbb», «роль режим #rrggbb» (режим light|dark|fixed)
+MONET_ROLES="primary on_primary primary_container on_primary_container secondary on_secondary secondary_container on_secondary_container tertiary on_tertiary tertiary_container on_tertiary_container error on_error error_container on_error_container background on_background surface on_surface surface_variant on_surface_variant surface_dim surface_bright surface_container_lowest surface_container_low surface_container surface_container_high surface_container_highest outline outline_variant"
+MONET_FIXED="primary_fixed primary_fixed_dim on_primary_fixed on_primary_fixed_variant secondary_fixed secondary_fixed_dim on_secondary_fixed on_secondary_fixed_variant tertiary_fixed tertiary_fixed_dim on_tertiary_fixed on_tertiary_fixed_variant"
+cmd_monet_system() {
+  local key cache="$STATE_DIR/monet.cache" tmp style seed n=0 r m name f
+  key=$(settings get secure theme_customization_overlay_packages 2>/dev/null | tr -d '\r\n')
+  case "$key" in ''|null) key="" ;; esac
+  if [ -f "$cache" ] && [ "$(head -n 1 "$cache")" = "key $key" ]; then
+    tail -n +2 "$cache"; return 0
+  fi
+  style=$(printf '%s' "$key" | sed -n 's/.*"android\.theme\.customization\.theme_style"[[:space:]]*:[[:space:]]*"\([A-Z_]*\)".*/\1/p')
+  seed=$(printf '%s' "$key" | sed -n 's/.*"android\.theme\.customization\.system_palette"[[:space:]]*:[[:space:]]*"\(#\{0,1\}\)\([0-9A-Fa-f]\{6,8\}\)".*/\2/p')
+  [ ${#seed} -eq 8 ] && seed=${seed#??}
+  tmp="$STATE_DIR/monet.d"; rm -rf "$tmp"; mkdir -p "$tmp" || return 1
+  # по 12 запросов разом: каждый — отдельный процесс Java
+  for r in $MONET_ROLES $MONET_FIXED; do
+    case " $MONET_FIXED " in *" $r "*) set -- "$r:fixed" ;; *) set -- "$r:light" "$r:dark" ;; esac
+    for m in "$@"; do
+      name="system_${m%%:*}"; [ "${m#*:}" = fixed ] || name="${name}_${m#*:}"
+      ( v=$(cmd overlay lookup android "android:color/$name" 2>/dev/null | grep -oiE '#[0-9a-f]{6,8}' | tail -n 1)
+        [ -n "$v" ] && printf '%s %s #%s\n' "${m%%:*}" "${m#*:}" "$(printf '%s' "${v#\#}" | tail -c 6 | tr 'A-F' 'a-f')" > "$tmp/$name" ) &
+      n=$((n + 1))
+      [ $((n % 12)) -eq 0 ] && wait
+    done
+  done
+  wait
+  {
+    echo "key $key"
+    [ -n "$style" ] && echo "style $style"
+    [ -n "$seed" ] && echo "seed #$(printf '%s' "$seed" | tr 'A-F' 'a-f')"
+    # ни одного цвета (Android до 14) — тоже ответ: стиль и сид
+    for f in "$tmp"/*; do [ -f "$f" ] && cat "$f"; done
+    true
+  } > "$cache.tmp" && mv -f "$cache.tmp" "$cache"
+  rm -rf "$tmp"
+  tail -n +2 "$cache"
 }
 
 case "$1" in
@@ -1366,6 +1562,9 @@ case "$1" in
 
   list-strategies) list_strategies ;;
   get-strategy) get_current_strategy ;;
+  last-strategy) last_strategy ;;
+  bypass-info) cmd_bypass_info ;;
+  live-status) cmd_live_status ;;
   set-strategy) set_strategy "$2" ;;
   strategy-get-b64)
     case "$2" in default) f="$MODDIR/defaults/nfqws2.conf" ;; *) f=$(strategy_file "$2") ;; esac
@@ -1480,7 +1679,7 @@ case "$1" in
 
   set)
     case "$2" in
-      BLOCK_QUIC|AUTOSTART|WATCHDOG|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|VPN_PAUSE|ENABLE_HOTSPOT|DOH_BYPASS|META_QUIC_REJECT|CALLS_BYPASS|DNS_PUSH|EXTRA_RKN|EXTRA_FLOWSEAL) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
+      BLOCK_QUIC|AUTOSTART|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|VPN_PAUSE|ENABLE_HOTSPOT|DOH_BYPASS|META_QUIC_REJECT|CALLS_BYPASS|DNS_PUSH|EXTRA_RKN|EXTRA_FLOWSEAL|SMART_LEARN|WL_PAUSE) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
       PKT_LIMIT_OUT|PKT_LIMIT_IN) case "$3" in [1-9]|1[0-5]) ;; *) echo "Допустимо 1..15" >&2; exit 1 ;; esac ;;
       APP_MODE) case "$3" in off|include|exclude) ;; *) echo "off|include|exclude" >&2; exit 1 ;; esac ;;
       *) echo "Параметр $2 нельзя менять этой командой" >&2; exit 1 ;;
@@ -1496,11 +1695,14 @@ case "$1" in
     case "$2" in
       APP_MODE) load_conf >/dev/null 2>&1; cmd_apply_apps ;;
       # Пауза в домашней сети и наблюдатели не требуют перезапуска службы
-      HOME_WIFI|VPN_PAUSE|WATCHDOG) sh "$SERVICE" home_check >/dev/null 2>&1 ;;
+      HOME_WIFI|VPN_PAUSE) sh "$SERVICE" home_check >/dev/null 2>&1 ;;
+      # белые списки: выключили — пауза снимается, включили — помощник проверит сеть
+      WL_PAUSE) [ "$3" = 0 ] && rm -f "$WL_FILE"; sh "$SERVICE" home_check >/dev/null 2>&1 ;;
       ENABLE_HOTSPOT) load_conf >/dev/null 2>&1; sh "$SERVICE" firewall_apply >/dev/null 2>&1 ;;
       # отдельная цепочка — меняется без перезапуска службы
       META_QUIC_REJECT) load_conf >/dev/null 2>&1; if is_running; then meta_quic_start; fi ;;
-      AUTOSTART) ;;
+      # фоновое обучение подхватит помощник умного режима сам
+      AUTOSTART|SMART_LEARN) ;;
       # DNS применяет сразу, служба обхода тут ни при чём
       DNS_PUSH) load_conf >/dev/null 2>&1; dns_apply_now ;;
       # список подключается к профилям — служба перечитает и перезапустится сама
@@ -1517,7 +1719,7 @@ case "$1" in
       *) echo "list|auto|all" >&2; exit 1 ;; esac ;;
   list-apps) cmd_list_apps "$2" ;;
   get-logs) cmd_get_logs "$2" "$3" "$4" ;;
-  export-logs) cmd_export_logs ;;
+  export-logs) cmd_export_logs "$2" ;;
   wifi-ssid) current_ssid || exit 1 ;;
   # Вернуть паузу после ручного запуска в домашней сети: забыть ручной запуск,
   # и home_check снова поставит обход на паузу, если телефон всё ещё дома
@@ -1527,7 +1729,7 @@ case "$1" in
     [ -f "$HOME_PAUSED_FILE" ] && echo OK || { echo "$(M 'Причины для паузы больше нет: телефон не в домашней сети и VPN выключен' 'Nothing to pause for: not on home Wi‑Fi and VPN is off')" >&2; exit 1; } ;;
   # оттягивание «Состояния» вниз: служба заново смотрит на сеть, VPN и DNS
   net-recheck) sh "$SERVICE" net_recheck >/dev/null 2>&1; echo OK ;;
-  backup-create) cmd_backup_create "$2" ;;
+  backup-create) cmd_backup_create "$2" "$3" ;;
   backup-list) cmd_backup_list ;;
   backup-restore) cmd_backup_restore "$2" ;;
   backup-restore-b64) cmd_backup_restore_b64 "$2" ;;
@@ -1547,10 +1749,21 @@ EOF
   # Список изменений из архива модуля — для «Что нового» в WebUI
   changelog) cat "$MODDIR/changelog.md" 2>/dev/null || { echo "Нет changelog.md в модуле" >&2; exit 1; } ;;
   probe-cancel) cmd_probe_cancel ;;
-  smart-status) cmd_smart_status ;;
+  monet-system) cmd_monet_system ;;
+  smart-status) cmd_smart_status "$2" ;;
+  smart-sites) cmd_smart_sites "$2" "$3" ;;
+  smart-export) cmd_smart_export "$2" "$3" ;;
+  smart-import-b64) cmd_smart_import_b64 "$2" ;;
+  smart-learn-once) cmd_smart_learn_once ;;
+  # smart-turbo on|off — игра-пасхалка: фоновое обучение чаще (метка на 45 с)
+  smart-turbo)
+    case "$2" in
+      on) echo $(( $(date +%s) + 45 )) > "$SMART_TURBO_FILE" ;;
+      off) rm -f "$SMART_TURBO_FILE" ;;
+      *) echo "on|off" >&2; exit 1 ;;
+    esac
+    echo OK ;;
   smart-reset) cmd_smart_reset "${2:-all}" ;;
-  smart-train) cmd_smart_train "$2" ;;
-  smart-train-run) cmd_smart_train_run ;;
   dns-*) dns_ctl "$@" ;;
   hosts-*) hosts_ctl "$@" ;;
   clear-logs) : > "$SERVICE_LOG"; : > "$NFQWS_LOG"; rm -f "$LOG_DIR/nfqws2-debug.log" "$LOG_DIR/auto.log"; [ -f "$LOG_DIR/dns.log" ] && : > "$LOG_DIR/dns.log"; echo OK ;;
@@ -1560,7 +1773,7 @@ EOF
     echo "         import-add-b64 list-imports get-import-merged-b64 rename-import delete-import" >&2
     echo "         get-list save-list-b64 add-domain clear-auto reset-lists set set-mode list-apps" >&2
     echo "         get-logs export-logs clear-logs wifi-ssid backup-create backup-list backup-restore backup-restore-b64 probe-dpi probe-cancel net-info" >&2
-    echo "         smart-status smart-reset smart-train" >&2
+    echo "         smart-status smart-reset smart-sites smart-export smart-import-b64" >&2
     echo "         home-pause net-recheck upload domain-check share changelog dns-* hosts-*" >&2
     exit 1 ;;
 esac

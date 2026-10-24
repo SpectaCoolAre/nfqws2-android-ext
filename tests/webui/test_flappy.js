@@ -19,8 +19,10 @@ try {
 }
 
 const INDEX = 'file:///' + path.join(path.resolve(__dirname, '..', '..'), 'webroot', 'index.html').replace(/\\/g, '/');
-const STUB = `window.ksu = { exec: function(cmd, o, cb){
+const STUB = `window.__turbo = [];
+window.ksu = { exec: function(cmd, o, cb){
   var id = [o, cb].reverse().find(function(x){ return typeof x === 'string'; });
+  if (cmd.indexOf("'smart-turbo'") >= 0) window.__turbo.push(cmd.indexOf("'on'") >= 0 ? 'on' : 'off');
   var out = 'OK';
   if (cmd.indexOf('json-status') >= 0) out = JSON.stringify({ running: true, pid: '4710', uptime: 5, strategy: 'alt',
     version: 'v2.1.3', mode: 'auto', app_mode: 'off', autostart: 1, watchdog: 1, ipv6: 1, paused: '',
@@ -64,6 +66,8 @@ async function run(browser, scheme) {
   sect(`${scheme}: fast taps`);
   for (let i = 0; i < 12; i++) { await tapLogo(); await page.waitForTimeout(120); }
   eq(true, await open(), '12 quick taps open the game');
+  await page.waitForTimeout(300);
+  eq('on', await page.evaluate(() => window.__turbo[window.__turbo.length - 1]), 'the game speeds background learning up');
   eq('hidden', await page.evaluate(() => getComputedStyle(document.getElementById('brand-logo')).visibility), 'the logo left the header');
   await page.waitForTimeout(1900);
   truthy(await page.evaluate(() => document.elementFromPoint(190, 400).closest('#flappy') !== null), 'the overlay takes all taps');
@@ -82,6 +86,8 @@ async function run(browser, scheme) {
   await page.evaluate(() => handleBack(true));
   await page.waitForTimeout(800);
   eq(false, await open(), 'Back closes the game');
+  await page.waitForTimeout(300);
+  eq('off', await page.evaluate(() => window.__turbo[window.__turbo.length - 1]), 'and closing it slows it back down');
   eq(null, await page.$('#flappy'), 'the overlay is gone');
   eq('visible', await page.evaluate(() => getComputedStyle(document.getElementById('brand-logo')).visibility), 'the logo is back');
   eq('control', await page.evaluate(() => currentPage), 'Back did not leave the main screen');

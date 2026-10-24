@@ -69,7 +69,6 @@
 <symbol id="i-status" viewBox="0 -960 960 960"><path d="M80-600v-120q0-33 23.5-56.5T160-800h640q33 0 56.5 23.5T880-720v120h-80v-120H160v120H80Zm80 440q-33 0-56.5-23.5T80-240v-120h80v120h640v-120h80v120q0 33-23.5 56.5T800-160H160Zm240-120q11 0 21-5.5t15-16.5l124-248 44 88q5 11 15 16.5t21 5.5h240v-80H665l-69-138q-5-11-15-15.5t-21-4.5q-11 0-21 4.5T524-658L400-410l-44-88q-5-11-15-16.5t-21-5.5H80v80h215l69 138q5 11 15 16.5t21 5.5Zm80-200Z"/></symbol>
 <symbol id="i-tune" viewBox="0 -960 960 960"><path d="M440-120v-240h80v80h320v80H520v80h-80Zm-320-80v-80h240v80H120Zm160-160v-80H120v-80h160v-80h80v240h-80Zm160-80v-80h400v80H440Zm160-160v-240h80v80h160v80H680v80h-80Zm-480-80v-80h400v80H120Z"/></symbol>
 <symbol id="i-back" viewBox="0 -960 960 960"><path d="m313-440 224 224-57 56-320-320 320-320 57 56-224 224h487v80H313Z"/></symbol>
-<symbol id="i-more" viewBox="0 -960 960 960"><path d="M480-160q-33 0-56.5-23.5T400-240q0-33 23.5-56.5T480-320q33 0 56.5 23.5T560-240q0 33-23.5 56.5T480-160ZM480-400q-33 0-56.5-23.5T400-480q0-33 23.5-56.5T480-560q33 0 56.5 23.5T560-480q0 33-23.5 56.5T480-400ZM480-640q-33 0-56.5-23.5T400-720q0-33 23.5-56.5T480-800q33 0 56.5 23.5T560-720q0 33-23.5 56.5T480-640Z"/></symbol>
 <symbol id="i-copy" viewBox="0 -960 960 960"><path d="M360-240q-33 0-56.5-23.5T280-320v-480q0-33 23.5-56.5T360-880h360q33 0 56.5 23.5T800-800v480q0 33-23.5 56.5T720-240H360Zm0-80h360v-480H360v480ZM200-80q-33 0-56.5-23.5T120-160v-560h80v560h440v80H200Zm160-240v-480 480Z"/></symbol>
 <symbol id="i-settings" viewBox="0 -960 960 960"><path d="m370-80-16-128q-13-5-24.5-12T307-235l-119 50L78-375l103-78q-1-7-1-13.5v-27q0-6.5 1-13.5L78-585l110-190 119 50q11-8 23-15t24-12l16-128h220l16 128q13 5 24.5 12t22.5 15l119-50 110 190-103 78q1 7 1 13.5v27q0 6.5-2 13.5l103 78-110 190-118-50q-11 8-23 15t-24 12L590-80H370Zm70-80h79l14-106q31-8 57.5-23.5T639-327l99 41 39-68-86-65q5-14 7-29.5t2-31.5q0-16-2-31.5t-7-29.5l86-65-39-68-99 42q-22-23-48.5-38.5T533-694l-13-106h-79l-14 106q-31 8-57.5 23.5T321-633l-99-41-39 68 86 64q-5 15-7 30t-2 32q0 16 2 31t7 30l-86 65 39 68 99-42q22 23 48.5 38.5T427-266l13 106Zm42-180q58 0 99-41t41-99q0-58-41-99t-99-41q-59 0-99.5 41T342-480q0 58 40.5 99t99.5 41Zm-2-140Z"/></symbol>
 <symbol id="i-translate" viewBox="0 -960 960 960"><path d="m476-80 182-480h84L924-80h-84l-43-122H603L560-80h-84ZM160-200l-56-56 202-202q-35-35-63.5-80T190-640h84q20 39 40 68t48 58q33-33 68.5-92.5T484-720H40v-80h280v-80h80v80h280v80H564q-21 72-63 148t-83 116l96 98-30 82-122-125-202 201Zm468-72h144l-72-204-72 204Z"/></symbol>
@@ -110,9 +109,9 @@
             <div class="hero-state" id="st" aria-live="polite">Опрос службы…</div>
             <div class="hero-sub" id="sub"></div>
           </div>
-        </div>
-        <div class="hero-stats" id="hero-stats">
-          <div class="hstat"><span class="hstat-label" data-t>Время работы</span><span class="hstat-value" id="upt">—</span></div>
+          <div class="hero-stats" id="hero-stats" hidden>
+            <span class="hstat-label" data-t>Время работы</span><span class="hstat-value" id="upt">—</span>
+          </div>
         </div>
         <div class="hero-actions">
           <button class="btn height-m state" id="bt" onclick="toggle()">
@@ -131,24 +130,20 @@
 
       <div id="warn" class="stack"></div>
 
-      <h2 class="subhead" data-t>Стратегия обхода</h2>
-      <div class="list">
-        <div class="list-item two-line clickable state" role="button" tabindex="0" aria-haspopup="dialog"
-             onclick="openStrategySheet()">
-          <span class="li-icon"><svg aria-hidden="true" class="icon s24"><use href="#i-globe"/></svg></span>
-          <span class="li-text">
-            <span class="li-primary" id="strategy-current">—</span>
-            <span class="li-secondary" id="strategy-group"></span>
-          </span>
-          <span class="li-trail"><svg aria-hidden="true" class="icon s24"><use href="#i-chevron-right"/></svg></span>
-        </div>
+      <!-- режим работы: стратегия или умный режим; нажатие — вкладка «Обход» -->
+      <div class="mode-card state" role="button" tabindex="0" id="strategy-row" onclick="strategyRowClick()">
+        <span class="mode-card-ic"><svg aria-hidden="true" class="icon s24"><use id="strategy-ic" href="#i-globe"/></svg></span>
+        <span class="mode-card-text">
+          <span class="mode-card-label" id="strategy-head" data-t>Стратегии</span>
+          <span class="mode-card-primary" id="strategy-current">—</span>
+          <span class="mode-card-sub" id="strategy-group"></span>
+        </span>
+        <svg aria-hidden="true" class="icon s24"><use href="#i-chevron-right"/></svg>
       </div>
+
+      <div class="smart-tiles" id="live-tiles"></div>
     </div>
 
-    <div class="pcol">
-      <h2 class="subhead" data-t>Параметры</h2>
-      <div class="list" id="sws"></div>
-    </div>
   </section>
 
   <!-- ═══ СПИСКИ ════════════════════════════════════════════════════════ -->
@@ -245,51 +240,24 @@
   </section>
 
   <!-- ═══ КОНФИГУРАЦИЯ ══════════════════════════════════════════════════ -->
-  <section class="page split" data-page="config" aria-label="Конфигурация" data-ta="aria-label">
-    <div class="pcol">
-      <h2 class="subhead" data-t>Действующий конфиг</h2>
-      <div class="list">
-        <div class="list-item two-line clickable state" role="button" tabindex="0" onclick="openSlideEditor('conf')">
-          <span class="li-icon"><svg aria-hidden="true" class="icon s24"><use href="#i-config"/></svg></span>
-          <span class="li-text">
-            <span class="li-primary li-mono">nfqws2.conf</span>
-            <span class="li-secondary" data-t>Открыть редактор</span>
-          </span>
-          <span class="li-trail"><svg aria-hidden="true" class="icon s24"><use href="#i-chevron-right"/></svg></span>
-        </div>
-        <div id="conf-share" class="list-item two-line clickable state" role="button" tabindex="0" aria-haspopup="menu" onclick="shareFileMenu(this, CONFFILE_PATH)">
-          <span class="li-icon"><svg aria-hidden="true" class="icon s24"><use href="#i-share"/></svg></span>
-          <span class="li-text">
-            <span class="li-primary" data-t>Поделиться</span>
-            <span class="li-secondary" data-t>Открыть в MT Manager или отправить стратегию в чат</span>
-          </span>
-        </div>
-        <div class="list-item two-line clickable state danger appear-item" role="button" tabindex="0" id="conf-reset" hidden onclick="resetConf()">
-          <span class="li-icon"><svg aria-hidden="true" class="icon s24"><use href="#i-restart"/></svg></span>
-          <span class="li-text">
-            <span class="li-primary" data-t>Сбросить к исходнику</span>
-            <span class="li-secondary" id="conf-reset-sub"></span>
-          </span>
-        </div>
-      </div>
+  <!-- ═══ ОБХОД: режим работы — стратегии или умный режим ═══════════════ -->
+  <section class="page" data-page="config" aria-label="Обход" data-ta="aria-label">
+    <div class="seg-mode" id="mode-seg" role="radiogroup" aria-label="Режим работы" data-ta="aria-label">
+      <button type="button" class="seg state" role="radio" data-mode="strat" onclick="setBypassMode('strat')">
+        <svg aria-hidden="true" class="icon s18 seg-check"><use href="#i-check"/></svg><span data-t>Стратегии</span>
+      </button>
+      <button type="button" class="seg state" role="radio" data-mode="smart" onclick="setBypassMode('smart')">
+        <svg aria-hidden="true" class="icon s18 seg-check"><use href="#i-check"/></svg><span data-t>Умный режим</span>
+      </button>
     </div>
-
-    <div class="pcol">
-      <h2 class="subhead" data-t>Импорт конфигов nfqws2-keenetic</h2>
-      <div class="group">
-        <div class="t-body-medium muted" data-t>Файлы .txt, .conf, .bat, .ini или вставленный текст. Можно выбрать несколько файлов сразу.</div>
-        <input type="file" id="impFile" multiple hidden onchange="importFiles(this.files)">
-        <div class="row">
-          <button class="btn tonal with-icon state" onclick="$('impFile').click()">
-            <svg aria-hidden="true" class="icon s18"><use href="#i-upload"/></svg><span data-t>Выбрать файлы</span>
-          </button>
-          <button class="btn text with-icon state" onclick="importPaste()">
-            <svg aria-hidden="true" class="icon s18"><use href="#i-edit"/></svg><span data-t>Вставить текст</span>
-          </button>
-        </div>
-        <div class="helper err" id="impMsg" hidden></div>
-      </div>
-      <div class="list" id="impList"></div>
+    <div id="bypass-strat" class="stack">
+      <div id="strat-body" class="stack"></div>
+      <div class="helper err" id="impMsg" hidden></div>
+      <input type="file" id="impFile" multiple hidden onchange="importFiles(this.files)">
+    </div>
+    <div id="bypass-smart" class="stack" hidden>
+      <div id="smart-body" class="stack"></div>
+      <input type="file" id="smart-imp" accept=".tsv,text/tab-separated-values,text/plain" hidden onchange="smartImport(this.files)">
     </div>
   </section>
 
@@ -299,6 +267,11 @@
   </section>
 
   <!-- ═══ ДОМАШНЯЯ WI-FI (дочерний экран настроек) ═══════════════════════ -->
+  <!-- ═══ РАБОТА МОДУЛЯ (дочерний экран настроек) ═════════════════════ -->
+  <section class="page" data-page="work" aria-label="Работа модуля" data-ta="aria-label">
+    <div id="work-body" class="stack"></div>
+  </section>
+
   <section class="page" data-page="wifi" aria-label="Домашний Wi‑Fi" data-ta="aria-label">
     <label class="main-switch state" id="wifi-main">
       <span class="grow" data-t>Пауза в домашнем Wi‑Fi</span>
@@ -329,10 +302,6 @@
   </section>
 
   <!-- ═══ УМНЫЙ РЕЖИМ (дочерний экран настроек) ═══════════════ -->
-  <section class="page" data-page="smart" aria-label="Умный режим" data-ta="aria-label">
-    <div class="helper" data-t>Сам подбирает обход для каждого сайта из блоков авторских стратегий и альтов Flowseal, запоминает удачный вариант за сайтом и помнит выученное отдельно для Wi‑Fi и мобильной сети. Без связи не перебирает ничего.</div>
-    <div id="smart-body" class="stack"></div>
-  </section>
 
   <!-- ═══ DNS ПО ПРОФИЛЯМ (дочерний экран настроек) ═══════════ -->
   <section class="page" data-page="dns" aria-label="DNS по профилям" data-ta="aria-label">
@@ -580,8 +549,8 @@
       <span class="nav-label" data-t>Настройки</span>
     </button>
     <button class="nav-dest state" data-page="config">
-      <span class="nav-ind"><svg aria-hidden="true" class="icon"><use href="#i-config"/></svg></span>
-      <span class="nav-label" data-t>Конфиг</span>
+      <span class="nav-ind"><svg aria-hidden="true" class="icon"><use id="nav-bypass-ic" href="#i-config"/></svg></span>
+      <span class="nav-label" data-t>Обход</span>
     </button>
   </div>
 </nav>
@@ -641,6 +610,9 @@
   <div class="sheet-hint"><svg aria-hidden="true" class="icon s18"><use href="#i-info"/></svg><span data-t>Удерживайте стратегию, чтобы изменить её, поделиться или скопировать</span></div>
   <div class="sheet-scroll" id="strategy-list" role="radiogroup" aria-label="Стратегии" data-ta="aria-label"></div>
   <div class="sheet-actions">
+    <button class="btn text with-icon state sheet-lead" aria-haspopup="menu" onclick="importPick(this)">
+      <svg aria-hidden="true" class="icon s18"><use href="#i-upload"/></svg><span data-t>Импорт</span>
+    </button>
     <button class="btn text state" onclick="closeSheet()"><span data-t>Отмена</span></button>
     <button class="btn with-icon state" id="strategy-apply" onclick="applySelectedStrategy()">Применить</button>
   </div>
@@ -669,6 +641,15 @@
   <div class="list sheet-scroll" id="backup-list"></div>
   <div class="sheet-actions">
     <button class="btn text state" onclick="closeSheet()"><span data-t>Закрыть</span></button>
+  </div>
+</div>
+
+<div class="sheet list-sheet" id="smart-sheet" role="dialog" aria-modal="true" aria-labelledby="smart-sheet-title">
+  <button type="button" class="sheet-drag" aria-label="Закрыть" data-ta="aria-label"><span class="handle"></span></button>
+  <div class="sheet-title" id="smart-sheet-title"></div>
+  <div class="sheet-scroll" id="smart-sheet-body"></div>
+  <div class="sheet-actions">
+    <button class="btn state" onclick="closeSheet()"><span data-t>Закрыть</span></button>
   </div>
 </div>
 
