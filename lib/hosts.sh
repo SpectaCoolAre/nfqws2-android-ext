@@ -294,6 +294,8 @@ hosts_write() {
   [ -f "$HOSTS_FILE" ] || : > "$HOSTS_FILE"
   cat "$HOSTS_DIR/hosts.new" > "$HOSTS_FILE" && rm -f "$HOSTS_DIR/hosts.new"
   hosts_set_perm "$HOSTS_FILE"
+  # подключённый hosts поменялся на месте — кэши тоже
+  if hosts_mounted; then hosts_flush_dns; fi
 }
 # Файлы частей разошлись с hosts (правили в MT Manager и т. п.)?
 hosts_differs() {
@@ -308,16 +310,31 @@ hosts_differs() {
   rc=$?; rm -f "$HOSTS_DIR/hosts.cmp"; return $rc
 }
 
+# Новые записи hosts действуют сразу. Системный резолвер читает hosts на каждый
+# запрос, а приложения держат ответы у себя — стандартный сигнал Android
+# «сбросить кэш DNS» (тот же, что при смене сети) их сбрасывает. Два имени:
+# android.net.action — с Android 12, android.intent.action — до него. В фоне и
+# с ограничением по времени; ничего не останавливает и не переключает
+hosts_flush_dns() {
+  command -v am >/dev/null 2>&1 || return 0
+  (
+    to=""; command -v timeout >/dev/null 2>&1 && to="timeout 5"
+    for a in android.net.action.CLEAR_DNS_CACHE android.intent.action.CLEAR_DNS_CACHE; do
+      $to am broadcast -a "$a" >/dev/null 2>&1
+    done
+  ) </dev/null >/dev/null 2>&1 &
+}
 hosts_mount() {
   hosts_mounted && return 0
   [ -s "$HOSTS_FILE" ] || hosts_write
   hosts_set_perm "$HOSTS_FILE"
-  hosts_global mount --bind "$HOSTS_FILE" "$HOSTS_TARGET" 2>/dev/null && hosts_mounted
+  hosts_global mount --bind "$HOSTS_FILE" "$HOSTS_TARGET" 2>/dev/null && hosts_mounted && hosts_flush_dns
 }
 hosts_umount() {
   hosts_mounted || return 0
   hosts_global umount "$HOSTS_TARGET" 2>/dev/null || hosts_global umount -l "$HOSTS_TARGET" 2>/dev/null
-  ! hosts_mounted
+  if hosts_mounted; then return 1; fi
+  hosts_flush_dns
 }
 hosts_boot() { hosts_enabled && hosts_mount; return 0; }
 

@@ -110,7 +110,8 @@ function renderSmart(){
     '<div class="smart-ring-box">' + smartRing(pr.p) + '</div>' +
     '<div class="smart-hero-text">' +
       '<span class="smart-hero-level">' + esc(smartLevel(pr.p)) + '</span>' +
-      '<span class="smart-hero-sub">' + esc(m.offline == 1 && view && view.current == 1 ? t('Нет связи — перебор на паузе') : t('Обученность в этой сети')) + '</span>' +
+      '<span class="smart-hero-sub">' + esc(view && view.home == 1 ? t('Домашняя сеть — профиль не активен') :
+        m.offline == 1 && view && view.current == 1 ? t('Нет связи — перебор на паузе') : t('Обученность в этой сети')) + '</span>' +
       (nets.length > 1
         ? '<button type="button" class="chip dropdown state" aria-haspopup="menu" onclick="smartPickNet(this)"><span>' + esc(netText) + '</span>' + icon('caret', 's18') + '</button>'
         : '<span class="smart-hero-net">' + icon(view && /^mobile/.test(view.id) ? 'globe' : 'wifi', 's18') + esc(netText) + '</span>') +
@@ -134,6 +135,8 @@ function renderSmart(){
   parts.push('<div class="list">' +
     settingsRow({icon: 'share', title: 'Поделиться обучением', sub: t('Файл с выученным в этой сети'), on: 'smartExport()'}) +
     settingsRow({icon: 'upload', title: 'Загрузить обучение', sub: t('Добавить выученное из файла в текущую сеть'), on: "$('smart-imp').click()"}) +
+    // отладочный замер вариантов — для разработчиков
+    (devMode ? settingsRow({icon: 'test', title: 'Отладочный замер', sub: t('Сайты сети через все варианты: что открывает, быстрее и надёжнее'), on: 'smartBench()', chevron: true}) : '') +
   '</div>');
   parts.push('<div class="row">' +
     (view ? '<button class="btn text with-icon state danger" onclick="smartReset(' + jsArg(view.id) + ')">' + icon('trash', 's18') + '<span>' + esc(t('Забыть эту сеть')) + '</span></button>' : '') +
@@ -144,7 +147,9 @@ function renderSmart(){
 
 function smartPickNet(anchor){
   openMenu(anchor, (SMS.nets || []).map(n => ({
-    label: smartNetLabel(n), sub: plural(n.sites, t('сайт'), t('сайта'), t('сайтов')) + (n.current == 1 ? ' · ' + t('сейчас') : ''),
+    // домашняя сеть: обход в ней на паузе — профиль не активен, выученное хранится
+    label: smartNetLabel(n), sub: plural(n.sites, t('сайт'), t('сайта'), t('сайтов')) +
+      (n.home == 1 ? ' · ' + t('домашняя, не активен') : n.current == 1 ? ' · ' + t('сейчас') : ''),
     icon: n.id === SMS.view ? 'check' : '',
     onClick: () => { smartView = n.current == 1 ? null : n.id; smartLoad(); }
   })));
@@ -219,6 +224,96 @@ async function smartLearnToggle(on){
   SMS.learn = on ? 1 : 0;
   renderSmart();
   toast(on ? t('Фоновое обучение включено') : t('Фоновое обучение выключено'));
+}
+
+/* Отладочный замер (настройки разработчика): сайты, выученные в этой сети,
+   прогоняются через все варианты умного режима и расширенного пула — по одному
+   соединению на вариант, затем лучшие ещё дважды. В обучение не попадает.
+   Отчёт — по семействам профилей (TLS, Google): удачи на заблокированных
+   сайтах, медианы рукопожатия и первого байта, сайты, которые открыл только
+   этот вариант, и чем кончались неудачи */
+let benchT = 0;
+async function smartBench(){
+  clearTimeout(benchT);
+  const [s, r] = await Promise.all([ctlx(['smart-bench', 'status']), ctlx(['smart-bench', 'report'])]);
+  let st = {}, rep = {fams: []};
+  try { st = JSON.parse(s.out); } catch(e){}
+  try { rep = JSON.parse(r.out); } catch(e){}
+  const html = benchHtml(st, rep);
+  // опрос не сбрасывает прокрутку открытого листа
+  if(openSheetId === 'smart-sheet' && smartSheetKind === 'bench') $('smart-sheet-body').innerHTML = html;
+  else smartSheet(t('Отладочный замер'), html, 'bench');
+  if(st.running == 1) benchT = setTimeout(() => { if(openSheetId === 'smart-sheet' && smartSheetKind === 'bench') smartBench(); }, 3000);
+}
+const BENCH_FAM = {tls: 'TLS', google: 'Google и YouTube', quic: 'QUIC'};
+function benchHtml(st, rep){
+  const parts = [];
+  const run = st.running == 1;
+  parts.push('<div class="helper">' + esc(t('Сайты, выученные в этой сети, по очереди открываются на каждом варианте умного режима и расширенного пула, затем лучшие варианты — ещё дважды. Это занимает 30–60 минут и расходует трафик; в обучение замер не попадает. Умный режим должен работать.')) + '</div>');
+  let state;
+  if(run){
+    const min = st.start ? Math.max(0, Math.round((Date.now() / 1000 - st.start) / 60)) : 0;
+    state = st.stage === '2'
+      ? t('Этап 2 из 2: лучшие варианты ещё раз — сайтов {0} из {1}', st.done2, st.hosts2)
+      // варианты идут по кругу через все сайты — сайты кончаются разом, в конце
+      // сначала у каждого сайта пробы имён и попытка без обхода, варианты — потом
+      : st.prep < st.hosts ? t('Этап 1 из 2: подготовка сайтов {0} из {1}', st.prep, st.hosts)
+      : st.plan ? t('Этап 1 из 2: вариантов проверено {0} из {1}', st.planned, st.plan)
+      : t('Этап 1 из 2: сайтов {0} из {1}', st.done1, st.hosts);
+    state += ' · ' + t('попыток {0} · {1} мин', st.tests, min);
+  } else state = st.stage === 'done' ? (st.stopped == 1 ? t('Остановлен, отчёт — по тому, что успел') : t('Готово')) : t('Ещё не запускался');
+  parts.push('<div class="list">' +
+    settingsRow({icon: run ? 'auto' : 'test', title: run ? t('Идёт замер') : t('Замер'), sub: state}) +
+    (run ? settingsRow({icon: 'stop', title: 'Остановить', on: 'benchStop()'})
+         : settingsRow({icon: 'play', title: st.stage === 'done' ? 'Запустить заново' : 'Запустить', on: 'benchStart()'})) +
+    ((rep.fams || []).length && !run ? settingsRow({icon: 'share', title: 'Поделиться отчётом', sub: t('Текстом, со всеми вариантами'), on: 'benchShare()'}) : '') +
+  '</div>');
+  if(run) parts.push('<div class="helper">' + esc(t('Пока замер идёт, здесь только счёт по вариантам. Какие сайты не открылись или не соединились — после окончания: до тех пор их ещё повторят.')) + '</div>');
+  if(rep.noconn) parts.push('<div class="helper">' + esc(t('Не соединились ни разу — адрес закрыт, варианты не помогут: {0}', rep.noconn)) + '</div>');
+  (rep.fams || []).sort((a, b) => (a.fam === 'tls' ? -1 : 1) - (b.fam === 'tls' ? -1 : 1)).forEach(f => {
+    parts.push('<h2 class="subhead">' + esc(t(BENCH_FAM[f.fam] || f.fam)) + '</h2>');
+    parts.push('<div class="helper">' + esc(t('Заблокировано сайтов: {0}, открыл хоть один вариант: {1}, не открылись: {2}, открываются и без обхода: {3}', f.blocked, f.solved, f.blocked - f.solved, f.unblocked)) +
+      (f.unsolved ? '<br>' + esc(t('Не открылись: {0}', f.unsolved)) : '') +
+      (f.noconn ? '<br>' + esc(t('Не соединились ни разу — адрес закрыт, варианты не помогут: {0}', f.noconn)) : '') + '</div>');
+    // лучшие — по доле удач, при равенстве — быстрее
+    const vs = (f.variants || []).slice().sort((a, b) => {
+      const pa = a.tests ? a.ok / a.tests : 0, pb = b.tests ? b.ok / b.tests : 0;
+      return pb - pa || (a.ms_tls < 0 ? 1e9 : a.ms_tls) - (b.ms_tls < 0 ? 1e9 : b.ms_tls) || a.n - b.n;
+    });
+    parts.push('<div class="list">' + vs.map(v => {
+      const p = v.tests ? Math.round(100 * v.ok / v.tests) : 0;
+      // ещё не проверялся на заблокированных сайтах — «0 из 0» выглядит как поломка
+      const sub = [v.tests ? t('удач {0} из {1} ({2}%)', v.ok, v.tests, p) : t('ещё не проверялся на заблокированных сайтах')];
+      if(v.ms_tls >= 0) sub.push(t('TLS {0} мс', v.ms_tls), t('ответ {0} мс', v.ms_ttfb));
+      if(v.uniq) sub.push(t('только он: {0}', v.uniq));
+      if(v.f16) sub.push(t('16 КБ: {0}', v.f16));
+      if(v.reset) sub.push(t('сброс: {0}', v.reset));
+      if(v.timeout) sub.push(t('без ответа: {0}', v.timeout));
+      // ТСПУ на время закрыл адрес, до ClientHello не дошло — варианту не в счёт
+      if(v.conn) sub.push(t('нет соединения: {0}', v.conn));
+      return '<div class="list-item two-line"><span class="li-text"><span class="li-primary">' + esc('#' + v.n + ' ' + (v.name || '')) + '</span>' +
+        '<span class="li-secondary">' + esc(sub.join(' · ')) + '</span></span></div>';
+    }).join('') + '</div>');
+  });
+  return parts.join('');
+}
+async function benchStart(){
+  if(!await mdConfirm(t('Запустить замер?'),
+    t('Займёт 30–60 минут. Пока он идёт, сайты из замера могут открываться медленнее. Экран можно закрыть — замер продолжится.'), {ok: t('Запустить'), iconName: 'play'})) return;
+  const r = await withBusy(['smart-bench', 'start']);
+  if(r.code){ toast(errText(r, 'Не удалось запустить')); return; }
+  toast(t('Замер запущен'));
+  setTimeout(smartBench, 1500);
+}
+async function benchStop(){
+  await withBusy(['smart-bench', 'stop']);
+  toast(t('Замер остановится после текущих попыток'));
+  setTimeout(smartBench, 1500);
+}
+async function benchShare(){
+  const r = await ctlx(['smart-bench', 'path']);
+  if(r.code){ toast(errText(r, 'Не удалось поделиться')); return; }
+  shareFile('file', r.out.trim());
 }
 
 function plural(n, one, few, many){

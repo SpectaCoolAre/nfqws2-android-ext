@@ -57,7 +57,14 @@ section "the network id: mobile by operator, Wi‑Fi by SSID, none without a rou
 MOCK_DEV=rmnet_data0 MOCK_OPERATOR=25001 MOCK_OPERATOR_NAME=MTS
 assert_eq "mobile-25001	MTS" "$(smart_net_id)" "mobile data: the operator code and name"
 MOCK_OPERATOR="25002,25099"
-assert_eq "mobile-25002	MTS" "$(smart_net_id)" "the first SIM's operator when there are two"
+assert_eq "mobile-25002	MTS" "$(smart_net_id)" "two SIMs and the data SIM is unknown: the first one"
+MOCK_OPERATOR_NAME="MTS,Beeline" MOCK_DATA_SUB=3 MOCK_SIMINFO="2:0 3:1"; export MOCK_DATA_SUB MOCK_SIMINFO MOCK_OPERATOR_NAME
+assert_eq "mobile-25099	Beeline" "$(smart_net_id)" "two SIMs, mobile data on the second: its operator, not the first one"
+MOCK_DATA_SUB=2
+assert_eq "mobile-25002	MTS" "$(smart_net_id)" "data switched back to the first SIM: the first operator again"
+MOCK_SIMINFO=""
+assert_eq "mobile-25002	MTS" "$(smart_net_id)" "the slot of a subscription is remembered (the SIM table is a separate process)"
+MOCK_DATA_SUB="" MOCK_SIMINFO="" MOCK_OPERATOR_NAME=MTS; rm -f "$STATE_DIR/sim_slot"
 MOCK_OPERATOR=""
 assert_eq "mobile	MTS" "$(smart_net_id)" "no operator code — just mobile"
 mkdir -p "$NFQWS_SYSNET/wlan0"; echo up > "$NFQWS_SYSNET/wlan0/operstate"
@@ -82,6 +89,35 @@ MOCK_DEV=""
 smart_net_update
 assert_eq "offline" "$(cat "$SMART_NET_FILE")" "offline is written too"
 assert_eq "1" "$(grep -c . "$SMART_DIR/nets.tsv")" "but is not a network"
+
+section "a home Wi‑Fi gets no smart profile"
+echo up > "$NFQWS_SYSNET/wlan0/operstate"
+printf 'Home\n' > "$HOME_FILE"
+MOCK_DEV=rmnet_data0; echo down > "$NFQWS_SYSNET/wlan0/operstate"; smart_net_update
+echo up > "$NFQWS_SYSNET/wlan0/operstate"; MOCK_DEV=wlan0 MOCK_WIFI=Home HOME_WIFI=1
+smart_net_update
+assert_eq "mobile-25001" "$(cat "$SMART_NET_FILE")" "added as home beforehand: the last active network stays current"
+assert_not_contains "$(cat "$SMART_DIR/nets.tsv")" "	Home" "and no profile is created for it"
+printf 'Home' > "$HOME_OVERRIDE_FILE"
+smart_net_update
+assert_contains "$(cat "$SMART_NET_FILE")" "wifi-" "started by hand at home: the bypass works there, so it learns there"
+rm -f "$HOME_OVERRIDE_FILE"
+MOCK_DEV=rmnet_data0; echo down > "$NFQWS_SYSNET/wlan0/operstate"; smart_net_update
+echo up > "$NFQWS_SYSNET/wlan0/operstate"; MOCK_DEV=wlan0
+smart_net_update
+assert_eq "mobile-25001" "$(cat "$SMART_NET_FILE")" "a profile made before it became home goes inactive"
+( export HOME_WIFI; ctl smart-status; printf '%s' "$ctl_out" > "$SANDBOX/home.json" )
+assert_contains "$(cat "$SANDBOX/home.json")" '"label":"Home","home":1' "and the WebUI is told so"
+HOME_WIFI=0
+smart_net_update
+assert_contains "$(cat "$SMART_NET_FILE")" "wifi-" "home pause off: the profile is active again"
+assert_eq "1" "$(grep -c '	Home$' "$SMART_DIR/nets.tsv")" "the same one, not a new copy"
+HOME_WIFI=1; printf 'Other\n' > "$HOME_FILE"
+smart_net_update
+assert_contains "$(cat "$SMART_NET_FILE")" "wifi-" "removed from home networks: active too"
+rm -f "$HOME_FILE"; HOME_WIFI=0; MOCK_WIFI=""; echo down > "$NFQWS_SYSNET/wlan0/operstate"
+MOCK_DEV=rmnet_data0; smart_net_update
+grep -v '	Home$' "$SMART_DIR/nets.tsv" > "$SMART_DIR/nets.tmp"; mv -f "$SMART_DIR/nets.tmp" "$SMART_DIR/nets.tsv"
 conf_reset; reload_conf
 rm -f "$SMART_NET_FILE"; MOCK_DEV=rmnet_data0
 smart_net_update
@@ -98,14 +134,14 @@ printf '%s' "$ctl_out" > "$SANDBOX/st.json"
 node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$SANDBOX/st.json" 2>/dev/null
 assert_rc 0 $? "and prints valid JSON"
 assert_contains "$ctl_out" '"active":1' "the smart strategy is active"
-assert_contains "$ctl_out" '"id":"mobile-25001","label":"MTS","sites":3,"ok":11,"err":14,"current":1' "a network: sites with successes, successes and errors in total"
+assert_contains "$ctl_out" '"id":"mobile-25001","label":"MTS","home":0,"sites":3,"ok":11,"err":14,"current":1' "a network: sites with successes, successes and errors in total"
 assert_contains "$ctl_out" '"nodpi":["down.example"]' "a site that is not a DPI problem is listed apart"
 assert_not_contains "$ctl_out" '"host":"down.example"' "and not among the sites with errors"
 sed -i '1s/^#v4/#v3/' "$SMART_DIR/mobile-25001.tsv"
 ctl smart-status
 assert_contains "$ctl_out" '"nodpi":[]' "a «not DPI» mark from an older file is not shown (it came from false errors)"
 sed -i '1s/^#v3/#v4/' "$SMART_DIR/mobile-25001.tsv"
-assert_contains "$ctl_out" '"id":"wifi-1","label":"Home","sites":0,"ok":0,"err":0,"current":0' "a network without data shows zeros"
+assert_contains "$ctl_out" '"id":"wifi-1","label":"Home","home":0,"sites":0,"ok":0,"err":0,"current":0' "a network without data shows zeros"
 assert_contains "$ctl_out" '{"n":8,"name":"hardcorp74 #1","ok":2,"err":3,"sites":1}' "variants come with names, successes, errors and sites on them"
 assert_contains "$ctl_out" '{"n":1,"name":"MartinBacker #1","ok":4,"err":5,"sites":2}' "they add up across sites"
 assert_contains "$ctl_out" '"google":[{"n":1,"name":"hardcorp74: Google","ok":5,"err":0,"sites":1}]' "slots are separate"
@@ -121,7 +157,7 @@ assert_rc 0 $? "with tunings it is still valid JSON"
 assert_contains "$ctl_out" '"tls_16":[' "a profile with its own set has its own list"
 assert_contains "$ctl_out" '{"n":101,"name":"MartinBacker: хостинги (16 КБ) · подстройка: repeats=6, host=ozon.ru","ok":6,"err":0,"sites":1}' "a tuning is named after its base and what is changed"
 assert_contains "$ctl_out" '{"n":6,"name":"MartinBacker: Cloudflare","ok":2,"err":0,"sites":1}' "tls_cf takes the names of tls"
-assert_contains "$ctl_out" '"id":"mobile-25001","label":"MTS","sites":5,' "a tuning line is not a site"
+assert_contains "$ctl_out" '"id":"mobile-25001","label":"MTS","home":0,"sites":5,' "a tuning line is not a site"
 ctl smart-status wifi-1
 assert_contains "$ctl_out" '"view":"wifi-1"' "statistics of another network can be asked for"
 assert_contains "$ctl_out" '"top":{},"problems":[],"nodpi":[],"acc":{"ok":0,"err":0}' "and an empty one shows nothing"

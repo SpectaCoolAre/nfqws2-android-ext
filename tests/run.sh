@@ -154,6 +154,7 @@ queue_suite "module: hosts editor" sh "$HERE/module/test_hosts.sh"
 queue_suite "module: smart mode" sh "$HERE/module/test_smart.sh"
 queue_suite "module: system theme colours" sh "$HERE/module/test_monet.sh"
 queue_suite "module: white lists" sh "$HERE/module/test_whitelist.sh"
+queue_suite "module: smart benchmark" sh "$HERE/module/test_bench.sh"
 
 if [ "$FAST" = 1 ]; then
   queue_skip "module: service and firewall" "--fast"

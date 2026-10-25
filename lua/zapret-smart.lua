@@ -64,12 +64,26 @@
 --                закрытое FIN после ответа сервера, — тоже удача: короткие
 --                ответы (API) до порога не дорастают
 --   retrans=N, udp_in=N, udp_out=N — как у стандартного детектора
+--   base=СПИСОК  основной набор: номера через запятую, диапазоны через дефис
+--                (base=1-6,10,22) или просто число N — это 1…N. Остальные
+--                варианты (расширенный пул) идут в перебор, только когда в
+--                state/smart_pool записано ext. Номера при этом не меняются, и
+--                выученное с ними остаётся верным
+--
+-- Отладочный замер (ctl smart-bench): пока в state/smart_bench записано число
+-- его исполнителей W, в state/smart_bench.0 … .(W-1) — «сайт вариант время»:
+-- что каждый из них сейчас проверяет. Запись старше минуты не действует —
+-- замер оборвался, а файлы остались (проверить сам процесс нельзя: nfqws2 без
+-- прав чужих процессов в /proc не видит). Вариант «-» — проба: соединение
+-- идёт на выученном варианте сайта. Пока запись свежая, соединения
+-- к такому сайту идут на этом варианте (0 — без обхода) и в обучение не попадают; профиль, в который
+-- попало соединение, дописывается в state/smart_bench.seen
 
 SMART = SMART or {
 	home = nil, net = nil, db = {}, ns = {}, nstrat = {}, conns = {},
 	dirty = false, saved = 0, netcheck = 0, offline = false,
 	lastok = 0, lastconn = 0, failhosts = {}, suspect_since = nil, watching = false,
-	layout = {}, mut = {}, mutnext = {}, mutt = {},
+	layout = {}, mut = {}, mutnext = {}, mutt = {}, allow = {}, nallow = {}, basesets = {},
 	proc = { "/proc/net/tcp", "/proc/net/tcp6" }
 }
 local SM = SMART
@@ -384,12 +398,34 @@ local function make_mutant(slot, from, t)
 	end
 	return nil
 end
+-- вариант в наборе, который сейчас перебирается (основной или весь пул)
+local function allowed(slot, v)
+	local a = SM.allow[slot]
+	return not a or a[v] ~= nil
+end
+-- base=1-6,10,22 → { [1]=true, … }, сколько в нём вариантов
+local function base_set(str, nall)
+	local c = SM.basesets[str]
+	if c then return c.set, c.count end
+	local set, count = {}, 0
+	local spec = tonumber(str) and ("1-" .. str) or str
+	for part in spec:gmatch("[^,]+") do
+		local a, b = part:match("^(%d+)%-(%d+)$")
+		a, b = tonumber(a or part), tonumber(b or a or part)
+		if a and b then
+			for v = a, math.min(b, nall) do if not set[v] then set[v] = true; count = count + 1 end end
+		end
+	end
+	SM.basesets[str] = { set = set, count = count }
+	return set, count
+end
+
 -- все варианты набора: авторские и подстроенные
 local function variants(slot, n)
 	local l = {}
-	for v = 1, n do l[#l + 1] = v end
+	for v = 1, n do if allowed(slot, v) then l[#l + 1] = v end end
 	local ids = {}
-	for id in pairs(SM.mut[slot] or {}) do ids[#ids + 1] = id end
+	for id, m in pairs(SM.mut[slot] or {}) do if m.base <= n and allowed(slot, m.base) then ids[#ids + 1] = id end end
 	table.sort(ids)
 	for _, id in ipairs(ids) do l[#l + 1] = id end
 	return l
@@ -487,6 +523,8 @@ local function check_net()
 	local t = now()
 	if t - SM.netcheck < NET_EVERY then return end
 	SM.netcheck = t
+	SM.pool_ext = readline(SM.home .. "/state/smart_pool") == "ext"
+	SM.bench = tonumber((readline(SM.home .. "/state/smart_bench") or ""):match("^(%d+)") or "")
 	local net = readline(SM.home .. "/state/smart_net") or "default"
 	net = net:gsub("[^%w%-_.]", "_")
 	if net == "" then net = "default" end
@@ -646,8 +684,9 @@ local function on_err(slot, key, r, v, n, t, pass, mid, c)
 	-- вариант и 6 часов не трогается
 	local bad_v = 0
 	for x = 1, n do if r.early[x] then bad_v = bad_v + 1 end end
+	local nset = SM.nallow[slot] or n
 	-- «без обхода» выбирается последним и сюда может не дойти — его не ждём
-	if not r.everok and bad_v >= math.min(n - 1, math.max(NODPI_VARIANTS, math.ceil(n / 2))) then
+	if not r.everok and bad_v >= math.min(nset - 1, math.max(NODPI_VARIANTS, math.ceil(nset / 2))) then
 		r.nodpi = t + NODPI_TIME
 		r.cur = r.first or 1
 		r.win = {}
@@ -695,6 +734,17 @@ local function on_err(slot, key, r, v, n, t, pass, mid, c)
 	end
 	r.win = {}
 	r.sw = t
+end
+
+-- вариант, который отладочный замер сейчас проверяет на этом сайте
+local function bench_variant(host)
+	for i = 0, SM.bench - 1 do
+		local l = readline(SM.home .. "/state/smart_bench." .. i)
+		if l then
+			local h, v, ts = l:match("^(%S+)%s+([%d-]+)%s+(%d+)$")
+			if h == host and math.abs(now() - tonumber(ts)) <= 60 then return v end
+		end
+	end
 end
 
 local function count_strategies(desync)
@@ -897,7 +947,14 @@ function smart(ctx, desync)
 
 	local slot = desync.arg.slot or "default"
 	local host = site_key(desync)
-	local n = count_strategies(desync)
+	local nall = count_strategies(desync)
+	local n = nall
+	-- расширенный пул выключен — перебор только по основному набору
+	if desync.arg.base and not SM.pool_ext then
+		SM.allow[slot], SM.nallow[slot] = base_set(desync.arg.base, nall)
+	else
+		SM.allow[slot], SM.nallow[slot] = nil, nil
+	end
 	if not host or n == 0 then
 		local verdict = VERDICT_PASS
 		while true do
@@ -917,10 +974,29 @@ function smart(ctx, desync)
 		r = newrec(leader(slot, n, tonumber(desync.arg.first) or 1, pass))
 		SM.db[key] = r
 	end
-	if r.cur > n and not mutant(slot, r.cur) then r.cur = (r.first or 1) <= n and r.first or 1 end
+	-- сайт на варианте вне набора (пул выключили, набор сменился) — к стартовому
+	local cb = base_of(slot, r.cur)
+	if cb > n or not allowed(slot, cb) then
+		r.cur = leader(slot, n, tonumber(desync.arg.first) or 1, pass)
+	end
 	r.seen = t
 
 	local crec = automate_conn_record(desync)
+	-- отладочный замер: вариант задаёт он, итог считает он же
+	if crec and not crec.smart and SM.bench then
+		local bv = bench_variant(host)
+		if bv then
+			-- «-» — проба имени: узнать профиль, а соединение — на выученном
+			-- варианте сайта. Без обхода ТСПУ увидел бы SNI и на время закрыл
+			-- адрес, и следующие попытки к сайту не соединялись бы
+			bv = bv == "-" and r.cur or tonumber(bv)
+			-- подстройка (номер больше 100) — по её основе
+			if base_of(slot, bv) > nall then bv = 0 end
+			crec.smart = { bench = true, done = true, v = bv, maxin = 0, tin = t, t = t }
+			local f = io.open(SM.home .. "/state/smart_bench.seen", "a")
+			if f then f:write(host, "\t", slot, "\t", nall, "\t", bv, "\n"); f:close() end
+		end
+	end
 	if crec and not crec.smart then
 		-- новое соединение идёт на текущем варианте сайта; его итог засчитается
 		-- этому варианту, даже если сайт к тому времени перейдёт на другой
@@ -992,8 +1068,11 @@ function smart(ctx, desync)
 	-- соединение до конца идёт на своём варианте: смена варианта сайта
 	-- касается новых соединений
 	local v = cs and cs.v or r.cur
-	if v > n and not mutant(slot, v) then v = r.cur end
-	if v > n and not mutant(slot, v) then v = 1 end
+	if not (cs and cs.bench) then
+		local bv = base_of(slot, v)
+		if bv > n or not allowed(slot, bv) then v = r.cur end
+		if base_of(slot, v) > n then v = 1 end
+	end
 	-- подстройка: экземпляры её основы, у некоторых — другие параметры
 	local m = mutant(slot, v)
 	local base, ov = m and m.base or v, nil

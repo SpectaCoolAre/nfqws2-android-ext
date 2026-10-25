@@ -298,6 +298,11 @@ truthy(!settingsJs.includes('animations-toggle'), 'settings.js has no animations
 
 // ── summary ───────────────────────────────────────────────────────────────────
 process.stdout.write('\n----------------------------------------\n');
+sect('file pickers');
+// Android не знает MIME у .tsv: с accept=".tsv" файл обучения не выбрать
+const smartImp = (html.match(/<input[^>]*id="smart-imp"[^>]*>/) || [''])[0];
+truthy(smartImp && !/accept=/.test(smartImp), 'learned-data import takes any file (the content is checked by ctl)');
+
 if (failures.length === 0) {
   process.stdout.write(`PASS  ${pass} checks\n`);
   process.exit(0);

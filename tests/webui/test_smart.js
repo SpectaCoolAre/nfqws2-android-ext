@@ -30,7 +30,8 @@ const SMART_MOB = JSON.stringify({
   active: 1, running: 1, net: 'mobile-25001', view: 'mobile-25001', offline: 0, training: 0, learn: 1,
   bg: { n: '42', ok: '39', last: 'www.reddit.com' }, train: {},
   nets: [{ id: 'mobile-25001', label: 'MTS', sites: 64, ok: 900, err: 80, current: 1 },
-         { id: 'wifi-1', label: 'Home', sites: 12, ok: 40, err: 30, current: 0 }],
+         { id: 'wifi-1', label: 'Home', sites: 12, ok: 40, err: 30, current: 0 },
+         { id: 'wifi-2', label: 'Дача', home: 1, sites: 7, ok: 20, err: 2, current: 0 }],
   top: { tls: [v(1, 'MartinBacker #1', 300, 20, 40), v(2, 'MartinBacker #2', 20, 15, 4), v(14, 'без обхода', 50, 0, 6)],
          tls_16: [v(7, 'MartinBacker: хостинги (16 КБ)', 60, 5, 8)],
          google: [v(1, 'hardcorp74: Google', 200, 10, 5)],
@@ -43,6 +44,12 @@ const SMART_WIFI = JSON.stringify(Object.assign(JSON.parse(SMART_MOB), {
 }));
 const SITES = JSON.stringify([{ host: 'soundcloud.com', slot: 'tls_16', n: 7, name: 'MartinBacker: хостинги (16 КБ)', ok: 40, err: 1, e: 1 },
   { host: 'youtube.com', slot: 'google', n: 1, name: 'hardcorp74: Google', ok: 30, err: 0, e: 1 }]);
+const bv = (n, name, tests, ok, tls, ttfb, uniq, f16, reset, timeout) => ({ n, name, tests, ok, ms_tls: tls, ms_ttfb: ttfb, uniq, f16, reset, timeout, other: 0 });
+const BENCH_REP = JSON.stringify({ net: 'mobile-25001', hosts: 114, skipped: 9, noconn: 'privateinternetaccess.com', fams: [
+  { fam: 'google', blocked: 9, solved: 9, unblocked: 0, unsolved: '', variants: [bv(1, 'hardcorp74: Google', 27, 27, 96, 310, 2, 0, 0, 0), bv(13, 'alt9: Google', 27, 19, 140, 420, 0, 0, 2, 6)] },
+  { fam: 'tls', blocked: 61, solved: 57, unblocked: 35, unsolved: 'lrclib.net mi.com rferl.org svoboda.org', noconn: 'cloudflarestatus.com', variants: [
+    bv(1, 'MartinBacker #1', 183, 165, 88, 360, 3, 2, 4, 12), bv(6, 'MartinBacker: Cloudflare', 183, 151, 92, 380, 5, 0, 9, 23),
+    Object.assign(bv(29, 'FAKE TLS AUTO ALT2', 61, 44, 120, 450, 1, 3, 2, 12), { conn: 7 }), bv(14, 'без обхода', 61, 0, -1, -1, 0, 0, 30, 31)] }] });
 const STUB = `window.__calls = []; window.__strat = 'smart';
 window.ksu = { exec: function(cmd, o, cb){
   var id = [o, cb].reverse().find(function(x){ return typeof x === 'string'; });
@@ -59,6 +66,9 @@ window.ksu = { exec: function(cmd, o, cb){
   else if (cmd.indexOf("'smart-status' 'wifi-1'") >= 0) out = ${JSON.stringify(SMART_WIFI)};
   else if (cmd.indexOf("'smart-status'") >= 0) out = ${JSON.stringify(SMART_MOB)};
   else if (cmd.indexOf("'smart-sites'") >= 0) out = ${JSON.stringify(SITES)};
+  else if (cmd.indexOf("'smart-bench' 'status'") >= 0) out = JSON.stringify(window.__bench || { running: 0, stage: 'done', hosts: 114, done1: 114, hosts2: 61, done2: 61, tests: 4710, start: 1700000000, end: 1700002400, stopped: 0 });
+  else if (cmd.indexOf("'smart-bench' 'report'") >= 0) out = ${JSON.stringify(BENCH_REP)};
+  else if (cmd.indexOf("'smart-bench' 'start'") >= 0) { window.__bench = { running: 1, stage: '1', hosts: 114, done1: 23, hosts2: 0, done2: 0, tests: 812, prep: 114, plan: 3300, planned: 640, start: Math.floor(Date.now() / 1000) - 420, end: 0, stopped: 0 }; }
   setTimeout(function(){ if (window[id]) window[id](rc, out, ''); }, 0);
   return 'job';
 }};`;
@@ -127,6 +137,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   sect('another network can be viewed');
   await page.click('.smart-hero .chip');
   await page.waitForTimeout(200);
+  truthy((await page.textContent('.menu')).includes('домашняя, не активен'), 'a home network is listed as inactive');
   await page.click('.menu [role=menuitem] >> nth=1');
   await page.waitForTimeout(400);
   truthy((await page.evaluate(() => window.__calls.join('\n'))).includes("'smart-status' 'wifi-1'"), 'its statistics are asked for');
@@ -170,6 +181,30 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   await page.click('.nav-dest[data-page="control"]'); await page.waitForTimeout(700);
   eq('alt2', await page.$eval('#strategy-current', e => e.textContent), 'the home screen shows the strategy again');
   if (SHOT) await page.screenshot({ path: SHOT.replace(/\.png$/, '-home-strat.png'), fullPage: true });
+
+  sect('debug benchmark (developer)');
+  await page.evaluate(() => { devMode = true; navigate('config'); }); await page.waitForTimeout(700);
+  await page.click('#mode-seg .seg[data-mode="smart"]'); await page.waitForTimeout(400);
+  if (await page.$('#dialog-wrap.open')) { await page.click('#d-ok'); await page.waitForTimeout(900); }
+  await page.evaluate(() => renderSmart()); await page.waitForTimeout(200);
+  truthy((await page.textContent('#smart-body')).includes('Отладочный замер'), 'developer mode shows the benchmark row');
+  await page.click('#smart-body .list-item:has-text("Отладочный замер")'); await page.waitForTimeout(700);
+  const bench = await page.$eval('#smart-sheet-body', e => e.textContent);
+  truthy(bench.includes('Готово') && bench.includes('Поделиться отчётом'), 'a finished run: state and a report to share');
+  truthy(bench.indexOf('#1 MartinBacker #1') < bench.indexOf('#6 MartinBacker: Cloudflare') && bench.includes('только он: 3') && bench.includes('TLS 88 мс'), 'variants by success rate, with timings and unique sites');
+  truthy(bench.includes('Не открылись: lrclib.net'), 'and the sites nothing opened');
+  truthy(bench.includes('адрес закрыт, варианты не помогут: cloudflarestatus.com'), 'sites that never even connected, apart');
+  truthy(bench.includes('адрес закрыт, варианты не помогут: privateinternetaccess.com'), 'and those that did not connect even without bypass');
+  truthy(bench.includes('нет соединения: 7') && (bench.match(/нет соединения/g) || []).length === 1, 'tries that could not even connect are shown apart (only where there were any)');
+  if (SHOT) await page.screenshot({ path: SHOT.replace(/\.png$/, '-bench.png') });
+  await page.click('#smart-sheet-body .list-item:has-text("Запустить заново")'); await page.waitForTimeout(400);
+  await page.click('#d-ok'); await page.waitForTimeout(2200);
+  truthy((await page.evaluate(() => window.__calls.join('\n'))).includes("'smart-bench' 'start'"), 'start asks first, then runs');
+  truthy((await page.$eval('#smart-sheet-body', e => e.textContent)).includes('Этап 1 из 2: вариантов проверено 640 из 3300'), 'progress while it runs: variants, since sites finish together at the end');
+  await page.evaluate(() => { window.__bench.prep = 40; smartBench(); }); await page.waitForTimeout(700);
+  const prepTxt = await page.$eval('#smart-sheet-body', e => e.textContent);
+  truthy(prepTxt.includes('Этап 1 из 2: подготовка сайтов 40 из 114') && prepTxt.includes('после окончания'), 'first the sites are prepared; lists of sites wait for the end');
+  await page.evaluate(() => closeSheet()); await page.waitForTimeout(400);
 
   sect('settings → module behaviour');
   await page.evaluate(() => navigate('settings')); await page.waitForTimeout(500);

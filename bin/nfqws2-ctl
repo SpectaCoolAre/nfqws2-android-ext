@@ -161,12 +161,16 @@ cmd_live_status() {
   fi
   net=$(cat "$SMART_NET_FILE" 2>/dev/null)
   [ -n "$net" ] && label=$(awk -F'\t' -v k="$net" '$1 == k { print $2; exit }' "$SMART_DIR/nets.tsv" 2>/dev/null)
+  # пауза в домашнем Wi‑Fi: профиля у этой сети нет, а показать надо её
+  local hp
+  hp=$(cat "$HOME_PAUSED_FILE" 2>/dev/null)
+  case "$hp" in ''|@*) ;; *) net=home; label=$hp ;; esac
   if command -v dns_enabled >/dev/null 2>&1 && dns_enabled; then hits=$(dns_hits); fi
   cur=$(get_current_strategy)
   # режим — как во вкладке «Обход»: по выбранной стратегии
   if [ "$cur" = smart ]; then
-    f="$SMART_DIR/$net.tsv"
-    smart_valid_net "$net" && [ -f "$f" ] && set -- $(awk -F'\t' '
+    f="$SMART_DIR/$(cat "$SMART_NET_FILE" 2>/dev/null).tsv"
+    [ -f "$f" ] && set -- $(awk -F'\t' '
       function sum(s,   a, k, i, p, r) { r = 0; k = split(s, a, ","); for (i = 1; i <= k; i++) { split(a[i], p, ":"); r += p[2] } return r }
       !/^#/ { o += sum($4); e += sum($5) } END { printf "%d %d", o + 0.5, e + 0.5 }' "$f") && { ok=$1; err=$2; }
   else
@@ -277,7 +281,7 @@ cmd_json_status() {
   # нечисловое значение обваливает весь JSON и убивает WebUI, поэтому проверяем каждое поле
   for v in appn cnt_user cnt_auto cnt_excl cnt_ipset cnt_ipset_excl cnt_apps cnt_rkn cnt_flowseal uptime upms qdrop \
            PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC AUTOSTART WATCHDOG IPV6_ENABLED LOG_LEVEL NFQUEUE_NUM HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT \
-           DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS DNS_PUSH EXTRA_RKN EXTRA_FLOWSEAL; do
+           DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS DNS_PUSH EXTRA_RKN EXTRA_FLOWSEAL WL_PAUSE SMART_POOL; do
     eval "case \"\${$v}\" in ''|*[!0-9]*) $v=0 ;; esac"
   done
 
@@ -294,7 +298,7 @@ cmd_json_status() {
 {"running":$run,"pid":"$pid","uptime":$uptime,"uptime_ms":$upms,"strategy":"$(json_str "$cur_strat")","version":"$(json_str "$ver")","mode":"$(json_str "$(current_mode)")",
 "pkt_limit_out":$PKT_LIMIT_OUT,"pkt_limit_in":$PKT_LIMIT_IN,"block_quic":$BLOCK_QUIC,"app_mode":"$(json_str "$APP_MODE")","autostart":$AUTOSTART,
 "ipv6":$IPV6_ENABLED,"log_level":$LOG_LEVEL,"qdrop":$qdrop,"queue":$NFQUEUE_NUM,"app_uids":$appn,
-"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":$DOH_BYPASS,"meta_quic":$META_QUIC_REJECT,"calls_bypass":$CALLS_BYPASS,"dns_push":$DNS_PUSH,"extra_rkn":$EXTRA_RKN,"extra_flowseal":$EXTRA_FLOWSEAL,"wl_pause":$WL_PAUSE,"dns_paused":"$dnspause","dns_home_pause":$([ -f "$DNS_HOME_FILE" ] && echo 1 || echo 0),"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")",
+"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":$DOH_BYPASS,"meta_quic":$META_QUIC_REJECT,"calls_bypass":$CALLS_BYPASS,"dns_push":$DNS_PUSH,"extra_rkn":$EXTRA_RKN,"extra_flowseal":$EXTRA_FLOWSEAL,"wl_pause":$WL_PAUSE,"smart_pool":$SMART_POOL,"dns_paused":"$dnspause","dns_home_pause":$([ -f "$DNS_HOME_FILE" ] && echo 1 || echo 0),"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")",
 "counts":{"user":$cnt_user,"auto":$cnt_auto,"exclude":$cnt_excl,"ipset":$cnt_ipset,"ipset_exclude":$cnt_ipset_excl,"apps":$cnt_apps,"rkn":$cnt_rkn,"flowseal":$cnt_flowseal}}
 JSON
 }
@@ -1141,6 +1145,8 @@ share_file_ok() {
     "$STRATEGIES_DIR"/*.conf) case "${1#"$STRATEGIES_DIR"/}" in */*) return 1 ;; esac ;;
     "$USER_STRATEGIES_DIR"/*.conf) case "${1#"$USER_STRATEGIES_DIR"/}" in */*) return 1 ;; esac ;;
     "$IMPORTS_DIR"/*.conf) case "${1#"$IMPORTS_DIR"/}" in */*) return 1 ;; esac ;;
+    # отчёт отладочного замера («Поделиться отчётом», путь даёт smart-bench path)
+    "$SMART_DIR"/bench-*.txt) case "${1#"$SMART_DIR"/}" in */*) return 1 ;; esac ;;
     *) return 1 ;;
   esac
   [ -f "$1" ]
@@ -1273,14 +1279,17 @@ cmd_smart_status() { # [сеть — чью статистику показат�
   [ -f "$SMART_LEARN_FILE" ] && awk -F= 'NF >= 2 { k = $1; sub(/^[^=]*=/, ""); gsub(/["\\]/, ""); printf "%s\"%s\":\"%s\"", (n++ ? "," : ""), k, $0 }' "$SMART_LEARN_FILE"
   printf '},"nets":['
   # сети: подпись, сколько сайтов выучено (есть удачи), удачи и ошибки в сумме
-  local first=1 id label f
+  local first=1 id label f home
   if [ -f "$SMART_DIR/nets.tsv" ]; then
     while IFS='	' read -r id label; do
       smart_valid_net "$id" || continue
       f="$SMART_DIR/$id.tsv"
       [ "$first" = 1 ] || printf ','
       first=0
-      printf '{"id":"%s","label":"%s",%s,"current":%s}' "$id" "$(json_str "$label")" \
+      # home — домашняя сеть: обход в ней на паузе, профиль не активен
+      home=0
+      case "$id" in wifi-*) if smart_home_ssid "$label"; then home=1; fi ;; esac
+      printf '{"id":"%s","label":"%s","home":%s,%s,"current":%s}' "$id" "$(json_str "$label")" "$home" \
         "$( { [ -f "$f" ] && head -n 1 "$f" | grep -q '^#v[234]' && cat "$f"; } | awk -F'\t' '
           function sum(s,   a, k, i, p, r) { r = 0; k = split(s, a, ","); for (i = 1; i <= k; i++) { split(a[i], p, ":"); r += p[2] } return r }
           !/^#/ { o = sum($4); e = sum($5); if (o >= 0.5) n++; ok += o; err += e }
@@ -1458,6 +1467,425 @@ cmd_smart_import_b64() { # <base64 файла> -> число добавленн�
   # в памяти nfqws2 своё выученное — служба перезапускается, иначе записала бы его поверх
   if is_running && smart_active; then sh "$SERVICE" restart >/dev/null 2>&1; fi
   echo "${n:-0}"
+}
+# ---------------------------------------------------------------- отладочный замер
+# Сайты, выученные в текущей сети, прогоняются через все варианты умного режима
+# (и расширенный пул): по одному соединению на вариант, параллельно BENCH_W
+# исполнителей. Вариант задаёт оркестратор (lua/zapret-smart.lua: «сайт
+# вариант» в state/smart_bench.<исполнитель>), в обучение замер не попадает.
+# Этап 1 — каждый сайт: без обхода и на каждом варианте профиля, куда он
+# попадает. Этап 2 — заблокированные сайты, которые хоть что-то открыло: ещё по
+# два раза на восьми лучших вариантах — устойчивость и скорость.
+# ТСПУ, увидев запрещённый SNI (попытка без обхода или неудачный вариант), на
+# время перестаёт пропускать соединения к этому адресу. Поэтому: пробы имён — на
+# выученном варианте сайта; варианты идут по кругу через все сайты исполнителя
+# (к одному адресу — раз в минуту-другую); попытка, где TCP не соединился,
+# варианту не в счёт и повторяется в конце этапа. Переадресация на другой сайт
+# не отслеживается (то соединение шло бы не на проверяемом варианте), на
+# заглушку провайдера — неудача
+# Строка итога (bench-<сеть>.tsv): этап сайт профиль вариант итог http
+#   connect tls ttfb total байт   (время — в секундах, как у curl)
+BENCH_W=6
+BENCH_TOP=8
+bench_family() { case "$1" in google) echo google ;; quic*) echo quic ;; *) echo tls ;; esac; }
+# Одна попытка: <исполнитель> <сайт> <вариант> <этап>
+bench_one() {
+  local w="$1" h="$2" v="$3" st="$4" out rc cls code tc ta tt tot=0 sz t0 t1 jar url hop=0 red rh ip
+  # с временем: запись оборвавшегося замера через минуту перестаёт действовать
+  printf '%s %s %s\n' "$h" "$v" "$(date +%s)" > "$STATE_DIR/smart_bench.$w"
+  if [ "$BENCH_KIND" = curl ]; then
+    jar="$BENCH_DIR/ck.$w"; rm -f "$jar"
+    url="https://$BENCH_URL/"
+    # переадресации — вручную и только в пределах сайта: соединение к другому
+    # сайту (twitter.com → x.com) идёт не на проверяемом варианте, а на его
+    # выученном, и его удача — не удача варианта. Ответ сервера переадресацией
+    # уже значит, что DPI соединение пропустил
+    while :; do
+      out=$("$BENCH_BIN" -s -k --connect-timeout 5 -m 10 -o /dev/null -A 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36' \
+        -b "$jar" -c "$jar" -w '%{http_code} %{time_connect} %{time_appconnect} %{time_starttransfer} %{time_total} %{size_download} %{remote_ip} %{redirect_url}' \
+        "$url" 2>/dev/null </dev/null); rc=$?
+      set -f; set -- $out; set +f
+      code=${1:-000} tc=${2:-0} ta=${3:-0} tt=${4:-0} sz=${6:-0} ip=${7:-} red=${8:-}
+      tot=$(awk -v a="$tot" -v b="${5:-0}" 'BEGIN { printf "%.6f", a + b }')
+      [ "$rc" = 0 ] && [ -n "$red" ] && [ "$hop" -lt 3 ] || break
+      # заглушка провайдера или РКН (как в «Проверке доступности»)
+      case "$red" in *rkn.gov.ru*|*eais.*|*warning.rt.ru*|*blackhole*|*zapret*) rc=isp; break ;; esac
+      rh=${red#*://}; rh=${rh%%/*}; rh=${rh%%:*}
+      case "$rh" in "$h"|*."$h") ;; *) break ;; esac
+      url=$red; hop=$((hop + 1))
+    done
+  else
+    t0=$(uptime_cs)
+    "$BENCH_BIN" wget -q -T 8 -O /dev/null -U 'Mozilla/5.0' --no-check-certificate "https://$BENCH_URL/" >/dev/null 2>&1 </dev/null; rc=$?
+    t1=$(uptime_cs)
+    code=000 tc=0 ta=0 tt=0 tot=$(awk -v d=$((t1 - t0)) 'BEGIN { printf "%.3f", d / 100 }') sz=0
+  fi
+  case "$rc" in
+    0|47) cls=ok ;;
+    isp) cls=isp_redir ;;
+    28) if [ "${sz%%.*}" -ge 20000 ] 2>/dev/null; then cls=ok
+        elif [ "${sz%%.*}" -ge 13000 ] 2>/dev/null; then cls=16kb
+        # time_connect = 0: curl не дождался конца соединения, а в него входит и
+        # TLS — так выглядит и закрытый адрес, и ClientHello, который DPI молча
+        # уронил (самая частая блокировка). Различает проверка TCP без TLS (и без
+        # SNI — DPI её не тронет): соединился — это неудача варианта
+        elif [ -z "$(printf '%s' "$tc" | tr -d '0.')" ]; then
+          if bench_tcp "$ip"; then cls=hs_timeout; else cls=connect; fi
+        elif [ "$ta" = 0 ] || [ "$ta" = 0.000000 ]; then cls=hs_timeout
+        else cls=stall; fi ;;
+    35) cls=tls ;;
+    52|56) cls=reset ;;
+    6) cls=dns ;;
+    7) cls=refused ;;
+    *) [ "$BENCH_KIND" = curl ] && cls="err$rc" || cls=fail ;;
+  esac
+  [ "$cls" = ok ] && [ "$code" = 000 ] && [ "$BENCH_KIND" = curl ] && cls=noanswer
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$st" "$h" "${BENCH_SLOT:--}" "$v" "$cls" "$code" "$tc" "$ta" "$tt" "$tot" "$sz" >> "$BENCH_DIR/res.$w"
+  BENCH_CLS=$cls
+}
+# Соединяется ли TCP с адресом (<ip>): HTTP-запрос на 443 без TLS — сервер
+# ответит ошибкой или закроет соединение, но time_connect будет. Адрес
+# неизвестен (curl не дошёл до соединения) — считаем, что нет
+bench_tcp() {
+  local ip="$1" u tc
+  [ -n "$ip" ] || return 1
+  case "$ip" in *:*) u="http://[$ip]:443/" ;; *) u="http://$ip:443/" ;; esac
+  tc=$("$BENCH_BIN" -s -o /dev/null --connect-timeout 3 -m 4 -w '%{time_connect}' "$u" 2>/dev/null </dev/null)
+  [ -n "$(printf '%s' "${tc:-0}" | tr -d '0.')" ]
+}
+# Имена, под которыми сайт бывает в списках: сам домен, www. и записи списков,
+# что на него оканчиваются. В профиль умного режима соединение попадает по
+# спискам, а в выученном — только ключ сайта (домен второго уровня)
+bench_names() { # <сайт>
+  { printf '%s\nwww.%s\n' "$1" "$1"
+    cat "$LISTS_DIR/user.list" "$LISTS_DIR/auto.list" "$LISTS_DIR/google.list" "$LISTS_DIR/probe_hosts.list" \
+      "$MODDIR/defaults/smart-learn.list" 2>/dev/null | tr -d '\r' | sed -e 's/#.*//' -e 's|/.*||' -e 's/[[:space:]]//g' |
+      awk -v k="$1" 'length($0) > length(k) && substr($0, length($0) - length(k)) == "." k'
+  } | awk 'NF && !s[$0]++' | head -n 5
+}
+bench_profile() { # <сайт> -> «профиль число_вариантов», если оркестратор его видел
+  awk -F'\t' -v h="$1" '$1 == h { s = $2; n = $3 } END { if (s != "") print s, n }' "$STATE_DIR/smart_bench.seen" 2>/dev/null
+}
+# Подготовка сайта к этапу 1: <исполнитель> <сайт>. Имя, под которым сайт
+# попадает в профиль умного режима (пробы — этап 0, в отчёт не идут), и
+# попытка без обхода. Сайт с профилем встаёт в очередь q.<исполнитель>.
+# Код 2 — ни одна проба не соединилась (адрес закрыт после прошлых попыток):
+# сайт стоит проверить ещё раз позже
+bench_prep() {
+  local w="$1" h="$2" u url="" line="" k n conn=0
+  BENCH_SLOT=""
+  for u in $(bench_names "$h"); do
+    [ -f "$BENCH_DIR/stop" ] && return 1
+    BENCH_URL=$u
+    # проба — на выученном варианте сайта («-»), не без обхода: открытый SNI
+    # заставил бы ТСПУ закрыть адрес, и следующие попытки не соединялись бы
+    bench_one "$w" "$h" - 0
+    [ "$BENCH_CLS" = dns ] && continue
+    [ "$BENCH_CLS" = connect ] && { conn=1; continue; }
+    [ -z "$url" ] && url=$u
+    line=$(bench_profile "$h")
+    if [ -n "$line" ]; then url=$u; break; fi
+  done
+  if [ -z "$url" ]; then [ "$conn" = 1 ] && return 2; return 1; fi
+  BENCH_URL=$url BENCH_SLOT=${line% *}
+  printf '%s\t%s\n' "$h" "$url" >> "$BENCH_DIR/urls"
+  # без обхода — у сайта вне профилей только это
+  bench_one "$w" "$h" 0 1
+  [ -n "$line" ] || return 1
+  [ "$BENCH_CLS" = connect ] && echo "$h 0" >> "$BENCH_DIR/redo.$w"
+  n=${line#* }
+  k=$(grep -c . "$BENCH_DIR/q.$w")
+  printf '%s %s %s %s\n' "$h" "${line% *}" "$n" "$url" >> "$BENCH_DIR/q.$w"
+  # варианты — в случайном порядке, у каждого сайта своём
+  awk -v n="$n" -v seed="$$$w$k$(date +%s)" 'BEGIN { srand(seed % 2147483647); for (i = 1; i <= n; i++) a[i] = i
+      for (i = n; i > 1; i--) { j = int(rand() * i) + 1; t = a[i]; a[i] = a[j]; a[j] = t }
+      for (i = 1; i <= n; i++) print a[i] }' > "$BENCH_DIR/ord.$w.$k"
+  echo "$n" >> "$BENCH_DIR/plan.$w"
+  return 0
+}
+bench_worker_1() { # <исполнитель>: этап 1 по своим сайтам
+  local w="$1" h v n k i max=0 slot url pass rc line
+  : > "$BENCH_DIR/q.$w"; : > "$BENCH_DIR/redo.$w"; : > "$BENCH_DIR/later.$w"
+  while IFS= read -r h; do
+    [ -f "$BENCH_DIR/stop" ] && break
+    bench_prep "$w" "$h"; rc=$?
+    # для хода на экране: сайт подготовлен (или отложен — он всё равно разобран)
+    echo "$h" >> "$BENCH_DIR/prep"
+    [ "$rc" = 2 ] && { echo "$h" >> "$BENCH_DIR/later.$w"; continue; }
+    [ "$rc" = 0 ] || echo "$h" >> "$BENCH_DIR/done.1"
+  done < "$BENCH_DIR/hosts.1.$w"
+  # не соединившиеся — ещё раз, после остальных сайтов. Снова ни одна проба не
+  # соединилась — в отчёт «не соединился» (без новой попытки: без обхода ТСПУ
+  # увидел бы SNI, если адрес вдруг откроется)
+  while IFS= read -r h; do
+    [ -f "$BENCH_DIR/stop" ] && break
+    bench_prep "$w" "$h"; rc=$?
+    [ "$rc" = 2 ] && printf '1\t%s\t-\t0\tconnect\t000\t0\t0\t0\t0\t0\n' "$h" >> "$BENCH_DIR/res.$w"
+    [ "$rc" = 0 ] || echo "$h" >> "$BENCH_DIR/done.1"
+  done < "$BENCH_DIR/later.$w"
+  max=$(awk '$3 > m { m = $3 } END { print m + 0 }' "$BENCH_DIR/q.$w")
+  # варианты — по кругу через все сайты: i-й вариант каждого сайта, потом
+  # следующий. Между попытками к одному адресу проходит время, и закрытие
+  # адреса после неудачной попытки успевает пройти
+  i=1
+  while [ "$i" -le "$max" ] && [ ! -f "$BENCH_DIR/stop" ]; do
+    k=0
+    while read -r h slot n url; do
+      [ -f "$BENCH_DIR/stop" ] && break
+      v=$(sed -n "${i}p" "$BENCH_DIR/ord.$w.$k"); k=$((k + 1))
+      [ -n "$v" ] || continue
+      BENCH_URL=$url BENCH_SLOT=$slot
+      bench_one "$w" "$h" "$v" 1
+      # не соединился — вариант ни при чём: повторить в конце этапа
+      [ "$BENCH_CLS" = connect ] && echo "$h $v" >> "$BENCH_DIR/redo.$w"
+      [ "$i" = "$n" ] && echo "$h" >> "$BENCH_DIR/done.1"
+    done < "$BENCH_DIR/q.$w"
+    i=$((i + 1))
+  done
+  # повторы несоединившихся: до двух раз, с паузой, если их немного (иначе
+  # паузу дают сами попытки к другим сайтам)
+  for pass in 1 2; do
+    [ -s "$BENCH_DIR/redo.$w" ] && [ ! -f "$BENCH_DIR/stop" ] || break
+    mv -f "$BENCH_DIR/redo.$w" "$BENCH_DIR/redo.$w.cur"; : > "$BENCH_DIR/redo.$w"
+    [ "$(grep -c . "$BENCH_DIR/redo.$w.cur")" -lt 6 ] && sleep "${BENCH_PAUSE:-30}"
+    while read -r h v; do
+      [ -f "$BENCH_DIR/stop" ] && break
+      line=$(awk -v h="$h" '$1 == h { print $2, $4; exit }' "$BENCH_DIR/q.$w")
+      [ -n "$line" ] || continue
+      BENCH_SLOT=${line%% *} BENCH_URL=${line#* }
+      bench_one "$w" "$h" "$v" 1
+      [ "$BENCH_CLS" = connect ] && echo "$h $v" >> "$BENCH_DIR/redo.$w"
+    done < "$BENCH_DIR/redo.$w.cur"
+  done
+  rm -f "$STATE_DIR/smart_bench.$w" "$BENCH_DIR/redo.$w.cur"
+}
+bench_worker_2() { # <исполнитель>: этап 2 — «сайт профиль url варианты…»
+  local w="$1" h slot url vs v k i
+  # тоже по кругу через сайты: i-й вариант каждого сайта, потом следующий
+  for k in 1 2; do
+    i=1
+    while [ "$i" -le "$BENCH_TOP" ] && [ ! -f "$BENCH_DIR/stop" ]; do
+      while read -r h slot url vs; do
+        [ -f "$BENCH_DIR/stop" ] && break
+        v=$(echo "$vs" | awk -F, -v i="$i" '{ print $i }'); [ -n "$v" ] || continue
+        BENCH_URL=$url BENCH_SLOT=$slot
+        bench_one "$w" "$h" "$v" 2
+      done < "$BENCH_DIR/hosts.2.$w"
+      i=$((i + 1))
+    done
+  done
+  cut -d' ' -f1 "$BENCH_DIR/hosts.2.$w" >> "$BENCH_DIR/done.2"
+  rm -f "$STATE_DIR/smart_bench.$w"
+}
+bench_parallel() { # <этап>
+  local w=0 pids=""
+  while [ "$w" -lt "$BENCH_W" ]; do
+    if [ -s "$BENCH_DIR/hosts.$1.$w" ]; then
+      ( bench_worker_$1 "$w" ) &
+      pids="$pids $!"
+    fi
+    w=$((w + 1))
+  done
+  echo "$pids" > "$BENCH_DIR/pids"
+  wait
+}
+cmd_smart_bench_run() {
+  local net f tool all
+  net=$(cat "$SMART_NET_FILE" 2>/dev/null); f="$SMART_DIR/$net.tsv"
+  tool=$(probe_tool); BENCH_KIND="${tool%% *}"; BENCH_BIN="${tool#* }"
+  echo $$ > "$BENCH_DIR/pid"
+  printf 'net=%s\nstart=%s\nstage=1\ntool=%s\n' "$net" "$(date +%s)" "$BENCH_KIND" > "$BENCH_DIR/info"
+  awk -F'\t' '!/^#/ && $2 ~ /\./ && !s[$2]++ { print $2 }' "$f" > "$BENCH_DIR/hosts"
+  awk -v w="$BENCH_W" -v d="$BENCH_DIR" '{ print > (d "/hosts.1." ((NR - 1) % w)) }' "$BENCH_DIR/hosts"
+  : > "$STATE_DIR/smart_bench.seen"
+  echo "$BENCH_W $$" > "$SMART_BENCH_FILE"
+  trap 'bench_clear; cleanup_probe_app_rule' EXIT
+  trap 'kill $(cat "$BENCH_DIR/pids" 2>/dev/null) 2>/dev/null; exit 143' INT TERM HUP
+  setup_probe_app_rule
+  # оркестратор перечитывает state/smart_bench раз в 5 секунд
+  sleep "${BENCH_SETTLE:-6}"
+  bench_parallel 1
+  # ни одно соединение не дошло до умного режима с заданным вариантом — замер
+  # не задаёт варианты, а меряет то, что уже выучено
+  [ -s "$STATE_DIR/smart_bench.seen" ] || log_msg "Отладочный замер: умный режим не принял ни одного варианта замера — итоги без обхода ненадёжны"
+  # этап 2: лучшие варианты (по удачам на заблокированных сайтах) — ещё два раза
+  if [ ! -f "$BENCH_DIR/stop" ]; then
+    sed -i 's/^stage=.*/stage=2/' "$BENCH_DIR/info"
+    { sed 's/^/U\t/' "$BENCH_DIR/urls" 2>/dev/null; cat "$BENCH_DIR"/res.* 2>/dev/null; } | awk -F'\t' -v top="$BENCH_TOP" -v d="$BENCH_DIR" -v w="$BENCH_W" '
+      function fam(s) { return s == "google" ? "google" : (s ~ /^quic/ ? "quic" : "tls") }
+      $1 == "U" { url[$2] = $3; next }
+      $1 != 1 && $1 != 2 { next }
+      # без обхода: удача — удача; «не соединился» не перекрывает другой итог
+      $4 == 0 { if (base[$2] != "ok" && ($5 != "connect" || base[$2] == "")) base[$2] = $5; next }
+      { slot[$2] = $3; if ($5 == "ok" && base[$2] != "ok") { okh[$2] = 1; cnt[fam($3) SUBSEP $4]++ } }
+      END {
+        for (h in slot) if (base[h] != "ok" && okh[h]) {
+          f = fam(slot[h])
+          # лучшие варианты этого семейства
+          if (!(f in picked)) {
+            k = 0; split("", used)
+            for (i = 0; i < top; i++) {
+              best = ""; bc = 0
+              for (key in cnt) { split(key, z, SUBSEP); if (z[1] == f && !(z[2] in used) && cnt[key] > bc) { bc = cnt[key]; best = z[2] } }
+              if (best == "") break
+              used[best] = 1; picked[f] = picked[f] (k++ ? "," : "") best
+            }
+          }
+          if (picked[f] != "") print h, slot[h], (h in url ? url[h] : h), picked[f] > (d "/hosts.2." (n++ % w))
+        }
+      }'
+    bench_parallel 2
+  fi
+  cleanup_probe_app_rule
+  bench_clear
+  cat "$BENCH_DIR"/res.* 2>/dev/null > "$SMART_DIR/bench-$net.tsv"
+  sed -i 's/^stage=.*/stage=done/' "$BENCH_DIR/info"
+  echo "end=$(date +%s)" >> "$BENCH_DIR/info"
+  cmd_smart_bench_report text > "$SMART_DIR/bench-$net.txt" 2> "$BENCH_DIR/report.err"
+  # отчёт не собрался (awk прошивки) — причина в журнал службы, данные замера целы
+  [ -s "$SMART_DIR/bench-$net.txt" ] || log_msg "Отладочный замер: отчёт не собрался: $(head -c 300 "$BENCH_DIR/report.err" 2>/dev/null | tr '\n' ' ')"
+  rm -f "$BENCH_DIR/pid"
+}
+bench_clear() { rm -f "$SMART_BENCH_FILE" "$STATE_DIR"/smart_bench.[0-9]* "$BENCH_DIR"/ck.*; }
+# процесс жив и это именно замер: PID оборвавшегося мог достаться другому процессу
+bench_running() { local p; p=$(cat "$BENCH_DIR/pid" 2>/dev/null); [ -n "$p" ] && tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q "smart-bench run"; }
+# Сводка: JSON для WebUI или текст (text). Без аргумента — последний замер этой сети
+cmd_smart_bench_report() {
+  local net res names
+  net=$(sed -n 's/^net=//p' "$BENCH_DIR/info" 2>/dev/null); [ -n "$net" ] || net=$(cat "$SMART_NET_FILE" 2>/dev/null)
+  res="$SMART_DIR/bench-$net.tsv"
+  local live=0
+  bench_running && res="$BENCH_DIR/live.tsv" && live=1 && cat "$BENCH_DIR"/res.* > "$res" 2>/dev/null
+  [ -s "$res" ] || { [ "$1" = text ] && echo "Замера ещё не было" || echo '{"fams":[]}'; return 0; }
+  names=$(sed -n 's/^#@\([a-z]*\) \([0-9]*\) \(.*\)$/N\t\1\t\2\t\3/p' "$STRATEGIES_DIR/smart.conf" 2>/dev/null)
+  # медианы времени — по отсортированным значениям
+  { printf '%s\n' "$names"; cat "$res"; } | awk -F'\t' '
+    function fam(s) { return s == "google" ? "google" : (s ~ /^quic/ ? "quic" : "tls") }
+    $1 == "N" || $1 == 0 { next }
+    # время — только на заблокированных сайтах: там же, где считаются удачи
+    $4 == 0 { if ($1 == 1 && base[$2] != "ok" && ($5 != "connect" || base[$2] == "")) base[$2] = $5; next }
+    base[$2] != "ok" && $5 == "ok" { tls = ($8 - $7) * 1000; if (tls < 0) tls = 0; printf "T\t%s\t%s\t%d\nF\t%s\t%s\t%d\n", fam($3), $4, tls + 0.5, fam($3), $4, $9 * 1000 + 0.5 }
+  ' | sort -t "$(printf '\t')" -k1,1 -k2,2 -k3,3n -k4,4n | awk -F'\t' '
+    { k = $1 "\t" $2 "\t" $3; v[k, ++c[k]] = $4 }
+    END { for (k in c) { n = c[k]; m = (n % 2) ? v[k, (n + 1) / 2] : int((v[k, n / 2] + v[k, n / 2 + 1]) / 2); print "M\t" k "\t" m } }
+  ' > "$BENCH_DIR/med" 2>/dev/null
+  { printf '%s\n' "$names"; cat "$BENCH_DIR/med"; cat "$res"; } | awk -F'\t' -v mode="$1" -v net="$net" -v live="$live" -v info="$(tr '\n' ' ' < "$BENCH_DIR/info" 2>/dev/null)" '
+    function fam(s) { return s == "google" ? "google" : (s ~ /^quic/ ? "quic" : "tls") }
+    function q(s) { gsub(/["\\]/, "", s); return s }
+    $1 == "N" { nm[$2 "|" $3] = $4; next }
+    $1 == "M" { med[$2 "|" $3 "|" $4] = $5; next }
+    $1 != 1 && $1 != 2 { next }
+    {
+      h = $2; f = fam($3)
+      if ($4 == 0) { if ($1 == 1) { if (base[h] != "ok" && ($5 != "connect" || base[h] == "")) base[h] = $5; if (!(h in hosts)) nh++; hosts[h] = 1 } ; next }
+      hf[h] = f; fams[f] = 1
+      k = f "|" $4; vs[k] = 1
+      # не соединился — ТСПУ на время закрыл адрес, до ClientHello не дошло:
+      # варианту не в счёт (замер такую попытку повторяет позже)
+      if ($5 == "connect") { cn[k]++; next }
+      conn[h] = 1
+      if (base[h] != "ok") {
+        tests[k]++
+        if ($5 == "ok") { ok[k]++; if ($1 == 1) { okv[h, $4] = 1; nok[h]++; lastok[h] = $4 } }
+        else { fl[k, $5]++ }
+      } else { tu[k]++; if ($5 == "ok") ou[k]++ }
+    }
+    END {
+      for (h in hosts) {
+        if (!(h in hf)) {
+          # не соединился и без обхода — варианты не проверялись
+          # до умного режима такой сайт не доходит (нет ClientHello) — профиль неизвестен
+          if (base[h] == "connect") nocg = nocg (nocg != "" ? " " : "") h
+          else skipped++
+          continue
+        }
+        f = hf[h]
+        if (base[h] == "ok") unb[f]++
+        else if (nok[h] > 0) { sol[f]++; if (nok[h] == 1) uniq[f "|" lastok[h]]++ }
+        else if (!(h in conn)) { noc[f] = noc[f] (noc[f] != "" ? " " : "") h }
+        else { uns[f] = uns[f] (uns[f] != "" ? " " : "") h }
+        blk[f] += (base[h] != "ok")
+      }
+      # замер ещё идёт: «не соединился», «не открылся» — ещё не итог (сайт
+      # повторят, варианты до него ещё дойдут), списков сайтов не показываем
+      if (live) { nocg = ""; split("", uns); split("", noc) }
+      if (mode == "text") {
+        printf "Отладочный замер умного режима · сеть %s\n%s\n", net, info
+        printf "Сайтов: %d, вне профилей умного режима или без DNS: %d\n", nh, skipped + 0
+        if (nocg != "") printf "Не соединились ни разу (адрес закрыт — варианты тут не помогут): %s\n", nocg
+      } else printf "{\"net\":\"%s\",\"hosts\":%d,\"skipped\":%d,\"noconn\":\"%s\",\"fams\":[", q(net), nh, skipped + 0, q(nocg)
+      nf = 0
+      for (f in fams) {
+        if (mode == "text") printf "\n== %s: заблокировано %d, открыл хоть один вариант %d, не открылись %d, открываются и без обхода %d\n", f, blk[f], sol[f], blk[f] - sol[f], unb[f]
+        else printf "%s{\"fam\":\"%s\",\"blocked\":%d,\"solved\":%d,\"unblocked\":%d,\"unsolved\":\"%s\",\"noconn\":\"%s\",\"variants\":[", (nf++ ? "," : ""), f, blk[f], sol[f], unb[f], q(uns[f]), q(noc[f])
+        nv = 0
+        for (k in vs) {
+          split(k, z, "|"); if (z[1] != f) continue
+          v = z[2]; name = nm[(f == "tls" ? "tls" : f) "|" v]
+          t = med["T|" f "|" v]; tf = med["F|" f "|" v]
+          # сравнения — вне списка printf: awk прошивки (one-true-awk) их там не разбирает
+          pct = tests[k] ? int(100 * ok[k] / tests[k] + 0.5) : 0
+          rs = fl[k, "reset"] + fl[k, "tls"]; to = fl[k, "hs_timeout"] + fl[k, "stall"]
+          if (mode == "text") {
+            if (t == "") t = "—"
+            if (tf == "") tf = "—"
+            printf "%3d  %-34s удач %3d из %3d (%3d%%)  TLS %5s мс  ответ %5s мс  только он: %d  16КБ %d  сброс %d  тайм-аут %d  нет соединения %d\n", v, name, ok[k], tests[k], pct, t, tf, uniq[k], fl[k, "16kb"], rs, to, cn[k]
+          } else {
+            if (t == "") t = -1
+            if (tf == "") tf = -1
+            printf "%s{\"n\":%d,\"name\":\"%s\",\"tests\":%d,\"ok\":%d,\"ms_tls\":%d,\"ms_ttfb\":%d,\"uniq\":%d,\"f16\":%d,\"reset\":%d,\"timeout\":%d,\"other\":%d,\"conn\":%d}", (nv++ ? "," : ""), v, q(name), tests[k], ok[k], t, tf, uniq[k], fl[k, "16kb"], rs, to, tests[k] - ok[k] - fl[k, "16kb"] - rs - to, cn[k]
+          }
+        }
+        if (mode == "text") {
+          if (uns[f] != "") printf "Не открылись ни на одном варианте: %s\n", uns[f]
+          if (noc[f] != "") printf "Не соединились ни разу (адрес закрыт — варианты тут не помогут): %s\n", noc[f]
+        }
+        else printf "]}"
+      }
+      if (mode != "text") printf "]}\n"
+    }'
+}
+cmd_smart_bench() {
+  case "$1" in
+    start)
+      bench_running && { echo "$(M 'Замер уже идёт' 'Benchmark is already running')" >&2; exit 1; }
+      is_running && [ "$(get_current_strategy)" = smart ] || { echo "$(M 'Нужен работающий умный режим' 'Smart mode must be running')" >&2; exit 1; }
+      [ "$(cat "$SMART_NET_FILE" 2>/dev/null)" = offline ] && { echo "$(M 'Нет сети' 'No network')" >&2; exit 1; }
+      [ "$(probe_tool | cut -d' ' -f1)" = none ] && { echo "$(M 'Нет curl или wget' 'No curl or wget')" >&2; exit 1; }
+      [ -s "$SMART_DIR/$(cat "$SMART_NET_FILE" 2>/dev/null).tsv" ] || { echo "$(M 'В этой сети ещё ничего не выучено' 'Nothing learned on this network yet')" >&2; exit 1; }
+      rm -rf "$BENCH_DIR"; mkdir -p "$BENCH_DIR"
+      ( setsid sh "$0" smart-bench run >/dev/null 2>&1 & ) 2>/dev/null || ( sh "$0" smart-bench run >/dev/null 2>&1 & )
+      echo OK ;;
+    run) cmd_smart_bench_run ;;
+    stop)
+      touch "$BENCH_DIR/stop" 2>/dev/null
+      # замер оборвался раньше: остановить нечего — убрать то, что от него осталось
+      bench_running || { bench_clear; rm -f "$BENCH_DIR/pid"; [ -f "$BENCH_DIR/info" ] && sed -i 's/^stage=.*/stage=done/' "$BENCH_DIR/info"; }
+      echo OK ;;
+    status)
+      local st n1 n2 h h2 run=0 r pr pl pd
+      bench_running && run=1
+      st=$(sed -n 's/^stage=//p' "$BENCH_DIR/info" 2>/dev/null)
+      h=$(grep -c . "$BENCH_DIR/hosts" 2>/dev/null); h2=$(cat "$BENCH_DIR"/hosts.2.* 2>/dev/null | grep -c .)
+      n1=$(grep -c . "$BENCH_DIR/done.1" 2>/dev/null); n2=$(grep -c . "$BENCH_DIR/done.2" 2>/dev/null)
+      r=$(cat "$BENCH_DIR"/res.* 2>/dev/null | grep -c .)
+      # этап 1: сколько вариантов задумано на сайты (известно после проб) и проверено
+      pr=$(grep -c . "$BENCH_DIR/prep" 2>/dev/null)
+      pl=$(cat "$BENCH_DIR"/plan.* 2>/dev/null | awk '{ s += $1 } END { print s + 0 }')
+      pd=$(cat "$BENCH_DIR"/res.* 2>/dev/null | awk -F'\t' '$1 == 1 && $4 > 0 && $5 != "connect"' | grep -c .)
+      printf '{"running":%s,"stage":"%s","hosts":%d,"done1":%d,"hosts2":%d,"done2":%d,"tests":%d,"prep":%d,"plan":%d,"planned":%d,"start":%d,"end":%d,"stopped":%s}\n' \
+        "$run" "$(json_str "$st")" "${h:-0}" "${n1:-0}" "${h2:-0}" "${n2:-0}" "${r:-0}" "${pr:-0}" "${pl:-0}" "${pd:-0}" \
+        "$(sed -n 's/^start=//p' "$BENCH_DIR/info" 2>/dev/null | grep -o '^[0-9]*' || echo 0)" "$(sed -n 's/^end=//p' "$BENCH_DIR/info" 2>/dev/null | grep -o '^[0-9]*' || echo 0)" \
+        "$([ -f "$BENCH_DIR/stop" ] && echo 1 || echo 0)" ;;
+    report) cmd_smart_bench_report "$2" ;;
+    names) bench_names "$2" ;;
+    # файл отчёта для «Поделиться»
+    path)
+      local net; net=$(sed -n 's/^net=//p' "$BENCH_DIR/info" 2>/dev/null); [ -n "$net" ] || net=$(cat "$SMART_NET_FILE" 2>/dev/null)
+      [ -s "$SMART_DIR/bench-$net.txt" ] || { echo "$(M 'Замера ещё не было' 'No benchmark yet')" >&2; exit 1; }
+      echo "$SMART_DIR/bench-$net.txt" ;;
+    *) echo "smart-bench start|stop|status|report [text]|path" >&2; exit 1 ;;
+  esac
 }
 # Фоновое обучение: один случайный сайт — из своего списка, «Проверки
 # доступности», обучения и сайтов пользователя. Зовёт помощник умного режима
@@ -1679,7 +2107,7 @@ case "$1" in
 
   set)
     case "$2" in
-      BLOCK_QUIC|AUTOSTART|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|VPN_PAUSE|ENABLE_HOTSPOT|DOH_BYPASS|META_QUIC_REJECT|CALLS_BYPASS|DNS_PUSH|EXTRA_RKN|EXTRA_FLOWSEAL|SMART_LEARN|WL_PAUSE) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
+      BLOCK_QUIC|AUTOSTART|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|VPN_PAUSE|ENABLE_HOTSPOT|DOH_BYPASS|META_QUIC_REJECT|CALLS_BYPASS|DNS_PUSH|EXTRA_RKN|EXTRA_FLOWSEAL|SMART_LEARN|WL_PAUSE|SMART_POOL) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
       PKT_LIMIT_OUT|PKT_LIMIT_IN) case "$3" in [1-9]|1[0-5]) ;; *) echo "Допустимо 1..15" >&2; exit 1 ;; esac ;;
       APP_MODE) case "$3" in off|include|exclude) ;; *) echo "off|include|exclude" >&2; exit 1 ;; esac ;;
       *) echo "Параметр $2 нельзя менять этой командой" >&2; exit 1 ;;
@@ -1703,6 +2131,8 @@ case "$1" in
       META_QUIC_REJECT) load_conf >/dev/null 2>&1; if is_running; then meta_quic_start; fi ;;
       # фоновое обучение подхватит помощник умного режима сам
       AUTOSTART|SMART_LEARN) ;;
+      # расширенный пул оркестратор подхватит сам, через несколько секунд
+      SMART_POOL) load_conf >/dev/null 2>&1; smart_pool_sync ;;
       # DNS применяет сразу, служба обхода тут ни при чём
       DNS_PUSH) load_conf >/dev/null 2>&1; dns_apply_now ;;
       # список подключается к профилям — служба перечитает и перезапустится сама
@@ -1755,6 +2185,7 @@ EOF
   smart-export) cmd_smart_export "$2" "$3" ;;
   smart-import-b64) cmd_smart_import_b64 "$2" ;;
   smart-learn-once) cmd_smart_learn_once ;;
+  smart-bench) shift; cmd_smart_bench "$@" ;;
   # smart-turbo on|off — игра-пасхалка: фоновое обучение чаще (метка на 45 с)
   smart-turbo)
     case "$2" in

@@ -41,10 +41,17 @@ case "$NAME" in
       get)
         case "$3" in
           tether_offload_disabled) printf '%s\n' "${MOCK_TETHER_OFFLOAD:-1}" ;;
+          multi_sim_data_call) printf '%s\n' "${MOCK_DATA_SUB:-}" ;;
           *) printf '\n' ;;
         esac ;;
       *) exit 0 ;;
     esac
+    exit 0 ;;
+  content)
+    # content query --uri content://telephony/siminfo --projection sim_id --where _id=N
+    # MOCK_SIMINFO: «подписка:слот» через пробел
+    for w; do case "$w" in _id=*) sub=${w#_id=} ;; esac; done
+    for p in $MOCK_SIMINFO; do [ "${p%%:*}" = "$sub" ] && printf 'Row: 0 sim_id=%s\n' "${p#*:}"; done
     exit 0 ;;
   sysctl|modprobe|ip|iptables-save|killall)
     exit 0 ;;

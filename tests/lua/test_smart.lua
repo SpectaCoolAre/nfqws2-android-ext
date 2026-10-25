@@ -54,7 +54,7 @@ local function packet(track, opts)
 	local desync = { target = {},
 		track = track, outgoing = not opts.incoming, l7payload = "tls_client_hello",
 		dis = { tcp = { th_flags = (opts.rst and TH_RST or 0) + (opts.fin and TH_FIN or 0), th_sport = track.port, th_dport = 443 }, payload = string.rep("x", opts.len or 100) },
-		arg = { slot = opts.slot or "tls", home = HOME, pass = tostring(opts.pass or N), first = opts.first },
+		arg = { slot = opts.slot or "tls", home = HOME, pass = tostring(opts.pass or N), first = opts.first, base = opts.base },
 		func_instance = "smart_" .. (opts.slot or "tls"), plan = (opts.plan or plan)()
 	}
 	if opts.outgoing then desync.outgoing = true end
@@ -466,6 +466,12 @@ if got[1] ~= "fake:tls_google:2:rnd,dupsid,sni=www.google.com:" then diff = diff
 if got[2] ~= "multisplit::::1,midsld" then diff = diff + 1 end
 check(#got >= 2 and diff == 1, "the tuned variant runs the same blocks with one value changed (" .. table.concat(got, " | ") .. ")")
 check((rec(mh, "mt").ok[mid] or 0) == 1, "its success is its own")
+-- проба отладочного замера на сайте с подстроенным вариантом: он и работает,
+-- а не «без обхода» (номер подстройки больше числа вариантов профиля)
+writefile(HOME .. "/state/smart_bench", "1 1\n"); writefile(HOME .. "/state/smart_bench.0", mh .. " - " .. clock .. "\n")
+later(6); got = {}; mok(mh)
+check(#got >= 2, "a benchmark name probe on a tuned variant runs that variant, not without bypass (" .. #got .. " blocks)")
+os.remove(HOME .. "/state/smart_bench"); os.remove(HOME .. "/state/smart_bench.0"); later(6)
 later(30); okconn("a.example")
 local mf = readall(HOME .. "/smart/" .. (readall(HOME .. "/state/smart_net") or ""):gsub("%s+$", "") .. ".tsv") or ""
 check(mf:find("\n#m\tmt\t" .. mid .. "\t1\t") ~= nil, "it is saved with the network")
@@ -540,6 +546,73 @@ do
 	later(30); sp(conn("f.example"))   -- сохраняется не чаще раза в 20 с, на следующем пакете
 	local sf = readall(HOME .. "/state/strat_stat") or ""
 	check(sf:find("^alt2\t3\t2\t") ~= nil, "and saved per strategy (" .. sf:gsub("\n", " ") .. ")")
+end
+
+section("the extended pool joins the search only when enabled")
+do
+	local function run(h)
+		local seen = {}
+		-- сайт хоть раз открылся — ошибки дальше не принимаются за «не DPI»
+		local c0 = conn(h); packet(c0, { slot = "pool", base = 2, pass = 9 }); packet(c0, { incoming = true, seq = 18000, slot = "pool", base = 2, pass = 9 })
+		for i = 1, 10 do
+			later(); local c = conn(h); local v = packet(c, { slot = "pool", base = 2, pass = 9 })
+			seen[v or 0] = true
+			for k = 1, 3 do packet(c, { retrans = true, slot = "pool", base = 2, pass = 9 }) end
+			okconn("anchor.example")   -- связь есть: ошибки — не от сети
+		end
+		return seen
+	end
+	local s1 = run("pool1.example")
+	check(s1[1] and s1[2] and not s1[3] and not s1[4], "off: only the base set (1–2) is tried")
+	writefile(HOME .. "/state/smart_pool", "ext\n"); later(6)
+	local s2 = run("pool2.example")
+	check(s2[3] or s2[4], "on: variants past the base set are tried too")
+	os.remove(HOME .. "/state/smart_pool"); later(6)
+	-- набор — список номеров: варианта 2 в нём нет, хотя он «внутри» диапазона
+	local seen = {}
+	local c0 = conn("pool3.example"); packet(c0, { slot = "pool3", base = "1,3-4", pass = 9 }); packet(c0, { incoming = true, seq = 18000, slot = "pool3", base = "1,3-4", pass = 9 })
+	for i = 1, 10 do
+		later(); local c = conn("pool3.example"); local v = packet(c, { slot = "pool3", base = "1,3-4", pass = 9 }); seen[v or 0] = true
+		for k = 1, 3 do packet(c, { retrans = true, slot = "pool3", base = "1,3-4", pass = 9 }) end
+		okconn("anchor.example")
+	end
+	check(seen[1] and seen[3] and not seen[2], "a list: only its numbers are tried (1, 3, 4 — not 2)")
+	later(); local v = packet(conn("pool2.example"), { slot = "pool", base = 2, pass = 9 })
+	check(v == 1 or v == 2, "off again: a site sitting on a pool variant goes back to the base set (" .. tostring(v) .. ")")
+end
+
+section("debug benchmark: the variant is forced and nothing is learned")
+do
+	-- замер оборвался: файлы остались — сайт на обычном обучении
+	writefile(HOME .. "/state/smart_bench", "2 12345\n")
+	writefile(HOME .. "/state/smart_bench.1", "bench.example 0\n")
+	later(6)
+	check(packet(conn("bench.example")) ~= nil, "a record without time (an older version) is ignored")
+	writefile(HOME .. "/state/smart_bench.1", "bench.example 0 " .. (clock - 120) .. "\n")
+	check(packet(conn("bench.example")) ~= nil, "a record older than a minute (the benchmark died) is ignored")
+	local function bw(v) writefile(HOME .. "/state/smart_bench.1", "bench.example " .. v .. " " .. clock .. "\n") end
+	bw(3)
+	local c = conn("www.bench.example")
+	check(packet(c) == 3, "the connection runs on the variant the benchmark asked for")
+	for i = 1, 3 do packet(c, { retrans = true }) end
+	local r = rec("bench.example")
+	check(not r or ((r.err[3] or 0) == 0 and (r.ok[3] or 0) == 0), "its failure is not learned")
+	local seen = readall(HOME .. "/state/smart_bench.seen") or ""
+	check(seen:find("bench.example\ttls\t4\t3", 1, true) ~= nil, "the profile it landed in is reported (" .. seen:gsub("\n", " ") .. ")")
+	bw(0)
+	called = {}
+	check(packet(conn("bench.example")) == nil and called[1] == "always", "variant 0: no bypass, only the common instances")
+	bw(99)
+	check(packet(conn("bench.example")) == nil, "a variant this profile does not have: no bypass")
+	local cur = rec("bench.example") and rec("bench.example").cur
+	bw("-")
+	local pv = packet(conn("bench.example"))
+	check(pv ~= nil and pv == cur, "a name probe («-»): the site's learned variant, not without bypass (" .. tostring(pv) .. ")")
+	check((readall(HOME .. "/state/smart_bench.seen") or ""):find("bench.example\ttls\t4\t" .. tostring(cur), 1, true) ~= nil, "and its profile is reported")
+	check(okconn("other.example") ~= nil, "other sites are not touched")
+	os.remove(HOME .. "/state/smart_bench"); later(6)
+	local v = packet(conn("bench.example"))
+	check(v ~= nil, "benchmark over: the site is handled by the smart mode again")
 end
 
 section("slots are separate")

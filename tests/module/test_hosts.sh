@@ -65,6 +65,11 @@ ctl hosts-save-b64 bypass "$(b64 '9.9.9.9 new.example
 assert_rc 0 "$ctl_rc" "bypass entries are saved"
 assert_contains "$(cat "$HOSTS_TARGET")" "9.9.9.9 new.example" "and take effect without a remount (same file)"
 assert_contains "$(cat "$HOSTS_TARGET")" "5.5.5.5 three.example" "a line with two names gives both"
+# сигнал «сбросить кэш DNS» уходит в фоне — подождём его
+i=0; while [ "$i" -lt 20 ] && [ "$(grep -c CLEAR_DNS_CACHE "$MOCK_DIR/am.log" 2>/dev/null)" -lt 4 ]; do sleep 0.1; i=$((i + 1)); done
+assert_contains "$(cat "$MOCK_DIR/am.log" 2>/dev/null)" "am broadcast -a android.net.action.CLEAR_DNS_CACHE" "apps are told to drop their DNS cache (Android 12+)"
+assert_contains "$(cat "$MOCK_DIR/am.log" 2>/dev/null)" "am broadcast -a android.intent.action.CLEAR_DNS_CACHE" "and the older name too"
+assert_eq "4" "$(grep -c CLEAR_DNS_CACHE "$MOCK_DIR/am.log")" "on switching on and on each change of the mounted file, not more"
 
 ctl hosts-block-add "one.ads.example, two.ads.example" "https://x" "0.0.0.0 three.ads.example"
 assert_rc 0 "$ctl_rc" "block domains are added in a batch"

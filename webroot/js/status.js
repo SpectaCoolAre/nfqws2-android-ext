@@ -132,7 +132,7 @@ function renderLive(){
   const net = L.net || '';
   tiles.push({icon: net === 'offline' ? 'warn' : /^mobile/.test(net) ? 'globe' : 'wifi', title: 'Сеть',
     value: !net ? '—' : net === 'offline' ? t('Нет связи') : /^mobile/.test(net) ? t('Мобильная') : 'Wi‑Fi',
-    sub: L.net_label || (net === 'offline' ? t('обход ждёт сеть') : ''), on: ''});
+    sub: net === 'home' ? t('{0} · домашняя', L.net_label) : L.net_label || (net === 'offline' ? t('обход ждёт сеть') : ''), on: ''});
   const c = L.conn || {}, p = pct(+c.ok || 0, +c.err || 0);
   tiles.push({icon: 'check', title: 'Соединения', value: p == null ? '—' : p + '%',
     sub: p == null ? t('статистика появится по ходу работы') : t('удачных {0} · ошибок {1}', fmtShort(c.ok), fmtShort(c.err)), on: "navigate('config')"});
@@ -298,7 +298,8 @@ const DEV_SW = [
   ['META_QUIC_REJECT', 'Отказ QUIC для Instagram', 'meta_quic'],
   ['CALLS_BYPASS', 'Обход звонков (не тестировалось)', 'calls_bypass'],
   ['DNS_PUSH', 'Push-уведомления через DNS Google', 'dns_push'],
-  ['WL_PAUSE', 'Отключать при белых списках', 'wl_pause']
+  ['WL_PAUSE', 'Отключать при белых списках', 'wl_pause'],
+  ['SMART_POOL', 'Расширенный пул умного режима', 'smart_pool']
 ];
 /* Переключатели разработчика, доступные в этой сборке: DNS_PUSH — только
    при DNS профилях (сборка с dnsproxy) */

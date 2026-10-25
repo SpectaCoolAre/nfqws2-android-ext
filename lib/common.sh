@@ -37,6 +37,9 @@ SMART_NET_FILE="$STATE_DIR/smart_net"          # id текущей сети дл
 SMART_LEARN_FILE="$STATE_DIR/smart_learn"      # фоновое обучение: сколько открыто, последний сайт
 SMART_LEARN_EVERY=120                          # сек между сайтами фонового обучения
 SMART_TURBO_FILE="$STATE_DIR/smart_turbo"      # до какого времени обучение ускорено (игра)
+SMART_POOL_FILE="$STATE_DIR/smart_pool"        # ext — умный режим перебирает и расширенный пул
+SMART_BENCH_FILE="$STATE_DIR/smart_bench"      # идёт отладочный замер: число его исполнителей
+BENCH_DIR="$STATE_DIR/bench"                   # рабочий каталог замера
 SMART_TURBO_EVERY=15
 SK_PIDFILE="$STATE_DIR/smartkill.pid"          # обрыв застрявших соединений умного режима
 SMART_KILL_FILE="$STATE_DIR/smart_kill"        # их пишет оркестратор: «4|6 адрес локальный-порт»
@@ -103,6 +106,7 @@ set_defaults() {
   : "${EXTRA_FLOWSEAL:=0}"
   : "${SMART_LEARN:=1}"
   : "${WL_PAUSE:=1}"
+  : "${SMART_POOL:=0}"
 }
 
 log_msg() {
@@ -1429,7 +1433,7 @@ render_strategy() {
 
 # Module settings (same across strategies) are carried over whole from the live
 # config on strategy change/reset. NFQWS_EXTRA_ARGS only for standard $MODE_* refs.
-USER_KEYS="DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH EXTRA_RKN EXTRA_FLOWSEAL SMART_LEARN WL_PAUSE NFQWS_EXTRA_ARGS"
+USER_KEYS="DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH EXTRA_RKN EXTRA_FLOWSEAL SMART_LEARN WL_PAUSE SMART_POOL NFQWS_EXTRA_ARGS"
 merge_user_keys() { # <generated config> <settings source config>  -> stdout
   awk -v keys=" $USER_KEYS " -v src="$2" '
     function quotes(str,   t) { t = str; return gsub(/"/, "", t) }
@@ -1579,17 +1583,50 @@ smart_net_id() {
     return 0
   fi
   case "$dev" in wlan*) printf 'wifi\tWi‑Fi'; return 0 ;; esac
-  op=$(getprop gsm.operator.numeric 2>/dev/null); op=${op%%,*}
-  name=$(getprop gsm.operator.alpha 2>/dev/null); name=${name%%,*}
+  op=$(getprop gsm.operator.numeric 2>/dev/null)
+  name=$(getprop gsm.operator.alpha 2>/dev/null)
+  # две SIM: операторы через запятую по слотам — берём ту, через которую идут
+  # мобильные данные, а не всегда первую
+  case "$op" in *,*)
+    local slot o n
+    if slot=$(data_sim_slot); then
+      o=$(printf '%s' "$op" | cut -d, -f$((slot + 1)))
+      n=$(printf '%s' "$name" | cut -d, -f$((slot + 1)))
+      case "$o" in ''|*[!0-9]*) ;; *) op=$o; name=$n ;; esac
+    fi ;;
+  esac
+  op=${op%%,*}; name=${name%%,*}
   case "$op" in
     ''|*[!0-9]*) printf 'mobile\t%s' "${name:-mobile}" ;;
     *) printf 'mobile-%s\t%s' "$op" "${name:-$op}" ;;
   esac
 }
+# Слот SIM (0, 1…), через которую идут мобильные данные: подписка данных по
+# умолчанию (settings global multi_sim_data_call) и её слот из таблицы SIM
+# (content://telephony/siminfo, sim_id). Запрос к таблице — отдельный процесс,
+# поэтому слот запоминается за подпиской: он меняется только при замене SIM
+data_sim_slot() {
+  local sub slot c
+  sub=$(settings get global multi_sim_data_call 2>/dev/null)
+  case "$sub" in ''|*[!0-9]*) return 1 ;; esac
+  c=$(cat "$STATE_DIR/sim_slot" 2>/dev/null)
+  if [ "${c%% *}" = "$sub" ]; then slot=${c#* }
+  else
+    slot=$(content query --uri content://telephony/siminfo --projection sim_id --where "_id=$sub" 2>/dev/null |
+      sed -n 's/.*sim_id=\([0-9][0-9]*\).*/\1/p' | head -n 1)
+    case "$slot" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s %s\n' "$sub" "$slot" > "$STATE_DIR/sim_slot" 2>/dev/null
+  fi
+  case "$slot" in ''|*[!0-9]*) return 1 ;; esac
+  echo "$slot"
+}
 smart_net_update() {
   mkdir -p "$SMART_DIR" "$STATE_DIR" 2>/dev/null
   local line id label
   line=$(smart_net_id); id=${line%%	*}; label=${line#*	}
+  # домашняя сеть: обход в ней на паузе — профиль не создаётся, текущей
+  # остаётся последняя сеть, где он работал
+  case "$id" in wifi-*) if smart_home_ssid "$label"; then return 0; fi ;; esac
   [ "$id" = "$(cat "$SMART_NET_FILE" 2>/dev/null)" ] || printf '%s\n' "$id" > "$SMART_NET_FILE"
   [ "$id" = offline ] && return 0
   # подпись сети для WebUI — один раз
@@ -1597,9 +1634,23 @@ smart_net_update() {
   return 0
 }
 
+# Расширенный пул умного режима: оркестратор читает state/smart_pool сам, раз
+# в несколько секунд — перезапуск не нужен
+smart_pool_sync() {
+  if [ "$SMART_POOL" = "1" ]; then echo ext > "$SMART_POOL_FILE"; else rm -f "$SMART_POOL_FILE"; fi
+}
+
 ssid_is_home() {
   if [ -z "$1" ] || [ ! -f "$HOME_FILE" ]; then return 1; fi
   grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$HOME_FILE" 2>/dev/null | grep -Fxq -- "$1"
+}
+# Wi‑Fi, где умный режим не учится: домашняя сеть при включённой паузе дома и
+# без ручного запуска в ней. Выключили паузу или убрали сеть из домашних —
+# её профиль снова активен, выученное на месте
+smart_home_ssid() {
+  [ "$HOME_WIFI" = "1" ] || return 1
+  ssid_is_home "$1" || return 1
+  [ "$(cat "$HOME_OVERRIDE_FILE" 2>/dev/null)" != "$1" ]
 }
 
 # DNS по профилям: без bin/dnsproxy dns_enabled всегда ложно, и всё dns_* молчит.

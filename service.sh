@@ -95,6 +95,7 @@ _start() {
   # для журнала
   smart_net_update
   sed -n 's/^#@//p' "$STRATEGIES_DIR/smart.conf" > "$STATE_DIR/smart_names" 2>/dev/null
+  smart_pool_sync
 
   local dry_err
   if dry_run_known "$args"; then
