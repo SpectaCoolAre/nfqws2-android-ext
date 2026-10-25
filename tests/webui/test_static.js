@@ -54,6 +54,31 @@ const script = [...scriptFiles.map(f => f.content), ...inlineScripts].join('\n')
 // The document without the stylesheet and the script — class attributes live here.
 const markup = html.replace(/<style[\s\S]*?<\/style>/g, '').replace(/<script[\s\S]*?<\/script>/g, '');
 
+// ── content security policy ───────────────────────────────────────────────────
+sect('content security policy');
+const config = JSON.parse(fs.readFileSync(path.join(WEBROOT, 'config.json'), 'utf8'));
+const policy = config.contentSecurityPolicy;
+truthy(typeof policy === 'string' && policy.trim() !== '' && policy.trim() !== '*',
+  'CSP is enabled, not bypassed');
+const csp = new Map();
+for (const directive of (typeof policy === 'string' ? policy : '').split(';')) {
+  const [name, ...sources] = directive.trim().split(/\s+/);
+  if (name && !csp.has(name.toLowerCase())) csp.set(name.toLowerCase(), new Set(sources));
+}
+// WebUI X v608 collapses a merged source list containing "*" to just "*",
+// dropping inline/eval permissions and schemes. connect-src can still use it.
+for (const name of ['script-src', 'style-src', 'img-src']) {
+  truthy(!csp.get(name)?.has('*'), `${name} avoids the WebUI X wildcard merge bug`);
+}
+for (const [name, sources] of [
+  ['script-src', ["'self'", "'unsafe-inline'", "'unsafe-eval'", 'https://mui.kernelsu.org']],
+  ['style-src', ["'self'", "'unsafe-inline'", 'https://mui.kernelsu.org']],
+  ['img-src', ["'self'", 'data:', 'blob:', 'ksu:', 'https:', 'http:']]
+]) {
+  for (const source of sources) truthy(csp.get(name)?.has(source), `${name} allows ${source}`);
+}
+truthy(csp.get('connect-src')?.has('*'), 'availability probes can connect to arbitrary hosts');
+
 // ── script syntax ─────────────────────────────────────────────────────────────
 sect('script');
 truthy(script.length > 1000, 'scripts were found');

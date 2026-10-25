@@ -3,5 +3,5 @@
     "icon": "icon.png",
     "windowResize": false,
     "backInterceptor": "javascript",
-    "contentSecurityPolicy": "default-src 'self' 'unsafe-inline' data: blob: https://mui.kernelsu.org; script-src * 'unsafe-inline' 'unsafe-eval'; style-src * 'unsafe-inline' https://mui.kernelsu.org; connect-src *; img-src * data:;"
+    "contentSecurityPolicy": "default-src 'self' 'unsafe-inline' data: blob: https://mui.kernelsu.org; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://mui.kernelsu.org; style-src 'self' 'unsafe-inline' https://mui.kernelsu.org; connect-src *; img-src 'self' data: blob: ksu: https: http:;"
 }
