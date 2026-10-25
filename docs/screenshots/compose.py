@@ -4,8 +4,8 @@
 
 Кадры — docs/screenshots/raw/1.png, 2.png, 3.png (1080×2400, как снимает
 Android). Строка состояния сверху и полоса жестов снизу обрезаются, кадр
-приводится к 800×1680. Снимки — с телефона, а не из браузера: на них есть
-размытие под нижней панелью, которого нет в рендере без GPU."""
+приводится к 800×1680. Кадр, уже снятый в 800×1680 (из браузера, вьюпорт
+400×840 при плотности 2), берётся как есть."""
 import os, sys
 from PIL import Image, ImageDraw, ImageFilter
 
@@ -21,6 +21,8 @@ TOP, BOTTOM = 0.042, 0.025
 def frame(path):
     im = Image.open(path).convert('RGB')
     w, h = im.size
+    if (w, h) == (FW, FH):
+        return im
     top, bottom = round(h * TOP), h - round(h * BOTTOM)
     ch = bottom - top
     cw = round(ch * FW / FH)
