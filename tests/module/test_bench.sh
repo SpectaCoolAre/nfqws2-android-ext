@@ -19,7 +19,7 @@ reload_conf
 # (вариантов 3), открывает 3; dead.example — не открывается ничем
 cat > "$MOCKBIN/curl" <<'X'
 #!/bin/sh
-for a; do u="$a"; done
+o=""; for a; do [ "$p" = "-o" ] && o="$a"; p="$a"; u="$a"; done
 # проверка TCP без TLS (http://<адрес>:443/): адрес у сайта — «ip-<сайт>»
 case "$u" in
   http://ip-*)
@@ -63,6 +63,9 @@ case "$h:$v" in
   www.same.example:1) R 200 0.050 0.120 0.300 0.400 30000; exit 0 ;;
   stub.example:1) R 302 0.050 0.120 0.300 0.400 0 "http://warning.rt.ru/?id=1"; exit 0 ;;
 esac
+# page.example: на варианте 1 вместо сайта — страница-заглушка (без переадресации)
+case "$key:$v" in page.example:1) printf '<title>Доступ к ресурсу ограничен</title>' > "$o"; R 200 0.050 0.120 0.300 0.400 40; exit 0 ;;
+  page.example:2) printf '<title>Page</title>%s' "$(head -c 30000 /dev/zero | tr '\0' a)" > "$o"; R 200 0.050 0.120 0.300 0.400 30000; exit 0 ;; esac
 # drop.example: DPI молча роняет ClientHello — curl отвечает как при закрытом
 # адресе (time_connect 0), но TCP соединяется; открывает только 4
 case "$key:$v" in drop.example:4) ;; drop.example:*) R 000 0.000000 0.000000 0 5.0 0; exit 28 ;; esac
@@ -79,7 +82,7 @@ BENCH_STATE="$STATE_DIR"; BENCH_SETTLE=0 BENCH_PAUSE=0; export BENCH_STATE BENCH
 
 mkdir -p "$SMART_DIR"
 echo mobile-25001 > "$SMART_NET_FILE"
-printf '#v4 header\ntls\tblocked.example\t1\t\t\t\t1\ntls_16\tslow.example\t1\t\t\t\t1\ntls\topen.example\t1\t\t\t\t1\ngoogle\tyt.example\t1\t\t\t\t1\ntls\tdead.example\t1\t\t\t\t1\ntls\tnodns.example\t1\t\t\t\t1\ntls\tlisted.example\t1\t\t\t\t1\ntls\tpen.example\t1\t\t\t\t1\ntls\tclosed.example\t1\t\t\t\t1\ntls\tredir.example\t1\t\t\t\t1\ntls\tsame.example\t1\t\t\t\t1\ntls\tstub.example\t1\t\t\t\t1\ntls\tlate.example\t1\t\t\t\t1\ntls\tdrop.example\t1\t\t\t\t1\n' > "$SMART_DIR/mobile-25001.tsv"
+printf '#v4 header\ntls\tblocked.example\t1\t\t\t\t1\ntls_16\tslow.example\t1\t\t\t\t1\ntls\topen.example\t1\t\t\t\t1\ngoogle\tyt.example\t1\t\t\t\t1\ntls\tdead.example\t1\t\t\t\t1\ntls\tnodns.example\t1\t\t\t\t1\ntls\tlisted.example\t1\t\t\t\t1\ntls\tpen.example\t1\t\t\t\t1\ntls\tclosed.example\t1\t\t\t\t1\ntls\tredir.example\t1\t\t\t\t1\ntls\tsame.example\t1\t\t\t\t1\ntls\tstub.example\t1\t\t\t\t1\ntls\tlate.example\t1\t\t\t\t1\ntls\tdrop.example\t1\t\t\t\t1\ntls\tpage.example\t1\t\t\t\t1\n' > "$SMART_DIR/mobile-25001.tsv"
 printf 'cdn.listed.example\n' >> "$LISTS_DIR/user.list"
 
 section "the benchmark runs every site through every variant"
@@ -113,6 +116,8 @@ assert_eq "ok" "$(awk -F'\t' '$1 == 1 && $2 == "redir.example" && $4 == 1 { prin
 assert_contains "$(grep -c -x 'www.same.example' "$STATE_DIR/curl.hosts")" "" "a redirect within the site is followed"
 assert_eq "30000" "$(awk -F'\t' '$1 == 1 && $2 == "same.example" && $4 == 1 { print $11 }' "$res")" "and measured to the end"
 assert_eq "isp_redir" "$(awk -F'\t' '$1 == 1 && $2 == "stub.example" && $4 == 1 { print $5 }' "$res")" "a redirect to the ISP stub page is not a success"
+assert_eq "isp_redir" "$(awk -F'\t' '$1 == 1 && $2 == "page.example" && $4 == 1 { print $5 }' "$res")" "nor an ISP block page served in place of the site"
+assert_eq "ok" "$(awk -F'\t' '$1 == 1 && $2 == "page.example" && $4 == 2 { print $5 }' "$res")" "the site itself is"
 assert_eq "blocked.example listed.example late.example blocked.example listed.example late.example" "$(awk -F'\t' '$1 == 1 && $4 > 0 { printf "%s%s", (n++ ? " " : ""), $2 }' "$BENCH_DIR/res.0" | cut -d' ' -f1-6)" "variants go round all the sites of a worker, not one site after another"
 section "stage 2: the best variants again, on blocked sites they open"
 assert_eq "8" "$(awk -F'\t' '$1 == 2 && $2 == "blocked.example"' "$res" | grep -c .)" "the variants that opened blocked sites (1, 2, 3, 4), twice each"
@@ -124,14 +129,14 @@ ctl smart-bench report
 printf '%s' "$ctl_out" > "$SANDBOX/rep.json"
 node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$SANDBOX/rep.json" 2>/dev/null
 assert_rc 0 $? "is valid JSON"
-assert_contains "$ctl_out" '"fam":"tls","blocked":9,"solved":7,"unblocked":2,"unsolved":"' "per family: blocked, solved, open without bypass"
+assert_contains "$ctl_out" '"fam":"tls","blocked":10,"solved":8,"unblocked":2,"unsolved":"' "per family: blocked, solved, open without bypass"
 assert_contains "$ctl_out" 'dead.example' "never opened: one nothing opens"
 assert_contains "$(printf '%s' "$ctl_out" | sed 's/"noconn":"closed.example"//')" 'stub.example' "and one that only ever reached the ISP stub page"
 assert_contains "$ctl_out" '"noconn":"closed.example"' "a site that never connected is apart, not «never opened»"
 assert_contains "$ctl_out" '{"n":1,"name":"hardcorp74: Google","tests":1,"ok":0,"ms_tls":-1,' "a variant that opened nothing blocked has no time"
 assert_contains "$ctl_out" '"f16":3,"reset":3,' "how the failures ended"
-assert_contains "$ctl_out" '{"n":3,"name":"MartinBacker #3","tests":23,"ok":3,' "a variant: tries and successes on blocked sites, with its name"
-assert_contains "$ctl_out" '{"n":1,"name":"MartinBacker #1","tests":23,"ok":9,"ms_tls":70,"ms_ttfb":300,"uniq":3,"f16":3,"reset":3,"timeout":7,"other":1,' "a redirect to another site and within it count for the variant, the ISP stub does not"
+assert_contains "$ctl_out" '{"n":3,"name":"MartinBacker #3","tests":26,"ok":3,' "a variant: tries and successes on blocked sites, with its name"
+assert_contains "$ctl_out" '{"n":1,"name":"MartinBacker #1","tests":26,"ok":9,"ms_tls":70,"ms_ttfb":300,"uniq":3,"f16":3,"reset":3,"timeout":7,"other":4,' "a redirect to another site and within it count for the variant, the ISP stub does not"
 assert_contains "$ctl_out" '"ms_tls":70,"ms_ttfb":300,"uniq":1' "median handshake and first byte, and how many sites only it opens"
 assert_contains "$ctl_out" '"fam":"google","blocked":1,"solved":1' "google apart"
 assert_eq "3" "$(printf '%s' "$ctl_out" | grep -o '"conn":[0-9]*' | awk -F: '{ s += $2 } END { print s }')" "tries that could not connect are counted apart, not as the variant's failures"
@@ -146,7 +151,7 @@ assert_eq "0 OK" "$ctl_rc $ctl_out" "and «Share report» may share it (it was r
 ctl share text "$SMART_DIR/mobile-25001.tsv"
 assert_rc 1 "$ctl_rc" "other files there still may not"
 ctl smart-bench status
-assert_contains "$ctl_out" '"running":0,"stage":"done","hosts":14,"done1":14' "status: done, all sites"
+assert_contains "$ctl_out" '"running":0,"stage":"done","hosts":15,"done1":15' "status: done, all sites"
 
 section "a killed run lets the orchestrator go too"
 rm -f "$STATE_DIR/bench.mark"
@@ -167,9 +172,9 @@ if tr '\0' ' ' < "/proc/$lp/cmdline" 2>/dev/null | grep -q "smart-bench run"; th
   ctl smart-bench report
   assert_contains "$ctl_out" '"noconn":"","fams"' "while it runs: no «never connected» list yet (those sites are tried again)"
   assert_not_contains "$ctl_out" 'dead.example' "nor «never opened»"
-  assert_contains "$ctl_out" '"blocked":9,"solved":7' "but the counts are there"
+  assert_contains "$ctl_out" '"blocked":10,"solved":8' "but the counts are there"
   ctl smart-bench status
-  assert_contains "$ctl_out" '"prep":14,' "status: how many sites are prepared (stage 1 starts with that)"
+  assert_contains "$ctl_out" '"prep":15,' "status: how many sites are prepared (stage 1 starts with that)"
   rm -f "$BENCH_DIR/pid"
 else
   echo "   skip live report (exec -a unsupported)"

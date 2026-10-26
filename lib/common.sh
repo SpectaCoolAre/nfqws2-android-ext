@@ -587,9 +587,35 @@ dry_run_known() { # <args...>
   [ -f "$DRYRUN_OK" ] && [ "$(cat "$DRYRUN_OK" 2>/dev/null)" = "$(dry_run_key "$@")" ]
 }
 
+# Файл блоба (--blob=имя:@путь.bin) пропал — например, у импортированной
+# стратегии, — и nfqws2 не запустится. Восстанавливаем, что можно: тот же файл
+# из папки модуля, нулевые блобы, ClientHello и QUIC Initial — стандартными
+heal_blob() { # <путь> -> 0, если файл есть или восстановлен
+  local f="$1" b="${1##*/}" alt
+  [ -f "$f" ] && return 0
+  mkdir -p "${f%/*}" 2>/dev/null
+  if [ -f "$BLOBS_DIR/$b" ]; then cp -f "$BLOBS_DIR/$b" "$f" 2>/dev/null && return 0; fi
+  case "$b" in
+    zero_256.bin|zero_512.bin|zero_1024.bin)
+      alt=${b#zero_}; dd if=/dev/zero of="$f" bs="${alt%.bin}" count=1 >/dev/null 2>&1 && return 0 ;;
+    tls_clienthello*.bin) alt=tls_clienthello.bin ;;
+    quic_initial*.bin) alt=quic_initial.bin ;;
+    *) return 1 ;;
+  esac
+  [ -f "$BLOBS_DIR/$alt" ] && cp -f "$BLOBS_DIR/$alt" "$f" 2>/dev/null
+}
+heal_blobs() { # <args...>
+  local f
+  for f in $(printf '%s\n' "$*" | tr ' ' '\n' | sed -n 's/^.*:@\(\/[^:,]*\.bin\)$/\1/p'); do
+    [ -f "$f" ] && continue
+    if heal_blob "$f"; then log_msg "Блоб $f не найден — восстановлен"; else log_msg "Блоб $f не найден и не восстановлен"; fi
+  done
+}
+
 dry_run_check() { # <args...>
   [ -x "$NFQWS_BIN" ] || return 0
   local out rc key
+  heal_blobs "$@" >/dev/null
   key=$(dry_run_key "$@")
   out=$(
     cd "$MODDIR/bin" 2>/dev/null || exit 1

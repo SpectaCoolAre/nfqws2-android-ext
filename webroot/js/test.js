@@ -11,6 +11,7 @@ const PROBE_REASON = {
   drop: 'Тихий сброс (Drop)',
   timeout: 'Нет ответа (Timeout)',
   isp_redir: 'Заглушка провайдера (RKN)',
+  ws_blocked: 'WebSocket режется (Discord)',
   refused: 'Соединение отклонено',
   tls: 'Ошибка TLS',
   other: 'Ошибка'

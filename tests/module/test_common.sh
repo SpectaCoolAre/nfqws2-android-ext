@@ -451,4 +451,28 @@ system_config
 assert_not_contains "$(cat "$MOCK_DIR/sysctl.log")" "-w net.netfilter.nf_conntrack_tcp_timeout_established" "a normal timeout is left alone"
 cp "$TESTS_DIR/lib/mock/android-stub" "$MOCKBIN/sysctl"; chmod 0755 "$MOCKBIN/sysctl"
 
+section "heal_blob: a missing blob file is restored where possible"
+mkdir -p "$BLOBS_DIR"
+printf 'CH' > "$BLOBS_DIR/tls_clienthello.bin"; printf 'QI' > "$BLOBS_DIR/quic_initial.bin"; printf 'ST' > "$BLOBS_DIR/stun.bin"
+HB="$SANDBOX/imported/blobs"
+heal_blob "$HB/stun.bin"
+assert_eq "ST" "$(cat "$HB/stun.bin" 2>/dev/null)" "a blob the module has: copied from the module (the folder is created)"
+heal_blob "$HB/zero_256.bin"
+assert_eq "256" "$(wc -c < "$HB/zero_256.bin" 2>/dev/null | tr -d ' ')" "zero_256.bin: 256 zero bytes"
+heal_blob "$HB/tls_clienthello_example_com.bin"
+assert_eq "CH" "$(cat "$HB/tls_clienthello_example_com.bin" 2>/dev/null)" "a ClientHello of another site: the standard one"
+heal_blob "$HB/quic_initial_example_com.bin"
+assert_eq "QI" "$(cat "$HB/quic_initial_example_com.bin" 2>/dev/null)" "a QUIC Initial of another site: the standard one"
+heal_blob "$HB/custom_payload.bin"; rc=$?
+assert_rc 1 "$rc" "an unknown blob cannot be made up"
+assert_no_file "$HB/custom_payload.bin" "and nothing is created for it"
+printf 'MINE' > "$HB/tls_clienthello_mine.bin"
+heal_blob "$HB/tls_clienthello_mine.bin"
+assert_eq "MINE" "$(cat "$HB/tls_clienthello_mine.bin")" "an existing blob is never touched"
+rm -rf "${HB:?}"
+heal_blobs "--lua-init=@$MODDIR/lua/zapret-lib.lua --blob=x:@$HB/zero_512.bin --blob=y:@$HB/odd.bin --filter-tcp=443"
+assert_eq "512" "$(wc -c < "$HB/zero_512.bin" 2>/dev/null | tr -d ' ')" "heal_blobs finds the blob files in the nfqws2 arguments"
+assert_no_file "$HB/zapret-lib.lua" "and only .bin blobs, not lua files"
+assert_contains "$(cat "$SERVICE_LOG")" "odd.bin не найден и не восстановлен" "what could not be restored is logged"
+
 harness_finish

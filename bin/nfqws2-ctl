@@ -834,31 +834,62 @@ cleanup_probe_app_rule() {
   fi
 }
 
+# Страница-заглушка провайдера или РКН вместо сайта: по заголовку или (в
+# небольшой странице) по тексту. <файл с телом ответа>
+is_block_notice() {
+  local f="$1" title
+  [ -s "$f" ] || return 1
+  title=$(head -c 8192 "$f" 2>/dev/null | tr '\n\r' '  ' | sed -n 's/.*<[Tt][Ii][Tt][Ll][Ee][^>]*>\(.*\)<\/[Tt][Ii][Tt][Ll][Ee]>.*/\1/p')
+  # регистр кириллицы — явно: в локали C (как на Android) grep -i его не знает
+  printf '%s' "$title" | grep -Eqi 'blocked|[Зз]аблокирован|ЗАБЛОКИРОВАН|[Дд]оступ[^<]{0,40}ограничен|ДОСТУП[^<]{0,40}ОГРАНИЧЕН' && return 0
+  [ "$(wc -c < "$f" 2>/dev/null)" -lt 16384 ] 2>/dev/null || return 1
+  grep -Eqi '[Зз]аблокирован|ЗАБЛОКИРОВАН|[Дд]оступ[^<]{0,40}ограничен|ДОСТУП[^<]{0,40}ОГРАНИЧЕН|[Ее]дин(ый|ого) [Рр]еестр|[Рр]еестр[^<]{0,60}запрещ|eais\.rkn|zapret-info' "$f" 2>/dev/null
+}
+# Discord: голосовой и текстовый чат идут через WebSocket gateway.discord.gg.
+# Ответ 101 на запрос перехода на WebSocket — соединение не тронуто. curl после
+# 101 ждёт данных до тайм-аута, поэтому смотрим на код ответа, а не на итог
+PROBE_WS_HOST=gateway.discord.gg
 probe_attempt() { # <вид> <путь к утилите> <host[/путь]>  -> "ok <мс>" | "fail <причина>"
-  local kind="$1" bin="$2" url="https://$3" t0 t1 out rc to=""
+  local kind="$1" bin="$2" url="https://$3" t0 t1 out rc to="" body code
   command -v timeout >/dev/null 2>&1 && to="timeout 12"
+  body=$(mktemp "$STATE_DIR/probe.body.XXXXXX" 2>/dev/null) || body="$STATE_DIR/probe.body.$$.$(uptime_cs)"
   t0=$(uptime_cs)
   if [ "$kind" = "curl" ]; then
-    # -o /dev/null: тело страницы не нужно, хватает кода и адреса переадресации.
+    # Тело страницы — только чтобы узнать заглушку провайдера.
     # Куки — как у браузера, на время одной попытки: сайты с защитой от ботов
     # (mi.com, currenttime.tv) ставят куку переадресацией на самих себя, и без
     # неё curl ходил по кругу. Файл свой у каждой попытки — они идут параллельно
     local jar
     jar=$(mktemp "$STATE_DIR/probe.ck.XXXXXX" 2>/dev/null) || jar="$STATE_DIR/probe.ck.$$.$(uptime_cs)"
-    out=$($to "$bin" -s -k -L --max-redirs 5 -m 10 --connect-timeout 6 -o /dev/null -A 'Mozilla/5.0' \
-      -b "$jar" -c "$jar" -w "\nREDIRECT_URL:%{redirect_url}\n" "$url" 2>&1); rc=$?
-    rm -f "$jar"
+    if [ "${3%%/*}" = "$PROBE_WS_HOST" ]; then
+      out=$($to "$bin" -s -k --http1.1 -m 6 --connect-timeout 6 -o "$body" -A 'Mozilla/5.0' \
+        -H 'Upgrade: websocket' -H 'Connection: Upgrade' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' -H 'Sec-WebSocket-Version: 13' \
+        -w "\nHTTP_CODE:%{http_code}\n" "https://$PROBE_WS_HOST/?v=10&encoding=json" 2>&1); rc=$?
+      code=$(printf '%s\n' "$out" | sed -n 's/^HTTP_CODE://p')
+      t1=$(uptime_cs)
+      rm -f "$jar" "$body"
+      [ "$code" = 101 ] && { echo "ok $(( (t1 - t0) * 10 ))"; return; }
+      # сервер ответил, но не перешёл на WebSocket — его режут после рукопожатия
+      case "$code" in ''|000) ;; *) echo "fail ws_blocked"; return ;; esac
+    else
+      out=$($to "$bin" -s -k -L --max-redirs 5 -m 10 --connect-timeout 6 -o "$body" -A 'Mozilla/5.0' \
+        -b "$jar" -c "$jar" -w "\nREDIRECT_URL:%{redirect_url}\n" "$url" 2>&1); rc=$?
+      rm -f "$jar"
+    fi
   else
-    out=$($to "$bin" wget -q -T 6 -O /dev/null -U 'Mozilla/5.0' --no-check-certificate "$url" 2>&1); rc=$?
+    out=$($to "$bin" wget -q -T 6 -O "$body" -U 'Mozilla/5.0' --no-check-certificate "$url" 2>&1); rc=$?
   fi
   t1=$(uptime_cs)
   local redir
   redir=$(printf '%s\n' "$out" | sed -n 's/^REDIRECT_URL://p')
   case "$redir" in
     *rkn.gov.ru*|*eais.*|*warning.rt.ru*|*blackhole*|*zapret*)
+      rm -f "$body"
       echo "fail isp_redir"
       return ;;
   esac
+  if is_block_notice "$body"; then rm -f "$body"; echo "fail isp_redir"; return; fi
+  rm -f "$body"
   if [ "$rc" = 0 ]; then echo "ok $(( (t1 - t0) * 10 ))"; return; fi
   # переадресаций больше пяти (сайт так и не принял куку) — но сервер отвечал
   # по HTTP раз за разом, значит, DPI соединение пропустил: сайт доступен
@@ -1501,7 +1532,7 @@ bench_one() {
     # выученном, и его удача — не удача варианта. Ответ сервера переадресацией
     # уже значит, что DPI соединение пропустил
     while :; do
-      out=$("$BENCH_BIN" -s -k --connect-timeout 5 -m 10 -o /dev/null -A 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36' \
+      out=$("$BENCH_BIN" -s -k --connect-timeout 5 -m 10 -o "$BENCH_DIR/body.$w" -A 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36' \
         -b "$jar" -c "$jar" -w '%{http_code} %{time_connect} %{time_appconnect} %{time_starttransfer} %{time_total} %{size_download} %{remote_ip} %{redirect_url}' \
         "$url" 2>/dev/null </dev/null); rc=$?
       set -f; set -- $out; set +f
@@ -1540,6 +1571,9 @@ bench_one() {
     *) [ "$BENCH_KIND" = curl ] && cls="err$rc" || cls=fail ;;
   esac
   [ "$cls" = ok ] && [ "$code" = 000 ] && [ "$BENCH_KIND" = curl ] && cls=noanswer
+  # вместо сайта — страница-заглушка провайдера: это не удача
+  [ "$cls" = ok ] && is_block_notice "$BENCH_DIR/body.$w" && cls=isp_redir
+  rm -f "$BENCH_DIR/body.$w"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$st" "$h" "${BENCH_SLOT:--}" "$v" "$cls" "$code" "$tc" "$ta" "$tt" "$tot" "$sz" >> "$BENCH_DIR/res.$w"
   BENCH_CLS=$cls
 }

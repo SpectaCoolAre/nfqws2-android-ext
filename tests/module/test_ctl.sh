@@ -493,6 +493,41 @@ assert_no_file "$jar" "and is removed after the attempt"
 printf '#!/bin/sh\nexit 47\n' > "$MOCKBIN/curl"
 ctl domain-check loop.example
 assert_match "$ctl_out" "R	[123]	ok" "endless redirects still mean the server answered — not a DPI block"
+
+# Заглушка провайдера вместо сайта: тело ответа (-o файл) — страница блокировки
+cat > "$MOCKBIN/curl" <<'X'
+#!/bin/sh
+o=""; for a; do [ "$p" = "-o" ] && o="$a"; p="$a"; done
+case "$a" in *stub.example*) printf '<html><head><title>Доступ ограничен</title></head><body>Ресурс включён в единый реестр</body></html>' > "$o" ;;
+  *rich.example*) printf '<html><head><title>News</title></head><body>статья о том, что сайт был заблокирован в 2024</body>%s</html>' "$(head -c 20000 /dev/zero | tr '\0' x)" > "$o" ;;
+  *) printf '<html><head><title>OK</title></head></html>' > "$o" ;; esac
+exit 0
+X
+chmod 0755 "$MOCKBIN/curl"
+ctl domain-check stub.example
+assert_match "$ctl_out" "R	[123]	fail isp_redir" "a block page of the ISP instead of the site is a block, not «opens»"
+ctl domain-check rich.example
+assert_match "$ctl_out" "R	[123]	ok" "a big page that only mentions blocking is the site itself"
+assert_eq "" "$(ls "$STATE_DIR"/probe.body.* 2>/dev/null)" "page bodies are removed after the attempt"
+
+# Discord: WebSocket gateway — удача только при ответе 101 (curl после него
+# ждёт данных до тайм-аута и выходит с кодом 28)
+cat > "$MOCKBIN/curl" <<'X'
+#!/bin/sh
+ws=0; for a; do [ "$a" = "Upgrade: websocket" ] && ws=1; done
+[ "$ws" = 1 ] || { echo "no upgrade" >> "$MOCK_DIR/ws.log"; exit 0; }
+printf '\nHTTP_CODE:%s\n' "$(cat "$MOCK_DIR/ws.code")"
+[ "$(cat "$MOCK_DIR/ws.code")" = 101 ] && exit 28
+exit 0
+X
+chmod 0755 "$MOCKBIN/curl"
+echo 101 > "$MOCK_DIR/ws.code"; : > "$MOCK_DIR/ws.log"
+ctl domain-check gateway.discord.gg
+assert_match "$ctl_out" "R	[123]	ok" "Discord gateway answers 101 to a WebSocket upgrade: works (curl's timeout after it does not matter)"
+assert_eq "" "$(cat "$MOCK_DIR/ws.log")" "it is asked for WebSocket"
+echo 403 > "$MOCK_DIR/ws.code"
+ctl domain-check gateway.discord.gg
+assert_match "$ctl_out" "R	[123]	fail ws_blocked" "the server answered but WebSocket did not go through: blocked"
 rm -f "$MOCKBIN/ping" "$MOCKBIN/curl"
 
 # ── поделиться файлом ─────────────────────────────────────────────────────────

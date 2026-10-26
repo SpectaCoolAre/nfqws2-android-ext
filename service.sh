@@ -99,7 +99,7 @@ _start() {
 
   local dry_err
   if dry_run_known "$args"; then
-    :   # эти аргументы уже прошли проверку (обычно — при выборе стратегии)
+    heal_blobs "$args" >/dev/null   # проверка была раньше — файл блоба мог пропасть с тех пор
   elif ! dry_err=$(dry_run_check "$args"); then
     log_msg "Ошибка: проверка nfqws2 --dry-run не пройдена"
     printf '%s\n' "$dry_err" >> "$NFQWS_LOG"

@@ -536,6 +536,7 @@ EN = {
  "Тихий сброс (Drop)": "Silent drop",
  "Нет ответа (Timeout)": "Timeout",
  "Заглушка провайдера (RKN)": "ISP block page (RKN)",
+ "WebSocket режется (Discord)": "WebSocket is cut (Discord)",
  "Комплексный анализ цензуры DPI: проверка доступности сайтов, детекция блокировок TCP 16-20KB и анализ перехвата DNS.": "Comprehensive DPI censorship analysis: website reachability, TCP 16-20KB drop detection, and DNS hijacking check.",
  "Каждый адрес из probe_hosts.list открывается с устройства три раза. Анализируются активные сбросы (TLS RST), инжекции TLS Alert, тихий дроп и подмена сертификатов.": "Each address from probe_hosts.list is opened from the device 3 times. Active resets (TLS RST), TLS Alert injections, silent drops, and certificate spoofing are analyzed.",
  "Тестирование соединений к зарубежным CDN и хостингам (Cloudflare, Hetzner, DO, OVH) с нарастающим объёмом данных до 32 КБ для выявления фильтра TCP 16-20KB.": "Testing connections to foreign CDNs and hostings (Cloudflare, Hetzner, DO, OVH) with increasing payload up to 32 KB to detect the TCP 16-20KB filter.",
