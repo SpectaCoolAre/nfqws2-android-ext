@@ -106,6 +106,32 @@ async function run(browser, scheme) {
   await ctx.close();
 }
 
+/* Альбомная ориентация: поле не шире квадрата и по центру — иначе препятствия
+   редкие и видны издалека, игра другая */
+async function landscape(browser) {
+  const ctx = await browser.newContext({ viewport: { width: 915, height: 412 }, hasTouch: true });
+  await ctx.addInitScript(STUB);
+  await ctx.addInitScript(() => { try { localStorage.setItem('nfq_seen_ver', 'v2.1.3'); } catch (e) {} });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(INDEX, { waitUntil: 'load' });
+  await page.waitForTimeout(800);
+  sect('landscape: square field');
+  const box = await page.evaluate(() => { const r = document.getElementById('brand-logo').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+  for (let i = 0; i < 12; i++) { await page.mouse.click(box[0], box[1]); await page.waitForTimeout(120); }
+  await page.waitForTimeout(2000);
+  eq(true, await page.evaluate(() => flappy.open), 'the game opens in landscape');
+  const cv = await page.evaluate(() => { const r = document.querySelector('#flappy canvas').getBoundingClientRect(); return [Math.round(r.left), Math.round(r.width), Math.round(r.height)]; });
+  eq(412, cv[1], 'the field is no wider than it is tall');
+  eq(412, cv[2], 'and takes the full height');
+  eq(Math.round((915 - 412) / 2), cv[0], 'centred');
+  truthy(await page.evaluate(() => document.elementFromPoint(40, 300).closest('#flappy') !== null), 'the sides still take taps');
+  if (process.env.SHOTS) await page.screenshot({ path: path.join(process.env.SHOTS, 'flappy-landscape.png') });
+  eq(0, errors.length, 'no page errors' + (errors.length ? ': ' + errors.join('; ') : ''));
+  await ctx.close();
+}
+
 (async () => {
   let browser;
   try { browser = await chromium.launch(); } catch (e) {
@@ -114,6 +140,7 @@ async function run(browser, scheme) {
   }
   await run(browser, 'light');
   await run(browser, 'dark');
+  await landscape(browser);
   await browser.close();
 
   process.stdout.write('\n----------------------------------------\n');

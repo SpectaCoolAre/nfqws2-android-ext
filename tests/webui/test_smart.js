@@ -162,9 +162,9 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   await page.waitForTimeout(750);
   truthy((await page.evaluate(() => window.__calls.join('\n'))).includes("'set-strategy' 'alt2'"), 'goes back to the last strategy');
   truthy(await page.$eval('#bypass-smart', e => e.hidden), 'the smart statistics are hidden');
-  const hero = await page.$eval('#strat-body .strat-hero', e => e.textContent);
+  const hero = await page.$eval('#strat-lead .strat-hero', e => e.textContent);
   truthy(hero.includes('alt2') && hero.includes('Сменить') && hero.includes('Сбросить правки'), 'a strategy card with «change» and, since it was edited, «reset» (' + hero + ')');
-  const src = await page.$eval('#strat-body .strat-src', e => e.textContent);
+  const src = await page.$eval('#strat-lead .strat-src', e => e.textContent);
   truthy(src.includes('Flowseal') && src.includes('rndnaame/nfqws-menu') && src.includes('2026') && src.includes('Ваша правка'), 'where it comes from, with the date and the edit date (' + src + ')');
   const st = await page.$$eval('#strat-body .smart-tile', l => l.map(e => e.textContent).join(' | '));
   truthy(st.includes('1840') && st.includes('96') && st.includes('95%'), 'connection statistics on this strategy (' + st.slice(0, 120) + '…)');

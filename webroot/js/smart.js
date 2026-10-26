@@ -99,7 +99,7 @@ function smartTile(o){
 
 function renderSmart(){
   const m = SMS;
-  if(!m){ setHTML('smart-body', banner('danger', 'error', t('Не удалось прочитать состояние умного режима')), false); return; }
+  if(!m){ setHTML('smart-lead', '', false); setHTML('smart-body', banner('danger', 'error', t('Не удалось прочитать состояние умного режима')), false); return; }
   const nets = m.nets || [];
   const view = nets.find(n => n.id === m.view);
   const parts = [];
@@ -116,6 +116,8 @@ function renderSmart(){
         ? '<button type="button" class="chip dropdown state" aria-haspopup="menu" onclick="smartPickNet(this)"><span>' + esc(netText) + '</span>' + icon('caret', 's18') + '</button>'
         : '<span class="smart-hero-net">' + icon(view && /^mobile/.test(view.id) ? 'globe' : 'wifi', 's18') + esc(netText) + '</span>') +
     '</div></div>');
+  // шапка — главное (в альбомной ориентации закреплена слева)
+  const hero = parts.splice(0).join('');
   // плитки
   const probs = (m.problems || []).length, nodpi = (m.nodpi || []).length;
   const tiles = [
@@ -131,17 +133,21 @@ function renderSmart(){
   const ls = smartLearnState(m);
   tiles.push({icon: ls.on ? 'auto' : 'pause', title: 'Обучение', value: ls.value, sub: ls.sub, on: 'smartTrainSheet()'});
   parts.push('<div class="smart-tiles">' + tiles.map(smartTile).join('') + '</div>');
-  // действия
-  parts.push('<div class="list">' +
+  // действия: в альбомной ориентации — в левой колонке под шапкой (там
+  // иначе пусто), в портретной — после плиток
+  const acts = [];
+  acts.push('<div class="list">' +
     settingsRow({icon: 'share', title: 'Поделиться обучением', sub: t('Файл с выученным в этой сети'), on: 'smartExport()'}) +
     settingsRow({icon: 'upload', title: 'Загрузить обучение', sub: t('Добавить выученное из файла в текущую сеть'), on: "$('smart-imp').click()"}) +
     // отладочный замер вариантов — для разработчиков
     (devMode ? settingsRow({icon: 'test', title: 'Отладочный замер', sub: t('Сайты сети через все варианты: что открывает, быстрее и надёжнее'), on: 'smartBench()', chevron: true}) : '') +
   '</div>');
-  parts.push('<div class="row">' +
+  acts.push('<div class="row">' +
     (view ? '<button class="btn text with-icon state danger" onclick="smartReset(' + jsArg(view.id) + ')">' + icon('trash', 's18') + '<span>' + esc(t('Забыть эту сеть')) + '</span></button>' : '') +
     (nets.length ? '<button class="btn text with-icon state danger" onclick="smartReset(\'all\')">' + icon('trash', 's18') + '<span>' + esc(t('Забыть всё')) + '</span></button>' : '') +
   '</div>');
+  setHTML('smart-lead', hero + '<div class="stack land-only">' + acts.join('') + '</div>', false);
+  parts.push('<div class="stack port-only">' + acts.join('') + '</div>');
   setHTML('smart-body', parts.join(''), false);
 }
 

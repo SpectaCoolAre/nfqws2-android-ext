@@ -6,12 +6,12 @@
    Как настройки Android: группы с заголовком, у каждой строки — пояснение. */
 function settingsRow(o){
   if(o.sw){
-    return '<label class="list-item' + (o.sub ? ' two-line' : '') + ' clickable state">' +
+    return '<label class="list-item' + (o.sub ? ' two-line' : '') + ' clickable state' + (o.disabled ? ' is-disabled' : '') + '">' +
       '<span class="li-icon">' + icon(o.icon, 's24') + '</span>' +
       '<span class="li-text"><span class="li-primary">' + esc(t(o.title)) + '</span>' +
         (o.sub ? '<span class="li-secondary">' + esc(o.sub) + '</span>' : '') + '</span>' +
       '<span class="li-trail"><input type="checkbox" class="switch" role="switch" aria-label="' + esc(t(o.title)) + '"' +
-        (o.checked ? ' checked' : '') + (o.id ? ' id="' + esc(o.id) + '"' : '') +
+        (o.checked ? ' checked' : '') + (o.disabled ? ' disabled' : '') + (o.id ? ' id="' + esc(o.id) + '"' : '') +
         ' onchange="' + o.on + '"></span>' +
     '</label>';
   }
@@ -174,8 +174,6 @@ function renderWifi(){
   $('wifi-main').classList.toggle('on', on);
   $('wifi-body').classList.toggle('is-disabled', !on);
   $('wifi-body').inert = !on;
-  $('wifi-dns').hidden = S.dns_available != 1;
-  $('wifi-dns-toggle').checked = S.dns_home_pause == 1;
   setHTML('wifi-suggest', on && currentSsid && !homeList.includes(currentSsid)
     ? '<div class="suggest">' + icon('wifi', 's24') +
         '<span class="grow">' + esc(t('Сейчас телефон подключён к «{0}». Добавить эту сеть в домашние?', currentSsid)) + '</span>' +
@@ -194,7 +192,7 @@ function renderWifi(){
 }
 async function setDnsHome(on){
   const r = await withBusy(['dns-set-home', on ? '1' : '0'], 40000);
-  if(r.code){ toast(errText(r, 'Не удалось сохранить')); $('wifi-dns-toggle').checked = !on; return; }
+  if(r.code){ toast(errText(r, 'Не удалось сохранить')); if($('work-body')) $('work-body')._html = ''; renderWork(); return; }
   S.dns_home_pause = on ? 1 : 0;
   toast(on ? t('В домашних сетях DNS модуля тоже встанет на паузу') : t('Сохранено'));
   stat();
@@ -333,7 +331,7 @@ function renderWork(){
   if(!$('work-body')) return;
   const j = S || {}, on = j.home_wifi == 1;
   setHTML('work-body',
-    '<h2 class="subhead">' + esc(t('Пауза обхода')) + '</h2><div class="list">' +
+    '<div class="stack"><h2 class="subhead">' + esc(t('Пауза обхода')) + '</h2><div class="list">' +
       '<div class="list-item two-line split-sw">' +
         '<div class="split-main clickable state" role="button" tabindex="0" onclick="navigate(\'wifi\')">' +
           '<span class="li-icon">' + icon('home', 's24') + '</span>' +
@@ -344,13 +342,20 @@ function renderWork(){
         '<label class="split-sw-box"><input type="checkbox" class="switch" role="switch" id="work-wifi" aria-label="' + esc(t('Отключать на Wi‑Fi')) + '"' +
           (on ? ' checked' : '') + ' onchange="workHomeWifi(this.checked)"></label>' +
       '</div>' +
+      // DNS в домашних сетях — только вместе с паузой на Wi‑Fi: без неё
+      // строка серая и не нажимается
+      (j.dns_available == 1 ? settingsRow({icon: 'dns', title: 'Отключать DNS на Wi‑Fi', sub: t('DNS модуля тоже на паузе в домашних сетях'), sw: true,
+          checked: j.dns_home_pause == 1, disabled: !on, id: 'work-dns-home', on: 'setDnsHome(this.checked)'}) : '') +
       settingsRow({icon: 'shield', title: 'Отключать при VPN', sub: t('Пауза обхода, пока включён VPN'), sw: true, checked: j.vpn_pause == 1, on: 'toggleVpnPause(this.checked)'}) +
-    '</div>' +
-    '<h2 class="subhead">' + esc(t('Запуск и трафик')) + '</h2>' +
-    '<div class="list" id="work-sws">' + SW.map(([k, label, jk]) => switchRow(k, label, j[jk] == 1)).join('') + '</div>', false);
+    '</div></div>' +
+    '<div class="stack"><h2 class="subhead">' + esc(t('Запуск и трафик')) + '</h2>' +
+    '<div class="list" id="work-sws">' + SW.map(([k, label, jk]) => switchRow(k, label, j[jk] == 1)).join('') + '</div></div>', false);
 }
 async function workHomeWifi(on){
   $('wifi-toggle').checked = on;
+  // строка DNS сереет и оживает сразу, не дожидаясь ответа службы
+  const d = $('work-dns-home');
+  if(d){ d.disabled = !on; d.closest('.list-item').classList.toggle('is-disabled', !on); }
   await setHomeWifi(on);
   renderWork();
 }

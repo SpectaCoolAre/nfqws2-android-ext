@@ -31,8 +31,8 @@ function updateModeUi(){
 function renderBypass(){
   const smart = isSmartMode();
   updateModeUi();
-  $('bypass-strat').hidden = smart;
-  $('bypass-smart').hidden = !smart;
+  $('bypass-strat').hidden = $('strat-lead').hidden = smart;
+  $('bypass-smart').hidden = $('smart-lead').hidden = !smart;
   if(!smart) renderStrat();
 }
 function renderStrat(){
@@ -57,6 +57,8 @@ function renderStrat(){
       esc([mt.author ? t('Автор: {0}', mt.author) : '', mt.repo, mt.date ? t('обновлена {0}', fmtDate(mt.date)) : ''].filter(Boolean).join(' · ')) +
       (mt.edited ? '<br>' + esc(t('Ваша правка от {0}', fmtDate(mt.edited))) : '') + '</span></div>');
   }
+  // карточка и источник — главное (в альбомной ориентации закреплены слева)
+  setHTML('strat-lead', parts.splice(0).join(''), false);
   // статистика соединений на этой стратегии (наблюдатель smartstat)
   const ok = +st.ok || 0, err = +st.err || 0, p = pct(ok, err);
   parts.push('<h2 class="subhead">' + esc(t('Как работает')) + '</h2>');

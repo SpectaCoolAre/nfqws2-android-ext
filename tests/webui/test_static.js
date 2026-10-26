@@ -211,6 +211,8 @@ const htmlIds = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(m => m[1]));
 // ids created by the script's own innerHTML templates
 for (const m of script.matchAll(/\bid="([A-Za-z0-9_-]+)"/g)) htmlIds.add(m[1]);
 for (const m of script.matchAll(/id="'\s*\+\s*[A-Za-z0-9_]+/g)) { /* dynamic, skip */ }
+// ids passed to row builders: settingsRow({..., id: 'work-dns-home'})
+for (const m of script.matchAll(/\bid:\s*'([A-Za-z0-9_-]+)'/g)) htmlIds.add(m[1]);
 
 const looked = new Set();
 for (const m of script.matchAll(/\$\(\s*'([^']+)'\s*\)/g)) looked.add(m[1]);

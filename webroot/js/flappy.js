@@ -79,13 +79,14 @@ const flappy = (() => {
     ov.id = 'flappy';
     ov.style.cssText = 'position:fixed;inset:0;z-index:95;touch-action:none;user-select:none;-webkit-user-select:none';
     ov.innerHTML = '<div style="position:absolute;inset:0;background:#000;opacity:0;pointer-events:none"></div>' +
-      '<canvas style="position:absolute;inset:0;width:100%;height:100%;opacity:0;transition:opacity .5s"></canvas>' +
+      '<canvas style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;transition:opacity .5s;border-radius:0"></canvas>' +
       `<button class="icon-btn state tone-on" aria-label="${t('Назад')}" style="position:absolute;left:4px;` +
       'top:calc(var(--top-inset) + 4px);opacity:0;transition:opacity .5s;z-index:1">' +
       '<svg aria-hidden="true" class="icon"><use href="#i-back"/></svg></button>';
     document.body.append(ov);
     /* Затемнение — отдельный слой: анимация прозрачности идёт на композиторе */
-    ov.firstChild.animate([{opacity: 0}, {opacity: .85}], {duration: 1500, easing: 'ease-in', fill: 'forwards'});
+    // в альбомной ориентации по бокам поля — почти чёрный фон: интерфейс за ним не отвлекает
+    ov.firstChild.animate([{opacity: 0}, {opacity: innerWidth > innerHeight ? .96 : .85}], {duration: 1500, easing: 'ease-in', fill: 'forwards'});
     cv = ov.querySelector('canvas');
     ctx = cv.getContext('2d', {alpha: false});
     ov.querySelector('button').addEventListener('click', e => { e.stopPropagation(); close(); });
@@ -146,7 +147,12 @@ const flappy = (() => {
   function prepare(done){
     const my = ++gen;
     dpr = Math.min(devicePixelRatio || 1, 2);
-    W = innerWidth; H = innerHeight;
+    /* Поле не шире квадрата: в альбомной ориентации растянутое поле делало
+       препятствия редкими и видными издалека — игра становилась другой.
+       Лишняя ширина остаётся затемнённым фоном, поле — по центру */
+    W = Math.min(innerWidth, innerHeight); H = innerHeight;
+    cv.style.left = Math.round((innerWidth - W) / 2) + 'px';
+    cv.style.width = W + 'px';
     cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
     C = {sky: cssv('surface-container-lowest'), sky2: cssv('secondary-container'), far: cssv('secondary-container'),
       farHi: cssv('on-secondary-container'), near: cssv('surface-container-highest'), win: cssv('tertiary'),
