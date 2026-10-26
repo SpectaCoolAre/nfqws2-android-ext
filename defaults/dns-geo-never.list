@@ -1,0 +1,41 @@
+# Умный DNS: домены, которые никогда не идут в обход геоблока, даже если
+# DNS с обходом отдал для них адрес своего прокси. Российские сервисы
+# проверяют, что вы в России, и сквозь зарубежный прокси работают хуже или
+# не работают вовсе; push-уведомления Google и видео (CDN) — отдельно в
+# модуле. Совпадение по окончанию: «ru» — все домены .ru.
+ru
+su
+xn--p1ai
+moscow
+yandex.com
+yandex.net
+yastatic.net
+yandex.cloud
+ya.ru
+vk.com
+vk.me
+vk.ru
+vkontakte.ru
+userapi.com
+vkuser.net
+mycdn.me
+ok.ru
+mail.ru
+max.ru
+oneme.ru
+gosuslugi.ru
+nalog.gov.ru
+sberbank.com
+sber.ru
+tbank.ru
+tinkoff.ru
+vtb.ru
+alfabank.ru
+mos.ru
+avito.ru
+ozon.ru
+wildberries.ru
+kinopoisk.ru
+rutube.ru
+dzen.ru
+2gis.com

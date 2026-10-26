@@ -1,0 +1,25 @@
+# Умный DNS: домены видео и CDN. Их адрес зависит от того, какой DNS спросили:
+# DNS оператора отдаёт ближний кэш (Google Global Cache и т. п. внутри сети
+# оператора), зарубежный — далёкий узел. Для этих доменов модуль спрашивает
+# сразу DNS сети и публичные (Яндекс, Cloudflare, Google), сам проверяет
+# соединение с каждым полученным адресом и отдаёт самый быстрый
+# (dnsproxy --upstream-mode=fastest_addr). Домен из включённого профиля DNS
+# отсюда не берётся — у него свой маршрут.
+googlevideo.com
+ytimg.com
+ggpht.com
+gvt1.com
+fbcdn.net
+cdninstagram.com
+twimg.com
+tiktokcdn.com
+tiktokcdn-eu.com
+ttwstatic.com
+ttvnw.net
+jtvnw.net
+vkuser.net
+userapi.com
+mycdn.me
+okcdn.ru
+steamcontent.com
+akamaized.net

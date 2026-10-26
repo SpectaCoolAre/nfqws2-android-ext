@@ -125,7 +125,9 @@ function renderLive(){
   const L = LIVE || {}, j = S || {}, tiles = [];
   if(j.dns_available == 1){
     const on = j.dns_enabled == 1, paused = on && (j.dns_paused === 'vpn' || j.dns_paused === 'home');
-    tiles.push({icon: 'dns', title: 'DNS', value: !on ? t('Выключен') : paused ? t('Пауза') : t('Включён'),
+    // режим работы DNS — как режим обхода: умный или по профилям
+    const smart = j.dns_geo != 0 || j.dns_smart == 1;
+    tiles.push({icon: 'dns', title: smart ? t('DNS · умный режим') : t('DNS · профили'), value: !on ? t('Выключен') : paused ? t('Пауза') : t('Включён'),
       sub: on && !paused && L.dns_hits >= 0 ? t('перехвачено запросов: {0}', fmtShort(L.dns_hits)) : paused ? (j.dns_paused === 'vpn' ? t('пока включён VPN') : t('в домашнем Wi‑Fi')) : t('свои DNS для доменов'),
       on: "openFrom('dns')"});
   }
@@ -297,13 +299,11 @@ const RESTART_KEYS = {CALLS_BYPASS: 1};
 const DEV_SW = [
   ['META_QUIC_REJECT', 'Отказ QUIC для Instagram', 'meta_quic'],
   ['CALLS_BYPASS', 'Обход звонков (не тестировалось)', 'calls_bypass'],
-  ['DNS_PUSH', 'Push-уведомления через DNS Google', 'dns_push'],
   ['WL_PAUSE', 'Отключать при белых списках', 'wl_pause'],
   ['SMART_POOL', 'Расширенный пул умного режима', 'smart_pool']
 ];
-/* Переключатели разработчика, доступные в этой сборке: DNS_PUSH — только
-   при DNS профилях (сборка с dnsproxy) */
-const devSwitches = j => DEV_SW.filter(([k]) => k !== 'DNS_PUSH' || j.dns_available == 1);
+/* Переключатели разработчика, доступные в этой сборке */
+const devSwitches = () => DEV_SW;
 const LIMITS = [
   ['PKT_LIMIT_OUT', 'Исходящие пакеты', 'Сколько первых пакетов соединения обрабатывать', 'pkt_limit_out'],
   ['PKT_LIMIT_IN', 'Входящие пакеты', 'Сколько первых ответных пакетов обрабатывать', 'pkt_limit_in']

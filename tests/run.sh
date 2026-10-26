@@ -155,6 +155,12 @@ queue_suite "module: smart mode" sh "$HERE/module/test_smart.sh"
 queue_suite "module: system theme colours" sh "$HERE/module/test_monet.sh"
 queue_suite "module: white lists" sh "$HERE/module/test_whitelist.sh"
 queue_suite "module: smart benchmark" sh "$HERE/module/test_bench.sh"
+# geodns (обход геоблока в DNS) — свои тесты на Go; без Go — пропуск
+if command -v go >/dev/null 2>&1; then
+  queue_suite "geodns: decided by the answer (go test)" sh -c "cd '$REPO_DIR/geodns' && go vet ./... && go test -race ./..."
+else
+  queue_skip "geodns: decided by the answer (go test)" "Go is not installed"
+fi
 
 if [ "$FAST" = 1 ]; then
   queue_skip "module: service and firewall" "--fast"

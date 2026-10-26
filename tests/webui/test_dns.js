@@ -66,7 +66,12 @@ window.__presets = ${JSON.stringify(PRESETS)};
     let out = ['#status', 'enabled=' + (st.enabled ? 1 : 0), 'default=' + st.def,
       'proxy=' + (on ? 'running' : 'stopped'), 'rules=' + (on ? 'on' : 'off'), 'ipv6=redirect',
       'private=' + st.priv, 'private_host=' + st.privHost, 'net_dns=192.168.1.1', 'hits=' + (on ? 1234 : 0), 'error=',
-      'max_profiles=32', 'max_servers=8', 'max_domains=1000'];
+      'max_profiles=32', 'max_servers=8', 'max_domains=1000', 'smart=' + (window.__smart === 0 ? 0 : 1),
+      'cdn=' + (st.enabled && window.__smart !== 0 ? 'running' : ''),
+      'geo_available=1', 'geo=' + (st.enabled && window.__geo !== 0 ? 'running' : 'idle'),
+      'geo_status=' + (st.enabled ? JSON.stringify({providers: [{name: 'comss', proxies: 2, hits: 14, last_ok: 1, down: false},
+        {name: 'malw', proxies: 0, hits: 0, last_ok: 0, down: true},
+        {name: 'astracat', proxies: 1, hits: 0, last_ok: 1, down: false, reserve: true, active: false}], recent: [{d: 'chatgpt.com', p: 'comss', t: 1}]}) : '')];
     Object.keys(st.profiles).forEach(id => { out.push('#profile ' + id); out = out.concat(st.profiles[id].split('\\n')); });
     window.__presets.forEach(p => { out.push('#preset ' + p.id); out = out.concat(p.text.trim().split('\\n')); });
     return out.join('\\n');
@@ -89,9 +94,13 @@ window.__presets = ${JSON.stringify(PRESETS)};
     var rc = 0, out = 'OK', err = '';
     (window.__cmds = window.__cmds || []).push(cmd);
     if (cmd.indexOf("'DOH_BYPASS'") >= 0) window.__doh = cmd.indexOf("'1'") >= 0 ? 1 : 0;
-    if (cmd.indexOf('json-status') >= 0) out = ${JSON.stringify(STATUS)}.replace('"dns_available"', '"doh_bypass":' + (window.__doh || 0) + ',"dns_available"');
+    if (cmd.indexOf("'DNS_SMART'") >= 0) window.__smart = cmd.indexOf("'1'") >= 0 ? 1 : 0;
+    if (cmd.indexOf("'DNS_GEO'") >= 0) window.__geo = cmd.indexOf("'1'") >= 0 ? 1 : 0;
+    if (cmd.indexOf("'dns-mode'") >= 0) window.__smart = window.__geo = cmd.indexOf("'smart'") >= 0 ? 1 : 0;
+    if (cmd.indexOf('json-status') >= 0) out = ${JSON.stringify(STATUS)}.replace('"dns_available"', '"doh_bypass":' + (window.__doh || 0) + ',"dns_smart":' + (window.__smart === 0 ? 0 : 1) + ',"dns_geo":' + (window.__geo === 0 ? 0 : 1) + ',"dns_available"');
     else if (cmd.indexOf('list-strategies') >= 0) out = 'default\\talt13';
     else if (cmd.indexOf('get-strategy') >= 0) out = 'default';
+    else if (cmd.indexOf("'dns-mode'") >= 0) out = 'OK';
     else if (cmd.indexOf("'dns-") >= 0) { const a = args(cmd); const r = dns(a.slice(a.findIndex(x => x.startsWith('dns-'))));
       rc = r[0]; out = r[1] || ''; err = r[2] || ''; }
     // __dnsSlow: медленный ответ dns-state — проверка слепка экрана
@@ -154,6 +163,28 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     eq('dns', await page.evaluate(() => currentPage), 'it opens the DNS screen');
     eq(true, await page.evaluate(() => $('dns-body').classList.contains('is-disabled')), 'the body is greyed out while the feature is off');
 
+    sect(`${mode}: work mode`);
+    eq('smart', await page.evaluate(() => $('dns-mode-seg').querySelector('.seg.selected').dataset.mode), 'smart mode is the default');
+    truthy(await page.isVisible('#dns-geo') && (await page.textContent('#dns-geo')).includes('Обход геоблока'), 'it shows the geo-block bypass');
+    truthy((await page.textContent('#dns-smart')).includes('Включится вместе с DNS модуля'), 'and speed, which starts with DNS');
+    await page.click('#dns-mode-seg .seg[data-mode="profiles"]');
+    await page.waitForSelector('#dialog-wrap.open');
+    truthy((await page.textContent('#dialog-wrap')).includes('Перейти на профили?'), 'switching asks first');
+    await page.click("#d-cancel"); await page.waitForTimeout(400);
+    eq(false, await page.evaluate(() => window.__cmds.some(c => c.indexOf("'dns-mode'") >= 0)), 'cancel changes nothing');
+    eq('smart', await page.evaluate(() => $('dns-mode-seg').querySelector('.seg.selected').dataset.mode), 'and the mode stays');
+    await page.click('#dns-mode-seg .seg[data-mode="profiles"]');
+    await page.waitForSelector('#dialog-wrap.open');
+    await page.click("#d-ok"); await page.waitForTimeout(800);
+    truthy(await page.evaluate(() => window.__cmds.some(c => c.indexOf("'dns-mode' 'profiles'") >= 0)), 'confirmed: one command switches the mode');
+    eq('profiles', await page.evaluate(() => $('dns-mode-seg').querySelector('.seg.selected').dataset.mode), 'profiles mode is selected');
+    eq(false, await page.isVisible('#dns-geo'), 'the smart sections are hidden');
+    await page.click('#dns-mode-seg .seg[data-mode="smart"]');
+    await page.waitForSelector('#dialog-wrap.open');
+    truthy((await page.textContent('#dialog-wrap')).includes('Включить умный режим DNS?'), 'back to smart asks too');
+    await page.click("#d-ok"); await page.waitForTimeout(800);
+    eq('smart', await page.evaluate(() => $('dns-mode-seg').querySelector('.seg.selected').dataset.mode), 'smart mode again');
+
     sect(`${mode}: DoT/DoH blocking bypass`);
     eq(false, await page.isChecked('#dns-doh input'), 'the DoT/DoH bypass is off by default');
     eq(false, await page.evaluate(() => !!$('dns-doh').closest('[inert]')), 'and can be switched while DNS profiles are off');
@@ -170,6 +201,11 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     eq(true, await page.evaluate(() => window.__dns.enabled), 'the main switch turns the feature on');
     eq(false, await page.evaluate(() => $('dns-body').classList.contains('is-disabled')), 'and enables the body');
     truthy((await page.textContent('#dns-general')).includes('Не активно'), 'the state says nothing is applied yet');
+    const geoTxt = await page.textContent('#dns-geo');
+    truthy(geoTxt.includes('Comss') && geoTxt.includes('адресов прокси: 2 · в обход: 14'), 'with DNS on: each bypass DNS, its proxy addresses and bypassed queries');
+    truthy(geoTxt.includes('не отвечает'), 'a blocked one says so');
+    truthy(geoTxt.includes('Недавно в обход') && geoTxt.includes('chatgpt.com'), 'and recent domains that went around');
+    truthy(geoTxt.includes('Запасные DNS') && geoTxt.includes('AstraCat') && !geoTxt.includes('AstraCat · запасной'), 'spare DNS on standby are one line');
 
     sect(`${mode}: a preset`);
     await page.click('#dns-add'); await menuPick('Из пресетов');

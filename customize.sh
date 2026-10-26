@@ -49,6 +49,10 @@ cp -f "$MODPATH/binaries/$BIN/nfqws2" "$MODPATH/bin/nfqws2" ||
 cp -f "$MODPATH/binaries/$BIN/dnsproxy" "$MODPATH/bin/dnsproxy" ||
   abort "! Failed to install dnsproxy"
 [ -s "$MODPATH/bin/dnsproxy" ] || abort "! Installed dnsproxy binary is empty"
+# geodns — geo-block bypass in DNS; without it DNS works as before
+if [ -s "$MODPATH/binaries/$BIN/geodns" ]; then
+  cp -f "$MODPATH/binaries/$BIN/geodns" "$MODPATH/bin/geodns" || ui_print "! Failed to install geodns: DNS works without it"
+fi
 rm -rf "$MODPATH/binaries"
 
 # Иконка модуля для Magisk / KernelSU / APatch / MMRL
@@ -120,6 +124,17 @@ if [ -d "$DP" ] && [ ! -f "$CONF/dns/.presets2" ]; then
   done
   : > "$CONF/dns/.presets2"
 fi
+# Comss и GeoHide: новые серверы (RU-серверы GeoHide заблокированы — только EU,
+# у Comss — ещё router.comss.one); включён ли профиль и домены — как были
+if [ -d "$DP" ] && [ ! -f "$CONF/dns/.presets3" ]; then
+  for id in comss geohide; do
+    f="$MODPATH/defaults/dns-presets/$id.conf"
+    [ -f "$f" ] && [ -f "$DP/$id.conf" ] || continue
+    { grep -E '^(NAME|DESC)=' "$f"; grep '^ENABLED=' "$DP/$id.conf"; grep '^SERVER=' "$f"; grep '^DOMAIN=' "$DP/$id.conf"; true; } > "$DP/$id.conf.new" &&
+      mv -f "$DP/$id.conf.new" "$DP/$id.conf" && chmod 0644 "$DP/$id.conf"
+  done
+  : > "$CONF/dns/.presets3"
+fi
 
 for src in "$MODPATH"/lists/*.list; do
   [ -f "$src" ] || continue
@@ -159,6 +174,7 @@ fi
 busybox chmod +x "$MODPATH/bin/nfqws2"
 busybox chmod +x "$MODPATH/bin/nfqws2-ctl"
 busybox chmod +x "$MODPATH/bin/dnsproxy"
+[ -f "$MODPATH/bin/geodns" ] && busybox chmod +x "$MODPATH/bin/geodns"
 busybox chmod +x "$MODPATH/boot-completed.sh"
 # Обёртка для терминала: без +x Magisk смонтирует её в /system/bin неисполняемой
 busybox chmod 0755 "$MODPATH/system/bin/nfqws2-ctl"

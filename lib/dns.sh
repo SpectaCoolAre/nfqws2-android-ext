@@ -29,13 +29,31 @@ DNS_RUN_DIR="$STATE_DIR/dns"
 DNS_PIDFILE="$STATE_DIR/dnsproxy.pid"
 DNS_LOG="$LOG_DIR/dns.log"
 DNS_PORT=15353
+# Умный DNS (DNS_SMART): домены видео и CDN — отдельному dnsproxy, который
+# спрашивает DNS сети и публичные и отдаёт самый быстрый по соединению адрес;
+# у обоих — оптимистичный кэш (повторный ответ мгновенно, обновление — фоном)
+DNS_CDN_PORT=15354
+DNS_CDN_PIDFILE="$STATE_DIR/dnsproxy-cdn.pid"
+DNS_CDN_LIST="$MODDIR/defaults/dns-cdn.list"
+# Обход геоблока (DNS_GEO): арбитр geodns ($MODDIR/bin/geodns) встаёт на порт
+# перехвата, dnsproxy — на внутренний. Каждый запрос geodns отдаёт dnsproxy
+# (быстрый маршрут) и сразу DNS с обходом геоблока (comss, GeoHide, malw); если
+# такой DNS ответил адресом своего прокси — домен под геоблоком, ответ — его.
+# Списков не нужно: какие домены проксировать, знают сами эти DNS. Свои
+# профили DNS и домены из dns-geo-never.list в обход не идут никогда.
+DNS_GEO_BIN="$MODDIR/bin/geodns"
+DNS_GEO_PIDFILE="$STATE_DIR/geodns.pid"
+DNS_FAST_PORT=15356
+DNS_GEO_PRESETS="geohide comss malw" # и порядок по умолчанию: у GeoHide свой список доменов
+DNS_GEO_NEVER="$MODDIR/defaults/dns-geo-never.list"
+DNS_GEO_RESERVE="$MODDIR/defaults/dns-geo-reserve.list" # запасные: только когда основные молчат
 DNS_CHAIN=nfqws_dns          # nat OUTPUT: перехват в dnsproxy
 DNS_CHAIN6F=nfqws_dns6       # filter OUTPUT (IPv6 без nat): отказ, резолвер уйдёт на IPv4
 
 # Пределы. Серверов в профиле — сколько разумно опрашивать по очереди;
 # доменов — чтобы строка правил dnsproxy и экран WebUI оставались подъёмными.
 DNS_MAX_PROFILES=32
-DNS_MAX_SERVERS=8
+DNS_MAX_SERVERS=12
 DNS_MAX_DOMAINS=1000
 
 # Резервные публичные DNS: bootstrap для имён DoH/DoT-серверов и запасной
@@ -55,6 +73,17 @@ DNS_PUSH_SERVERS="https://dns.google/dns-query tls://dns.google 8.8.8.8 8.8.4.4"
 dns_push_on() { [ "${DNS_PUSH:-1}" = 1 ] && [ "$(dns_default)" != net ]; }
 
 dns_enabled() { [ -f "$DNS_ENABLED_FILE" ] && [ -f "$DNS_BIN" ]; }
+dns_smart_on() { [ "${DNS_SMART:-1}" = 1 ]; }
+# geodns не поднялся — 10 минут без него (dnsproxy на порту перехвата), потом снова
+dns_geo_on() {
+  local t now
+  [ "${DNS_GEO:-1}" = 1 ] && [ -f "$DNS_GEO_BIN" ] || return 1
+  [ -f "$DNS_RUN_DIR/geo_failed" ] || return 0
+  IFS= read -r t < "$DNS_RUN_DIR/geo_failed"; now=$(date +%s)
+  case "$t" in ''|*[!0-9]*) t=0 ;; esac
+  [ $((now - t)) -ge 600 ] && { rm -f "$DNS_RUN_DIR/geo_failed"; return 0; }
+  return 1
+}
 
 dns_default() {
   local d=""
@@ -228,7 +257,78 @@ dns_build() {
     for d in $DNS_PUSH_DOMAINS; do pl="$pl$d/"; done
     for s in $DNS_PUSH_SERVERS; do echo "$pl]$s"; done >> "$up.rules"
   fi
+  # Умный DNS: домены CDN, которых нет во включённых профилях, — к
+  # CDN-экземпляру. Из DNS сети: у оператора — ближние кэши
+  rm -f "$DNS_RUN_DIR/cdn.args.new" "$DNS_RUN_DIR/cdn.upstreams.txt.new"
+  if dns_smart_on && [ -f "$DNS_CDN_LIST" ]; then
+    local cdn f
+    for f in "$DNS_PROFILES_DIR"/*.conf; do
+      grep -q '^ENABLED=1$' "$f" 2>/dev/null && sed -n 's/^DOMAIN=//p' "$f"
+    done > "$DNS_RUN_DIR/cdn.taken"
+    cdn=$(tr -d '\r' < "$DNS_CDN_LIST" | awk -v tf="$DNS_RUN_DIR/cdn.taken" '
+      BEGIN { while ((getline l < tf) > 0) taken[l] = 1 }
+      /^[[:space:]]*(#|$)/ { next } !($1 in taken) { printf "%s/", $1 }')
+    rm -f "$DNS_RUN_DIR/cdn.taken"
+    if [ -n "$cdn" ]; then
+      echo "[/$cdn]127.0.0.1:$DNS_CDN_PORT" >> "$up.rules"
+      for ip in $(printf '%s' "$net" | tr ',' ' ') $DNS_PUBLIC; do dns_addr_port "$ip"; echo; done > "$DNS_RUN_DIR/cdn.upstreams.txt.new"
+      {
+        echo "-l"; echo "127.0.0.1"
+        echo "-p"; echo "$DNS_CDN_PORT"
+        echo "-u"; echo "$DNS_RUN_DIR/cdn.upstreams.txt"
+        echo "--cache"; echo "--cache-optimistic"
+        # ждёт ответа всех серверов: молчащий не должен задерживать надолго
+        echo "--timeout=2s"
+        echo "--upstream-mode=fastest_addr"
+        [ "${LOG_LEVEL:-0}" = 1 ] && echo "-v"
+      } > "$DNS_RUN_DIR/cdn.args.new"
+    fi
+  fi
+  # Обход геоблока: провайдеры — DoH и обычные адреса пресетов; «никогда в
+  # обход» — список модуля, CDN, push-уведомления Google и домены включённых
+  # профилей (у них свой маршрут)
+  rm -f "$DNS_RUN_DIR/geo.args.new"
+  if dns_geo_on; then
+    local gp gs order
+    : > "$DNS_RUN_DIR/geo.providers.new"
+    # Порядок — приоритет, когда прокси отдали несколько: первым — DNS по
+    # умолчанию у пользователя, если это один из них. Свой список доменов
+    # провайдера (DOMAIN= пресета) — «@файл»: такие домены идут через него
+    order=$(dns_default)
+    case " $DNS_GEO_PRESETS " in *" $order "*) ;; *) order="" ;; esac
+    for gp in $DNS_GEO_PRESETS; do [ "$gp" = "$order" ] || order="$order $gp"; done
+    for gp in $order; do
+      gs=$(sed -n 's/^SERVER=//p' "$DNS_PRESETS_DIR/$gp.conf" 2>/dev/null | tr -d '\r' | grep -E '^https://|^[0-9.]+$' | tr '\n' ' ')
+      [ -n "$gs" ] || continue
+      rm -f "$DNS_RUN_DIR/geo.claims.$gp"
+      if grep -q '^DOMAIN=' "$DNS_PRESETS_DIR/$gp.conf" 2>/dev/null; then
+        sed -n 's/^DOMAIN=//p' "$DNS_PRESETS_DIR/$gp.conf" | tr -d '\r' > "$DNS_RUN_DIR/geo.claims.$gp"
+        gs="$gs@$DNS_RUN_DIR/geo.claims.$gp"
+      fi
+      echo "$gp $gs" >> "$DNS_RUN_DIR/geo.providers.new"
+    done
+    [ -s "$DNS_RUN_DIR/geo.providers.new" ] &&
+      sed -n 's/^\([a-z0-9][a-z0-9-]*\) /+\1 /p' "$DNS_GEO_RESERVE" 2>/dev/null | tr -d '\r' >> "$DNS_RUN_DIR/geo.providers.new"
+    if [ -s "$DNS_RUN_DIR/geo.providers.new" ]; then
+      { cat "$DNS_GEO_NEVER" "$DNS_CDN_LIST" 2>/dev/null
+        for gs in $DNS_PUSH_DOMAINS; do echo "$gs"; done
+        for gs in "$DNS_PROFILES_DIR"/*.conf; do
+          grep -q '^ENABLED=1$' "$gs" 2>/dev/null && sed -n 's/^DOMAIN=//p' "$gs"
+        done
+      } > "$DNS_RUN_DIR/geo.never.new"
+      {
+        echo "-listen"
+        if ip -6 addr show dev lo 2>/dev/null | grep -q '::1/128'; then echo "127.0.0.1:$DNS_PORT,[::1]:$DNS_PORT"; else echo "127.0.0.1:$DNS_PORT"; fi
+        echo "-fast"; echo "127.0.0.1:$DNS_FAST_PORT"
+        echo "-providers"; echo "$DNS_RUN_DIR/geo.providers"
+        echo "-never"; echo "$DNS_RUN_DIR/geo.never"
+        echo "-status"; echo "$DNS_RUN_DIR/geo.json"
+        echo "-state"; echo "$DNS_RUN_DIR/geo.state"
+      } > "$DNS_RUN_DIR/geo.args.new"
+    fi
+  fi
   routed=$(grep -c . "$up.rules" 2>/dev/null)
+  [ -f "$DNS_RUN_DIR/geo.args.new" ] && routed=$((routed + 1))
 
   # DNS по умолчанию: серверы выбранного профиля (его домены всё равно идут
   # по правилам выше) или DNS текущей сети.
@@ -244,6 +344,22 @@ dns_build() {
   [ -s "$up" ] || for ip in $DNS_PUBLIC; do echo "$ip:53" >> "$up"; done
   cat "$up.rules" >> "$up"; rm -f "$up.rules"
   mv -f "$up" "$DNS_RUN_DIR/upstreams.txt"
+  if [ -f "$DNS_RUN_DIR/geo.args.new" ]; then
+    mv -f "$DNS_RUN_DIR/geo.providers.new" "$DNS_RUN_DIR/geo.providers"
+    mv -f "$DNS_RUN_DIR/geo.never.new" "$DNS_RUN_DIR/geo.never"
+    mv -f "$DNS_RUN_DIR/geo.args.new" "$DNS_RUN_DIR/geo.args"
+    echo "$DNS_FAST_PORT" > "$DNS_RUN_DIR/main_port"
+  else
+    rm -f "$DNS_RUN_DIR/geo.providers" "$DNS_RUN_DIR/geo.never" "$DNS_RUN_DIR/geo.args" \
+          "$DNS_RUN_DIR/geo.providers.new" "$DNS_RUN_DIR/geo.never.new"
+    echo "$DNS_PORT" > "$DNS_RUN_DIR/main_port"
+  fi
+  if [ -f "$DNS_RUN_DIR/cdn.args.new" ]; then
+    mv -f "$DNS_RUN_DIR/cdn.upstreams.txt.new" "$DNS_RUN_DIR/cdn.upstreams.txt"
+    mv -f "$DNS_RUN_DIR/cdn.args.new" "$DNS_RUN_DIR/cdn.args"
+  else
+    rm -f "$DNS_RUN_DIR/cdn.upstreams.txt" "$DNS_RUN_DIR/cdn.args"
+  fi
 
   # Запасные серверы — если основные не ответили: DNS сети, затем публичные.
   : > "$DNS_RUN_DIR/fallback.txt"
@@ -256,11 +372,12 @@ dns_build() {
   {
     echo "-l"; echo "127.0.0.1"
     if ip -6 addr show dev lo 2>/dev/null | grep -q '::1/128'; then echo "-l"; echo "::1"; fi
-    echo "-p"; echo "$DNS_PORT"
+    echo "-p"; cat "$DNS_RUN_DIR/main_port"
     echo "-u"; echo "$DNS_RUN_DIR/upstreams.txt"
     echo "-f"; echo "$DNS_RUN_DIR/fallback.txt"
     for ip in $(printf '%s' "$net" | tr ',' ' ') $DNS_PUBLIC; do echo "-b"; dns_addr_port "$ip"; echo; done
     echo "--cache"
+    dns_smart_on && echo "--cache-optimistic"
     echo "--timeout=5s"
     # parallel: запрос — всем серверам профиля, ответ — от первого ответившего.
     # В load_balance он уходил одному случайному, и молчащий сервер (часть DNS
@@ -351,11 +468,21 @@ dns_pid_diag() { # <pid>
   kill -0 "$1" 2>/dev/null && d="$d, kill -0 ok" || d="$d, kill -0 отказ"
   printf '%s' "$d"
 }
-# dnsproxy этого модуля (по пути бинарника), кроме PID из аргумента
+dns_cdn_pid() {
+  local p=""
+  [ -f "$DNS_CDN_PIDFILE" ] && IFS= read -r p < "$DNS_CDN_PIDFILE"
+  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+  dns_alive "$p" || return 1
+  printf '%s' "$p"
+}
+# dnsproxy этого модуля (по пути бинарника), кроме основного из аргумента и
+# CDN-экземпляра умного DNS
 dns_own_pids() { # [исключить PID]
-  local p exe
+  local p exe cdn
+  cdn=$(dns_cdn_pid)
   for p in $(pidof dnsproxy 2>/dev/null); do
     [ "$p" = "$1" ] && continue
+    [ -n "$cdn" ] && [ "$p" = "$cdn" ] && continue
     exe=$(readlink "/proc/$p/exe" 2>/dev/null)
     [ "$exe" = "$DNS_BIN" ] && dns_alive "$p" && echo "$p"
   done
@@ -452,9 +579,10 @@ dns_proxy_start() {
   echo "$pid" > "$DNS_PIDFILE"
   # Готов, когда слушает порт: /proc/net/udp, порт в шестнадцатеричном виде
   i=0
+  local port; port=$(cat "$DNS_RUN_DIR/main_port" 2>/dev/null); port=${port:-$DNS_PORT}
   while [ "$i" -lt 20 ]; do
     dns_alive "$pid" || break
-    grep -qi ":$(printf '%04X' "$DNS_PORT") " /proc/net/udp /proc/net/udp6 2>/dev/null && { listen=1; break; }
+    grep -qi ":$(printf '%04X' "$port") " /proc/net/udp /proc/net/udp6 2>/dev/null && { listen=1; break; }
     sleep 0.2; i=$((i + 1))
   done
   if ! dns_alive "$pid"; then
@@ -463,12 +591,130 @@ dns_proxy_start() {
     dns_fail "dnsproxy не запустился: $(grep -v '] nfqws2: ' "$DNS_LOG" 2>/dev/null | tail -n 1)"
     return 1
   fi
-  if [ "$listen" = 1 ]; then dns_log "dnsproxy запущен, PID $pid, порт $DNS_PORT"
-  else dns_log "dnsproxy запущен (PID $pid), но порт $DNS_PORT за 4 с не открылся — ждём дальше"; fi
+  if [ "$listen" = 1 ]; then dns_log "dnsproxy запущен, PID $pid, порт $port"
+  else dns_log "dnsproxy запущен (PID $pid), но порт $port за 4 с не открылся — ждём дальше"; fi
   protect_process "$pid"
   cp -f "$DNS_RUN_DIR/upstreams.txt" "$DNS_RUN_DIR/running.upstreams" 2>/dev/null
   cp -f "$DNS_RUN_DIR/args" "$DNS_RUN_DIR/running.args" 2>/dev/null
+  dns_cdn_start
+  dns_geo_start || return 1
   return 0
+}
+
+# Арбитр обхода геоблока. Не поднялся — 10 минут без него: dnsproxy встаёт на
+# порт перехвата (код 1: dns_start пересоберёт конфиг и запустит его так)
+dns_geo_pid() {
+  local p=""
+  [ -f "$DNS_GEO_PIDFILE" ] && IFS= read -r p < "$DNS_GEO_PIDFILE"
+  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+  dns_alive "$p" || return 1
+  printf '%s' "$p"
+}
+dns_geo_start() {
+  local pid i
+  dns_geo_stop
+  [ -f "$DNS_RUN_DIR/geo.args" ] || return 0
+  [ -x "$DNS_GEO_BIN" ] || chmod 0755 "$DNS_GEO_BIN" 2>/dev/null
+  (
+    set -f
+    IFS='
+'
+    exec 0</dev/null >>"$DNS_LOG" 2>&1
+    SSL_CERT_DIR=$(dns_cert_dirs); export SSL_CERT_DIR
+    exec "$DNS_GEO_BIN" $(cat "$DNS_RUN_DIR/geo.args")
+  ) &
+  pid=$!
+  echo "$pid" > "$DNS_GEO_PIDFILE"
+  i=0
+  while [ "$i" -lt 15 ]; do
+    dns_alive "$pid" || break
+    grep -qi ":$(printf '%04X' "$DNS_PORT") " /proc/net/udp /proc/net/udp6 2>/dev/null && break
+    sleep 0.2; i=$((i + 1))
+  done
+  if ! dns_alive "$pid"; then
+    wait "$pid" 2>/dev/null; rm -f "$DNS_GEO_PIDFILE"
+    date +%s > "$DNS_RUN_DIR/geo_failed"
+    dns_log "обход геоблока: geodns не запустился — 10 минут без него, DNS работает как обычно"
+    return 1
+  fi
+  protect_process "$pid"
+  cp -f "$DNS_RUN_DIR/geo.args" "$DNS_RUN_DIR/running.geo.args" 2>/dev/null
+  cp -f "$DNS_RUN_DIR/geo.providers" "$DNS_RUN_DIR/running.geo.providers" 2>/dev/null
+  cp -f "$DNS_RUN_DIR/geo.never" "$DNS_RUN_DIR/running.geo.never" 2>/dev/null
+  dns_log "обход геоблока: geodns запущен (PID $pid) — провайдеры: $(cut -d' ' -f1 "$DNS_RUN_DIR/geo.providers" | tr '\n' ' ')"
+  return 0
+}
+dns_geo_stop() {
+  local pid
+  pid=$(dns_geo_pid) && { kill -TERM "$pid" 2>/dev/null; sleep 0.2; dns_alive "$pid" && kill -KILL "$pid" 2>/dev/null; }
+  rm -f "$DNS_GEO_PIDFILE" "$DNS_RUN_DIR/running.geo.args" "$DNS_RUN_DIR/running.geo.providers" "$DNS_RUN_DIR/running.geo.never"
+}
+dns_geo_same() {
+  if [ -f "$DNS_RUN_DIR/geo.args" ]; then
+    dns_geo_pid >/dev/null && cmp -s "$DNS_RUN_DIR/geo.args" "$DNS_RUN_DIR/running.geo.args" &&
+      cmp -s "$DNS_RUN_DIR/geo.providers" "$DNS_RUN_DIR/running.geo.providers" &&
+      cmp -s "$DNS_RUN_DIR/geo.never" "$DNS_RUN_DIR/running.geo.never"
+  else
+    ! dns_geo_pid >/dev/null
+  fi
+}
+
+# CDN-экземпляр умного DNS. Не поднялся — не беда: основной всё равно
+# отвечает, домены CDN тогда идут на его запасные серверы
+dns_cdn_start() {
+  local pid i
+  dns_cdn_stop
+  [ -f "$DNS_RUN_DIR/cdn.args" ] || return 0
+  (
+    set -f
+    IFS='
+'
+    exec 0</dev/null >>"$DNS_LOG" 2>&1
+    exec "$DNS_BIN" $(cat "$DNS_RUN_DIR/cdn.args")
+  ) &
+  pid=$!
+  echo "$pid" > "$DNS_CDN_PIDFILE"
+  i=0
+  while [ "$i" -lt 10 ]; do
+    dns_alive "$pid" || break
+    grep -qi ":$(printf '%04X' "$DNS_CDN_PORT") " /proc/net/udp 2>/dev/null && break
+    sleep 0.2; i=$((i + 1))
+  done
+  if ! dns_alive "$pid"; then
+    wait "$pid" 2>/dev/null; rm -f "$DNS_CDN_PIDFILE"
+    dns_log "умный DNS: dnsproxy для видео и CDN не запустился — эти домены идут через основной"
+    return 1
+  fi
+  protect_process "$pid"
+  cp -f "$DNS_RUN_DIR/cdn.args" "$DNS_RUN_DIR/running.cdn.args" 2>/dev/null
+  cp -f "$DNS_RUN_DIR/cdn.upstreams.txt" "$DNS_RUN_DIR/running.cdn.upstreams" 2>/dev/null
+  dns_log "умный DNS: видео и CDN — самый быстрый адрес (PID $pid, порт $DNS_CDN_PORT)"
+}
+dns_cdn_stop() {
+  local pid
+  pid=$(dns_cdn_pid) && { kill -TERM "$pid" 2>/dev/null; sleep 0.2; dns_alive "$pid" && kill -KILL "$pid" 2>/dev/null; }
+  rm -f "$DNS_CDN_PIDFILE" "$DNS_RUN_DIR/running.cdn.args" "$DNS_RUN_DIR/running.cdn.upstreams"
+}
+# CDN-экземпляр в том виде, в каком его сейчас нужно: оба файла совпадают с
+# запущенным (или CDN не нужен и не запущен)
+dns_cdn_same() {
+  if [ -f "$DNS_RUN_DIR/cdn.args" ]; then
+    dns_cdn_pid >/dev/null && cmp -s "$DNS_RUN_DIR/cdn.args" "$DNS_RUN_DIR/running.cdn.args" &&
+      cmp -s "$DNS_RUN_DIR/cdn.upstreams.txt" "$DNS_RUN_DIR/running.cdn.upstreams"
+  else
+    ! dns_cdn_pid >/dev/null
+  fi
+}
+
+# Запуск dnsproxy и geodns; geodns не поднялся — без него, dnsproxy на порту перехвата
+dns_proxy_start_safe() {
+  dns_proxy_start && return 0
+  # не поднялся сам dnsproxy — дальше некуда
+  dns_pid >/dev/null || return 1
+  # dnsproxy работает, geodns — нет (geo_failed): конфиг без него
+  dns_build || return 1
+  dns_proxy_stop
+  dns_proxy_start
 }
 
 dns_proxy_stop() {
@@ -478,6 +724,8 @@ dns_proxy_stop() {
     dns_log "dnsproxy (PID $pid) остановлен"
   }
   rm -f "$DNS_PIDFILE" "$DNS_RUN_DIR/running.upstreams" "$DNS_RUN_DIR/running.args"
+  dns_cdn_stop
+  dns_geo_stop
 }
 
 # ---------------------------------------------------------------- перехват
@@ -554,7 +802,9 @@ dns_rules_ok() { iptables -w -t nat -C OUTPUT -j $DNS_CHAIN 2>/dev/null; }
 # другому процессу, и dns_start счёл бы dnsproxy живым.
 dns_boot_reset() {
   # standalone — флаг прежних версий: теперь DNS всегда работает сам по себе
-  rm -f "$DNS_DIR/standalone" "$DNS_PIDFILE" "$DNS_RUN_DIR/running.upstreams" "$DNS_RUN_DIR/running.args" \
+  rm -f "$DNS_DIR/standalone" "$DNS_PIDFILE" "$DNS_CDN_PIDFILE" "$DNS_GEO_PIDFILE" "$DNS_RUN_DIR/running.upstreams" "$DNS_RUN_DIR/running.args" \
+        "$DNS_RUN_DIR/running.cdn.args" "$DNS_RUN_DIR/running.cdn.upstreams" "$DNS_RUN_DIR/geo_failed" \
+        "$DNS_RUN_DIR/running.geo.args" "$DNS_RUN_DIR/running.geo.providers" "$DNS_RUN_DIR/running.geo.never" \
         "$DNS_RUN_DIR/active" "$DNS_RUN_DIR/error" "$DNS_RUN_DIR/ipv6" \
         "$DNS_RUN_DIR/bypass" "$DNS_RUN_DIR/bypass_fail" "$DNS_RUN_DIR/runner" 2>/dev/null
 }
@@ -583,7 +833,7 @@ dns_describe() {
   prof=$(grep -l '^ENABLED=1$' "$DNS_PROFILES_DIR"/*.conf 2>/dev/null | sed 's#.*/##; s#\.conf$##' | tr '\n' ' ' | sed 's/ $//')
   up=$(grep -v '^\[/' "$DNS_RUN_DIR/upstreams.txt" 2>/dev/null | grep . | tr '\n' ' ' | sed 's/ $//')
   if [ "$def" = net ]; then def="DNS сети"; else def="профиль $def"; fi
-  dns_log "по умолчанию: $def ($up); включённые профили: ${prof:-нет}; правил по доменам: ${rules:-0}; DNS сети: ${net:-не определён}$(dns_push_on && echo "; push-уведомления Google — через DNS Google")"
+  dns_log "по умолчанию: $def ($up); включённые профили: ${prof:-нет}; правил по доменам: ${rules:-0}; DNS сети: ${net:-не определён}$(dns_push_on && echo "; push-уведомления Google — через DNS Google")$([ -f "$DNS_RUN_DIR/cdn.args" ] && echo "; умный DNS: видео и CDN — самый быстрый адрес из DNS сети и публичных, оптимистичный кэш")$([ -f "$DNS_RUN_DIR/geo.args" ] && echo "; обход геоблока: geodns на порту перехвата, dnsproxy — на $DNS_FAST_PORT")"
   pm=$(dns_private_mode)
   case "$pm" in hostname|opportunistic)
     dns_log "внимание: «Частный DNS» = $pm — запросы через DoT системы идут мимо перехвата" ;;
@@ -619,12 +869,15 @@ _dns_start() { # <причина> [force — перезапуск dnsproxy и п
     dns_log "$why: сеть или VPN сменились — перезапуск dnsproxy"
     dns_describe
     dns_proxy_stop
-    if ! dns_proxy_start; then dns_rules_del; return 1; fi
+    if ! dns_proxy_start_safe; then dns_rules_del; return 1; fi
     rm -f "$DNS_RUN_DIR/error"
     return 0
   fi
   if dns_pid >/dev/null && cmp -s "$DNS_RUN_DIR/upstreams.txt" "$DNS_RUN_DIR/running.upstreams" &&
      cmp -s "$DNS_RUN_DIR/args" "$DNS_RUN_DIR/running.args"; then
+    # основной тот же, а CDN-экземпляр умного DNS изменился или упал
+    dns_cdn_same || dns_cdn_start
+    dns_geo_same || dns_geo_start || { dns_build; dns_proxy_stop; dns_proxy_start_safe || { dns_rules_del; return 1; }; }
     if ! dns_rules_ok; then
       dns_log "$why: конфиг тот же, правила перехвата пропали — восстанавливаю"
       dns_rules_add || dns_fail "не удалось восстановить перехват"
@@ -635,7 +888,7 @@ _dns_start() { # <причина> [force — перезапуск dnsproxy и п
   else dns_log "$why: запуск dnsproxy"; fi
   dns_describe
   dns_proxy_stop
-  if ! dns_proxy_start; then dns_rules_del; return 1; fi
+  if ! dns_proxy_start_safe; then dns_rules_del; return 1; fi
   if ! dns_rules_add; then
     dns_fail "правила перехвата не применились (нет nat/REDIRECT в ядре?)"
     dns_proxy_stop
@@ -688,6 +941,14 @@ _dns_check() {
       log_msg "DNS: dnsproxy упал — перезапуск (подробности — в журнале DNS)"
       rm -f "$DNS_PIDFILE"
       if _dns_start "watchdog"; then log_msg "DNS: dnsproxy перезапущен"; fi
+    elif [ -f "$DNS_RUN_DIR/geo.args" ] && ! dns_geo_pid >/dev/null; then
+      dns_log "watchdog: geodns (обход геоблока) не работает — перезапуск"
+      if ! dns_geo_start; then
+        dns_build && { dns_proxy_stop; dns_proxy_start_safe; }
+      fi
+    elif [ -f "$DNS_RUN_DIR/cdn.args" ] && ! dns_cdn_pid >/dev/null; then
+      dns_log "watchdog: dnsproxy умного DNS (видео и CDN) не работает — перезапуск"
+      dns_cdn_start
     elif ! dns_rules_ok; then
       dns_log "watchdog: правила перехвата пропали — восстанавливаю"
       dns_rules_add || dns_fail "не удалось восстановить перехват"
@@ -719,6 +980,12 @@ dns_state() {
   echo "paused=$(dns_enabled && dns_pause_reason)"
   echo "home_pause=$([ -f "$DNS_HOME_FILE" ] && echo 1 || echo 0)"
   echo "push=$(dns_push_on && echo 1 || echo 0)"
+  echo "smart=$(dns_smart_on && echo 1 || echo 0)"
+  echo "cdn=$(dns_cdn_pid >/dev/null && echo running || { [ -f "$DNS_RUN_DIR/cdn.args" ] && echo down; })"
+  echo "geo=$(if dns_geo_pid >/dev/null; then echo running; elif [ -f "$DNS_RUN_DIR/geo_failed" ]; then echo failed; elif [ -f "$DNS_GEO_BIN" ] && [ "${DNS_GEO:-1}" = 1 ]; then echo idle; else echo off; fi)"
+  echo "geo_available=$([ -f "$DNS_GEO_BIN" ] && echo 1 || echo 0)"
+  # итог geodns: провайдеры, их адреса прокси, последние домены в обход
+  echo "geo_status=$(tr -d '\n' < "$DNS_RUN_DIR/geo.json" 2>/dev/null)"
   echo "default=$(dns_default)"
   echo "proxy=$proxy"
   echo "rules=$(dns_rules_ok && echo on || echo off)"

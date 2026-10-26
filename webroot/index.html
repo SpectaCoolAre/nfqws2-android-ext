@@ -312,6 +312,18 @@
     </label>
     <div class="helper" data-t>Как в Keenetic: запросы к доменам профиля и их поддоменам идут на его DNS-серверы (DoH, DoT, DoQ или обычные), остальные — на DNS по умолчанию. Работает независимо от службы обхода: остановка или пауза его не выключают.</div>
     <div id="dns-warn" class="stack"></div>
+    <div class="seg-mode" id="dns-mode-seg" role="radiogroup" aria-label="Режим работы DNS" data-ta="aria-label">
+      <button type="button" class="seg state" role="radio" data-mode="profiles" onclick="setDnsMode('profiles')">
+        <svg aria-hidden="true" class="icon s18 seg-check"><use href="#i-check"/></svg><span data-t>Профили</span>
+      </button>
+      <button type="button" class="seg state" role="radio" data-mode="smart" onclick="setDnsMode('smart')">
+        <svg aria-hidden="true" class="icon s18 seg-check"><use href="#i-check"/></svg><span data-t>Умный режим</span>
+      </button>
+    </div>
+    <div id="dns-smart-sec" class="stack">
+      <div class="list" id="dns-geo"></div>
+      <div class="list" id="dns-smart"></div>
+    </div>
 
     <div id="dns-body" class="stack">
       <div class="list" id="dns-general"></div>
@@ -615,6 +627,21 @@
     </button>
     <button class="btn text state" onclick="closeSheet()"><span data-t>Отмена</span></button>
     <button class="btn with-icon state" id="strategy-apply" onclick="applySelectedStrategy()">Применить</button>
+  </div>
+</div>
+
+<div class="sheet list-sheet" id="logs-export-sheet" role="dialog" aria-modal="true" aria-labelledby="logs-export-title">
+  <button type="button" class="sheet-drag" aria-label="Закрыть" data-ta="aria-label"><span class="handle"></span></button>
+  <div class="sheet-title" id="logs-export-title" data-t>Экспорт журналов</div>
+  <div class="sheet-desc" data-t>Два и больше — одним архивом .tar, один журнал — файлом. В имени — дата и время.</div>
+  <div class="list sheet-scroll" id="logs-export-list"></div>
+  <div class="sheet-actions">
+    <button class="btn tonal with-icon state" id="lx-share" onclick="exportLogsRun('share')">
+      <svg aria-hidden="true" class="icon s18"><use href="#i-share"/></svg><span data-t>Поделиться</span>
+    </button>
+    <button class="btn with-icon state" id="lx-save" onclick="exportLogsRun('save')">
+      <svg aria-hidden="true" class="icon s18"><use href="#i-download"/></svg><span data-t>Экспорт</span>
+    </button>
   </div>
 </div>
 

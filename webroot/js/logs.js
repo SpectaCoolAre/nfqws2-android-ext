@@ -5,8 +5,9 @@
 /* ══ ЖУРНАЛЫ ═════════════════════════════════════════════════════════════ */
 const LOG_SOURCES = [['summary', 'Краткая статистика'], ['service', 'Служба'], ['nfqws', 'Процесс'],
   ['auto', 'Автообучение'], ['debug', 'Отладка'], ['dns', 'DNS'], ['smart', 'Умный режим']];
-/* Журнал DNS — только если в модуле есть dnsproxy */
-const logSources = () => LOG_SOURCES.filter(s => s[0] !== 'dns' || S.dns_available == 1);
+/* Журнал DNS — только если в модуле есть dnsproxy; отладка — только при
+   включённом подробном журнале */
+const logSources = () => LOG_SOURCES.filter(s => (s[0] !== 'dns' || S.dns_available == 1) && (s[0] !== 'debug' || S.log_level == 1));
 function openSmartLog(){ logSource = 'smart'; store.set('nfq_log_src', 'smart'); navigate('logs'); }
 /* Кнопка журналов в шапке открывает журнал того, что сейчас на экране:
    «Состояние» — краткая статистика, «Списки» — автообучение, «Обход» —
@@ -23,6 +24,7 @@ if(!LOG_SOURCES.some(s => s[0] === logSource)) logSource = 'service';
 function renderLogChips(){
   // до первого статуса (S пуст) не знаем, есть ли dnsproxy — сохранённый выбор не трогаем
   if(logSource === 'dns' && S.dns_available != null && S.dns_available != 1) logSource = 'service';
+  if(logSource === 'debug' && S.log_level != null && S.log_level != 1) logSource = 'nfqws';
   const src = t((LOG_SOURCES.find(s => s[0] === logSource) || LOG_SOURCES[1])[1]);
   const sum = logSource === 'summary';
   $('log-chips').innerHTML =
@@ -68,7 +70,7 @@ async function logsLongAction(){
     if(currentPage === 'logs') loadLog();
   } else {
     toast(t('Экспорт журналов (долгое нажатие на значок журналов)'));
-    exportLogs();
+    exportLogsRun('save');
   }
 }
 onLongPress($('logs-btn'), null, logsLongAction);
@@ -105,20 +107,56 @@ async function loadLog(){
   lg.classList.remove('appear'); void lg.offsetWidth; lg.classList.add('appear');
   lg.scrollTop = lg.scrollHeight;
 }
-async function exportLogs(){
-  const dir = SAVE_DIR_DEFAULT;
+/* Экспорт: лист с галочками — что именно. Два и больше — архив .tar, один
+   журнал — файлом с датой и временем в имени. «Экспорт» сохраняет в папку
+   загрузок без окна «Поделиться», «Поделиться» — временная копия сразу в него */
+const EXPORT_ITEMS = [['service', 'Служба', 'service.log'], ['nfqws', 'Процесс', 'nfqws2.log'],
+  ['debug', 'Отладка', 'nfqws2-debug.log'], ['auto', 'Автообучение', 'auto.log'], ['dns', 'DNS', 'dns.log'],
+  ['smart', 'Умный режим', 'smart.log'], ['smartdata', 'Выученное умным режимом', 'Варианты по сетям и замеры'],
+  ['diag', 'Диагностика', 'Проверка модуля, счётчики правил, аргументы запуска']];
+const exportItems = () => EXPORT_ITEMS.filter(([k]) => (k !== 'dns' || S.dns_available == 1) && (k !== 'debug' || S.log_level == 1));
+function exportSel(){
+  const saved = store.get('nfq_logs_export');
+  const all = exportItems().map(x => x[0]);
+  if(!saved) return all;
+  const sel = saved.split(',').filter(k => all.includes(k));
+  return sel.length ? sel : all;
+}
+function renderExportSheet(){
+  const sel = exportSel();
+  setHTML('logs-export-list', exportItems().map(([k, label, sub]) =>
+    '<label class="list-item two-line clickable state">' +
+      '<span class="li-text"><span class="li-primary">' + esc(t(label)) + '</span>' +
+      '<span class="li-secondary">' + esc(t(sub)) + '</span></span>' +
+      '<span class="li-trail"><input type="checkbox" class="checkbox" data-lx="' + k + '"' + (sel.includes(k) ? ' checked' : '') + '></span>' +
+    '</label>').join(''), false);
+  $('logs-export-list').querySelectorAll('input[data-lx]').forEach(cb => { cb.onchange = exportSelChanged; });
+  exportSelChanged();
+}
+function exportSelChanged(){
+  const sel = [...$('logs-export-list').querySelectorAll('input[data-lx]:checked')].map(cb => cb.dataset.lx);
+  if(sel.length) store.set('nfq_logs_export', sel.join(','));
+  $('lx-share').disabled = $('lx-save').disabled = !sel.length;
+}
+function exportLogs(){ renderExportSheet(); openSheet('logs-export-sheet'); }
+async function exportLogsRun(how){
+  const keys = exportSel().join(',');
+  if(openSheetId === 'logs-export-sheet') closeSheet();
+  const ksu = !!window.ksu;
   // в KernelSU файл отдаётся по пути: base64 архива не нужен (большой вывод
   // мост отдаёт пустым — было пустое уведомление)
-  const r = await withBusy(window.ksu ? ['export-logs', 'path'] : ['export-logs'], 30000);
+  const r = await withBusy(['export-logs', ksu ? (how === 'share' ? 'share' : 'path') : '-', keys], 30000);
   const out = (r.out || '').trim();
   if(r.code || !out){ toast(errText(r, 'Не удалось экспортировать журналы')); return; }
   const parts = out.split('\n')[0].split('\t');
   // без архива (нет tar) ctl кладёт файлы в папку и пишет одну строку о ней
   if(parts.length < 2 || !parts[1]){ toast(out); return; }
-  await exportBlobFile(parts[2] ? b64toBlob(parts[2], 'application/x-tar') : null, parts[0], 'application/x-tar', parts[1], dir);
+  if(ksu){ if(how !== 'share') toast(t('Сохранено: {0}', parts[1])); return; }
+  const mime = /\.tar$/.test(parts[0]) ? 'application/x-tar' : 'text/plain';
+  await exportBlobFile(parts[2] ? b64toBlob(parts[2], mime) : null, parts[0], mime, parts[1], SAVE_DIR_DEFAULT);
 }
 async function clearLogs(){
-  if(!await mdConfirm(t('Очистить журналы?'), t('service.log, nfqws2.log, отладочный, журнал автообучения и журнал DNS будут обнулены.'),
+  if(!await mdConfirm(t('Очистить журналы?'), t('Журналы службы, процесса, отладки, автообучения, DNS и умного режима будут обнулены. Выученное умным режимом останется.'),
     {ok: t('Очистить'), danger: true})) return;
   const r = await withBusy(['clear-logs']);
   toast(r.code ? errText(r, 'Не удалось очистить журналы') : t('Журналы очищены'));

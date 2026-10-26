@@ -171,6 +171,22 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   await page.click('#logs-btn'); await page.waitForTimeout(600);
   eq('logs', await cur(), 'a tap still opens the logs');
   eq('Экспорт логов', await page.textContent('#logs-long-value'), 'where the long-press action is set');
+
+  sect('logs: debug source and export sheet');
+  eq(false, await page.evaluate(() => logSources().some(s => s[0] === 'debug')), 'without the verbose log there is no debug log to pick');
+  await page.click('button[onclick="exportLogs()"]'); await page.waitForTimeout(500);
+  eq(true, await page.evaluate(() => $('logs-export-sheet').classList.contains('open')), 'export asks what to export');
+  const lx = await page.$$eval('#logs-export-list input[data-lx]', r => r.map(x => x.dataset.lx + ':' + x.checked));
+  truthy(lx.includes('smart:true') && lx.includes('diag:true') && !lx.some(x => x.startsWith('debug')), 'everything but debug, all ticked: ' + lx.join(' '));
+  await page.$$eval('#logs-export-list input[data-lx]', r => r.forEach(x => { if(x.dataset.lx !== 'dns'){ x.checked = false; x.onchange(); } }));
+  await page.click('#lx-save'); await page.waitForTimeout(400);
+  eq(1, await calls("'export-logs' 'path' 'dns'"), 'Export saves just the chosen log, without the share sheet');
+  eq(false, await page.evaluate(() => $('logs-export-sheet').classList.contains('open')), 'and closes the sheet');
+  await page.click('button[onclick="exportLogs()"]'); await page.waitForTimeout(500);
+  eq('dns', await page.evaluate(() => [...$('logs-export-list').querySelectorAll('input[data-lx]:checked')].map(x => x.dataset.lx).join(',')), 'the choice is remembered');
+  await page.click('#lx-share'); await page.waitForTimeout(400);
+  eq(1, await calls("'export-logs' 'share' 'dns'"), 'Share builds a temporary one for the share sheet');
+  await page.evaluate(() => $('prompt-container').classList.remove('show'));
   await page.click('#logs-long-value'); await page.waitForTimeout(200);
   await page.click('.menu .mi:nth-child(2)'); await page.waitForTimeout(200);
   eq('Очистка журналов', await page.textContent('#logs-long-value'), 'and can be switched to clearing');

@@ -106,6 +106,11 @@ assert_contains "$(cat "$prop")" "id=nfqws2-android-ext" "the fork has its own m
 assert_contains "$(cat "$prop")" "/SpectaCoolAre/nfqws2-android-ext/main/update.json" "updates come from the fork"
 assert_contains "$(cat "$REPO_DIR/customize.sh")" 'ORIG=/data/adb/modules/nfqws2-android' "the installer knows the original module"
 assert_contains "$(cat "$REPO_DIR/customize.sh")" 'binaries/$BIN/dnsproxy' "and requires dnsproxy"
+assert_contains "$(cat "$WF")" 'go test ./...' "geodns is tested before the release is built"
+assert_contains "$(cat "$WF")" 'binaries/$abi/geodns' "and built for every ABI"
+assert_contains "$(cat "$REPO_DIR/.github/workflows/ci.yml")" 'binaries/$abi/geodns' "the CI build has it too"
+assert_contains "$(cat "$REPO_DIR/customize.sh")" 'binaries/$BIN/geodns' "the installer puts geodns in place"
+assert_not_contains "$(grep -n 'geodns' "$REPO_DIR/customize.sh")" 'abort' "but does not require it: DNS works without it"
 assert_eq "" "$(grep -rn '/data/adb/modules/nfqws2-android\b' "$REPO_DIR/bin" "$REPO_DIR/lib" "$REPO_DIR/webroot/js" "$REPO_DIR/service.sh" "$REPO_DIR/uninstall.sh" "$REPO_DIR/action.sh" 2>/dev/null | grep -v 'nfqws2-android-ext')" \
   "no path points at the original module's directory"
 

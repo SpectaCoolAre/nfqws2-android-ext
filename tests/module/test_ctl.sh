@@ -399,9 +399,11 @@ assert_contains "$ctl_out" "line one" "the fallback keeps everything"
 ctl get-logs nfqws 5
 assert_contains "$ctl_out" "пусто" "an empty log reports (пусто) rather than nothing"
 
+printf 'learned something\n' > "$CONFDIR/logs/smart.log"
 ctl clear-logs
 assert_rc 0 "$ctl_rc" "clear-logs works"
 assert_eq "0" "$(wc -c < "$CONFDIR/logs/service.log" | tr -d ' ')" "service.log is truncated"
+assert_eq "0" "$(wc -c < "$CONFDIR/logs/smart.log" | tr -d ' ')" "and the smart mode log too"
 
 # ── backup & export ───────────────────────────────────────────────────────────
 section "backup and export"
@@ -435,6 +437,30 @@ fi
 
 ctl export-logs
 assert_rc 0 "$ctl_rc" "export-logs works"
+assert_match "$ctl_out" "^nfqws2-logs-[0-9]{8}-[0-9]{6}\.tar	" "everything goes into an archive with the date and time"
+EXP_OLD="${NFQWS_BACKUP_DIR:-}"; NFQWS_BACKUP_DIR="$SANDBOX/exp"; export NFQWS_BACKUP_DIR
+printf 'dns line\n' > "$CONFDIR/logs/dns.log"
+ctl export-logs path dns
+assert_rc 0 "$ctl_rc" "one log can be exported"
+assert_match "$ctl_out" "^nfqws2-dns-[0-9]{8}-[0-9]{6}\.log	$SANDBOX/exp/nfqws2-dns-" "as a file, with the date and time in its name"
+assert_eq "dns line" "$(cat "$(printf '%s' "$ctl_out" | cut -f2)")" "holding that log"
+ctl export-logs path dns,service
+assert_match "$ctl_out" "^nfqws2-logs-.*\.tar	" "two of them — an archive"
+assert_contains "$(tar -tf "$(printf '%s' "$ctl_out" | cut -f2)")" "dns.log" "with what was chosen"
+assert_not_contains "$(tar -tf "$(printf '%s' "$ctl_out" | cut -f2)")" "doctor.txt" "and nothing else"
+ctl export-logs path nosuch
+assert_rc 1 "$ctl_rc" "an unknown log is refused"
+rm -f "$LOG_DIR/nfqws2-debug.log" "$CONFDIR/logs/nfqws2-debug.log"
+ctl export-logs path debug
+assert_rc 1 "$ctl_rc" "an empty choice says there is nothing to export"
+printf '#!/bin/sh\necho "$*" >> "$MOCK_DIR/am.log"; echo "Starting: Intent"\n' > "$MOCKBIN/am"
+chmod 0755 "$MOCKBIN/am"; : > "$MOCK_DIR/am.log"
+ctl export-logs share dns,smart
+assert_rc 0 "$ctl_rc" "share builds a temporary archive"
+assert_match "$ctl_out" "$SANDBOX/exp/.share/nfqws2-logs-" "in its own folder"
+assert_contains "$(cat "$MOCK_DIR/am.log")" "android.intent.action.SEND" "and opens the share sheet"
+rm -f "$MOCKBIN/am"
+if [ -n "$EXP_OLD" ]; then NFQWS_BACKUP_DIR="$EXP_OLD"; else unset NFQWS_BACKUP_DIR; fi
 
 # ── любой существующий список читается по имени ───────────────────────────────
 section "get-list: other lists by name"

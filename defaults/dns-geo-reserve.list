@@ -1,0 +1,10 @@
+# Запасные DNS с обходом геоблока для geodns: спрашиваются, только когда
+# Comss, GeoHide и malw все молчат (например, заблокированы). Пока основные
+# работают, домены сюда не уходят. Строка: имя и адреса (DoH и обычные IP)
+astracat https://dns.astracat.network/dns-query
+bezmezhau https://dns.bezmezhau.com/dns-query
+dns-ai https://dns.dns-ai.ru/dns-query 192.144.59.14
+mafioznik https://dns.mafioznik.xyz/dns-query
+wlrus https://dns.wlrus.cfd/dns-query
+webshift https://d.webshiftvpn.ru/dns-query
+zapret https://dns.zapret.moe/dns-query 83.217.211.149

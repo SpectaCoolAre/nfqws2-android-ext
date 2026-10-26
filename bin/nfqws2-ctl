@@ -281,7 +281,7 @@ cmd_json_status() {
   # нечисловое значение обваливает весь JSON и убивает WebUI, поэтому проверяем каждое поле
   for v in appn cnt_user cnt_auto cnt_excl cnt_ipset cnt_ipset_excl cnt_apps cnt_rkn cnt_flowseal uptime upms qdrop \
            PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC AUTOSTART WATCHDOG IPV6_ENABLED LOG_LEVEL NFQUEUE_NUM HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT \
-           DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS DNS_PUSH EXTRA_RKN EXTRA_FLOWSEAL WL_PAUSE SMART_POOL; do
+           DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL WL_PAUSE SMART_POOL; do
     eval "case \"\${$v}\" in ''|*[!0-9]*) $v=0 ;; esac"
   done
 
@@ -298,7 +298,7 @@ cmd_json_status() {
 {"running":$run,"pid":"$pid","uptime":$uptime,"uptime_ms":$upms,"strategy":"$(json_str "$cur_strat")","version":"$(json_str "$ver")","mode":"$(json_str "$(current_mode)")",
 "pkt_limit_out":$PKT_LIMIT_OUT,"pkt_limit_in":$PKT_LIMIT_IN,"block_quic":$BLOCK_QUIC,"app_mode":"$(json_str "$APP_MODE")","autostart":$AUTOSTART,
 "ipv6":$IPV6_ENABLED,"log_level":$LOG_LEVEL,"qdrop":$qdrop,"queue":$NFQUEUE_NUM,"app_uids":$appn,
-"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":$DOH_BYPASS,"meta_quic":$META_QUIC_REJECT,"calls_bypass":$CALLS_BYPASS,"dns_push":$DNS_PUSH,"extra_rkn":$EXTRA_RKN,"extra_flowseal":$EXTRA_FLOWSEAL,"wl_pause":$WL_PAUSE,"smart_pool":$SMART_POOL,"dns_paused":"$dnspause","dns_home_pause":$([ -f "$DNS_HOME_FILE" ] && echo 1 || echo 0),"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")",
+"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":$DOH_BYPASS,"meta_quic":$META_QUIC_REJECT,"calls_bypass":$CALLS_BYPASS,"dns_smart":$DNS_SMART,"dns_geo":$DNS_GEO,"extra_rkn":$EXTRA_RKN,"extra_flowseal":$EXTRA_FLOWSEAL,"wl_pause":$WL_PAUSE,"smart_pool":$SMART_POOL,"dns_paused":"$dnspause","dns_home_pause":$([ -f "$DNS_HOME_FILE" ] && echo 1 || echo 0),"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")",
 "counts":{"user":$cnt_user,"auto":$cnt_auto,"exclude":$cnt_excl,"ipset":$cnt_ipset,"ipset_exclude":$cnt_ipset_excl,"apps":$cnt_apps,"rkn":$cnt_rkn,"flowseal":$cnt_flowseal}}
 JSON
 }
@@ -612,40 +612,102 @@ cmd_log_summary() {
   fi
 }
 
-cmd_export_logs() { # [path — без содержимого архива, см. cmd_backup_create]
-  local tmp="$STATE_DIR/export_logs.$$" name="nfqws2-logs-$(date '+%Y%m%d-%H%M%S').tar"
+# Что экспортировать: ключи через запятую (пусто — всё). Журналы — по файлу,
+# smartdata — выученное умным режимом, diag — диагностика (doctor, счётчики,
+# правила, аргументы запуска)
+EXPORT_LOG_KEYS="service nfqws debug auto dns smart smartdata diag"
+export_log_file() { # <ключ> -> путь журнала
+  case "$1" in
+    service) echo "$SERVICE_LOG" ;; nfqws) echo "$NFQWS_LOG" ;; debug) echo "$LOG_DIR/nfqws2-debug.log" ;;
+    auto) echo "$LOG_DIR/auto.log" ;; dns) echo "$LOG_DIR/dns.log" ;; smart) echo "$LOG_DIR/smart.log" ;;
+  esac
+}
+export_collect() { # <папка> <ключ>
+  local f
+  case "$2" in
+    smartdata) [ -d "$SMART_DIR" ] && { mkdir -p "$1/smart"; cp -f "$SMART_DIR"/* "$1/smart"/ 2>/dev/null; } ;;
+    diag)
+      cp -f "$ARGS_FILE" "$1/last.args" 2>/dev/null
+      cmd_doctor > "$1/doctor.txt" 2>&1
+      iptables-save -t mangle 2>/dev/null | grep -i nfqws > "$1/iptables-nfqws.txt"
+      # Счётчики пакетов по правилам и состояние очереди: по ним видно, доходит ли
+      # трафик до правил и до nfqws2, даже когда журнал самого nfqws2 молчит.
+      {
+        for c in $IPT_GROUP_POST $IPT_GROUP_PRE $IPT_GROUP_QOUT $IPT_GROUP_QIN; do
+          echo "== iptables -t mangle -L $c -v -n"; iptables -w -t mangle -L "$c" -v -n -x 2>&1
+        done
+        echo "== ip6tables -t mangle -L $IPT_GROUP_POST -v -n"; ip6tables -w -t mangle -L $IPT_GROUP_POST -v -n -x 2>&1
+        echo "== /proc/net/netfilter/nfnetlink_queue"; cat /proc/net/netfilter/nfnetlink_queue 2>&1
+        echo "== ip route"; ip route 2>&1; ip -6 route 2>&1 | head -n 20
+      } > "$1/counters.txt" 2>&1 ;;
+    *) f=$(export_log_file "$2"); [ -n "$f" ] && [ -f "$f" ] && cp -f "$f" "$1"/ 2>/dev/null ;;
+  esac
+}
+# export-logs [path|share|-] [ключи]: два файла и больше — архив .tar, один
+# журнал — сам файл; в имени дата и время. path — без содержимого (base64),
+# share — во временную папку и сразу «Поделиться» (папка чистится при
+# следующем share)
+cmd_export_logs() {
+  local mode="$1" keys k n stamp tmp name out_file dir
+  keys=$(printf '%s' "${2:-}" | tr ',' ' ')
+  [ -n "$keys" ] || keys="$EXPORT_LOG_KEYS"
+  for k in $keys; do
+    case " $EXPORT_LOG_KEYS " in *" $k "*) ;; *) echo "Неизвестный журнал: $k" >&2; return 1 ;; esac
+  done
+  stamp=$(date '+%Y%m%d-%H%M%S')
+  tmp="$STATE_DIR/export_logs.$$"
   rm -rf "$tmp"; mkdir -p "$tmp" 2>/dev/null || return 1
-  cp -f "$LOG_DIR"/* "$tmp"/ 2>/dev/null
-  cp -f "$ARGS_FILE" "$tmp/last.args" 2>/dev/null
-  cmd_doctor > "$tmp/doctor.txt" 2>&1
-  # выученное умным режимом: по нему видно, какие варианты где работают
-  [ -d "$SMART_DIR" ] && { mkdir -p "$tmp/smart"; cp -f "$SMART_DIR"/* "$tmp/smart"/ 2>/dev/null; }
-  iptables-save -t mangle 2>/dev/null | grep -i nfqws > "$tmp/iptables-nfqws.txt"
-  # Счётчики пакетов по правилам и состояние очереди: по ним видно, доходит ли
-  # трафик до правил и до nfqws2, даже когда журнал самого nfqws2 молчит.
-  {
-    for c in $IPT_GROUP_POST $IPT_GROUP_PRE $IPT_GROUP_QOUT $IPT_GROUP_QIN; do
-      echo "== iptables -t mangle -L $c -v -n"; iptables -w -t mangle -L "$c" -v -n -x 2>&1
-    done
-    echo "== ip6tables -t mangle -L $IPT_GROUP_POST -v -n"; ip6tables -w -t mangle -L $IPT_GROUP_POST -v -n -x 2>&1
-    echo "== /proc/net/netfilter/nfnetlink_queue"; cat /proc/net/netfilter/nfnetlink_queue 2>&1
-    echo "== ip route"; ip route 2>&1; ip -6 route 2>&1 | head -n 20
-  } > "$tmp/counters.txt" 2>&1
-
-  mkdir -p "$BACKUP_DIR" 2>/dev/null
-  local out_file="$BACKUP_DIR/$name"
-  if (cd "$tmp" && tar_cmd -cf "$out_file" .) 2>/dev/null; then
-    printf '%s\t%s\t' "$name" "$out_file"
-    [ "$1" = path ] || b64e < "$out_file" | tr -d '\n'
-    echo
+  for k in $keys; do export_collect "$tmp" "$k"; done
+  n=$(find "$tmp" -type f 2>/dev/null | wc -l)
+  [ "$n" -gt 0 ] || { rm -rf "$tmp"; echo "Выбранные журналы пусты — экспортировать нечего" >&2; return 1; }
+  dir="$BACKUP_DIR"
+  if [ "$mode" = share ]; then dir="$BACKUP_DIR/.share"; rm -rf "$dir"; fi
+  mkdir -p "$dir" 2>/dev/null
+  if [ "$n" = 1 ] && [ -z "$(find "$tmp" -mindepth 1 -type d 2>/dev/null)" ]; then
+    # один журнал — файлом: nfqws2-dns-20261026-053003.log
+    out=$(find "$tmp" -type f | head -n 1)
+    name="nfqws2-${keys%% *}-$stamp.log"
+    out_file="$dir/$name"
+    cp -f "$out" "$out_file" 2>/dev/null || { rm -rf "$tmp"; echo "Не удалось сохранить $out_file" >&2; return 1; }
   else
-    rm -f "$out_file"   # недописанный архив выглядел бы как настоящий
-    local d="$BACKUP_DIR/nfqws2-logs"
-    mkdir -p "$d" 2>/dev/null
-    cp -Rf "$tmp"/* "$d"/ 2>/dev/null
-    echo "Логи сохранены в $d"
+    name="nfqws2-logs-$stamp.tar"
+    out_file="$dir/$name"
+    if ! (cd "$tmp" && tar_cmd -cf "$out_file" .) 2>/dev/null; then
+      rm -f "$out_file"   # недописанный архив выглядел бы как настоящий
+      if [ "$mode" = share ]; then rm -rf "$tmp"; echo "Не удалось собрать архив (нет tar)" >&2; return 1; fi
+      local d="$BACKUP_DIR/nfqws2-logs"
+      mkdir -p "$d" 2>/dev/null
+      cp -Rf "$tmp"/* "$d"/ 2>/dev/null
+      rm -rf "$tmp"
+      echo "Логи сохранены в $d"
+      return 0
+    fi
   fi
   rm -rf "$tmp"
+  chmod 0666 "$out_file" 2>/dev/null
+  if [ "$mode" = share ]; then
+    share_stream "$out_file" "$name" || return 1
+    printf '%s\t%s\t\n' "$name" "$out_file"
+    return 0
+  fi
+  printf '%s\t%s\t' "$name" "$out_file"
+  [ "$mode" = path ] || b64e < "$out_file" | tr -d '\n'
+  echo
+}
+# «Поделиться» файлом из общей памяти: file:// в ACTION_SEND с Android 7
+# запрещён — отдаём content:// из MediaStore
+share_stream() { # <файл> <имя>
+  local f="$1" rf u out
+  case "$f" in /sdcard/*) rf="/storage/emulated/0/${f#/sdcard/}" ;; *) rf="$f" ;; esac
+  am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d "file://$rf" >/dev/null 2>&1
+  u=$(content insert --uri content://media/external/file --bind _data:s:"$rf" --bind mime_type:s:application/octet-stream 2>/dev/null | grep -o 'content://[^ ]*')
+  [ -n "$u" ] || u=$(content query --uri content://media/external/file --projection _id --where "_data='$f' OR _data='$rf'" 2>/dev/null |
+    grep -o '_id=[0-9]*' | head -n 1 | sed 's#_id=#content://media/external/file/#')
+  [ -n "$u" ] || u="file://$rf"
+  out=$(am start -a android.intent.action.SEND --user 0 -t '*/*' --eu android.intent.extra.STREAM "$u" \
+    --es android.intent.extra.SUBJECT "$2" --es android.intent.extra.TITLE "$2" -f 0x10000001 2>&1)
+  case "$out" in *Error*|*Exception*) echo "Не удалось открыть «Поделиться»: $out" >&2; return 1 ;; esac
+  return 0
 }
 
 cmd_list_apps() {
@@ -2141,7 +2203,7 @@ case "$1" in
 
   set)
     case "$2" in
-      BLOCK_QUIC|AUTOSTART|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|VPN_PAUSE|ENABLE_HOTSPOT|DOH_BYPASS|META_QUIC_REJECT|CALLS_BYPASS|DNS_PUSH|EXTRA_RKN|EXTRA_FLOWSEAL|SMART_LEARN|WL_PAUSE|SMART_POOL) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
+      BLOCK_QUIC|AUTOSTART|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|VPN_PAUSE|ENABLE_HOTSPOT|DOH_BYPASS|META_QUIC_REJECT|CALLS_BYPASS|DNS_PUSH|DNS_SMART|DNS_GEO|EXTRA_RKN|EXTRA_FLOWSEAL|SMART_LEARN|WL_PAUSE|SMART_POOL) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
       PKT_LIMIT_OUT|PKT_LIMIT_IN) case "$3" in [1-9]|1[0-5]) ;; *) echo "Допустимо 1..15" >&2; exit 1 ;; esac ;;
       APP_MODE) case "$3" in off|include|exclude) ;; *) echo "off|include|exclude" >&2; exit 1 ;; esac ;;
       *) echo "Параметр $2 нельзя менять этой командой" >&2; exit 1 ;;
@@ -2168,11 +2230,21 @@ case "$1" in
       # расширенный пул оркестратор подхватит сам, через несколько секунд
       SMART_POOL) load_conf >/dev/null 2>&1; smart_pool_sync ;;
       # DNS применяет сразу, служба обхода тут ни при чём
-      DNS_PUSH) load_conf >/dev/null 2>&1; dns_apply_now ;;
+      DNS_PUSH|DNS_SMART) load_conf >/dev/null 2>&1; dns_apply_now ;;
+      # включили снова — без ожидания 10 минут после неудачного запуска
+      DNS_GEO) load_conf >/dev/null 2>&1; rm -f "$DNS_RUN_DIR/geo_failed"; dns_apply_now ;;
       # список подключается к профилям — служба перечитает и перезапустится сама
       EXTRA_RKN|EXTRA_FLOWSEAL) reload_after_change ;;
       *) need_restart_note ;;
     esac ;;
+  # dns-mode <smart|profiles> — режим работы DNS: умный (обход геоблока по
+  # ответу и самый быстрый адрес для видео и CDN) или только профили;
+  # применяется одним перезапуском DNS
+  dns-mode)
+    case "$2" in smart) v=1 ;; profiles) v=0 ;; *) echo "smart|profiles" >&2; exit 1 ;; esac
+    set_conf_param DNS_GEO "$v"; set_conf_param DNS_SMART "$v"
+    load_conf >/dev/null 2>&1; rm -f "$DNS_RUN_DIR/geo_failed"; dns_apply_now
+    echo OK ;;
   # extra-list-update <rkn|flowseal> — скачать свежий дополнительный список
   extra-list-update)
     extra_list_file "$2" >/dev/null || { echo "rkn|flowseal" >&2; exit 1; }
@@ -2183,7 +2255,7 @@ case "$1" in
       *) echo "list|auto|all" >&2; exit 1 ;; esac ;;
   list-apps) cmd_list_apps "$2" ;;
   get-logs) cmd_get_logs "$2" "$3" "$4" ;;
-  export-logs) cmd_export_logs "$2" ;;
+  export-logs) cmd_export_logs "$2" "$3" ;;
   wifi-ssid) current_ssid || exit 1 ;;
   # Вернуть паузу после ручного запуска в домашней сети: забыть ручной запуск,
   # и home_check снова поставит обход на паузу, если телефон всё ещё дома
@@ -2231,7 +2303,8 @@ EOF
   smart-reset) cmd_smart_reset "${2:-all}" ;;
   dns-*) dns_ctl "$@" ;;
   hosts-*) hosts_ctl "$@" ;;
-  clear-logs) : > "$SERVICE_LOG"; : > "$NFQWS_LOG"; rm -f "$LOG_DIR/nfqws2-debug.log" "$LOG_DIR/auto.log"; [ -f "$LOG_DIR/dns.log" ] && : > "$LOG_DIR/dns.log"; echo OK ;;
+  clear-logs) : > "$SERVICE_LOG"; : > "$NFQWS_LOG"; rm -f "$LOG_DIR/nfqws2-debug.log" "$LOG_DIR/auto.log"
+    for f in "$LOG_DIR/dns.log" "$LOG_DIR/smart.log"; do [ -f "$f" ] && : > "$f"; done; echo OK ;;
   *)
     echo "Команды: status json-status is-running check dry-run start stop restart reload doctor get-conf save-conf-b64 reset-conf conf-modified" >&2
     echo "         list-strategies get-strategy set-strategy strategy-get-b64 strategy-path strategy-save-b64 strategy-reset" >&2

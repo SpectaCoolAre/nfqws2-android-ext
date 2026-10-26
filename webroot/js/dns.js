@@ -186,6 +186,9 @@ function dnsPollArm(){
 /* Обход блокировки DoT/DoH — настройка службы обхода, а не dnsproxy: работает
    и без профилей, например для «Частного DNS» Android */
 function renderDnsDoh(){
+  renderDnsMode();
+  renderDnsGeo();
+  renderDnsSmart();
   setHTML('dns-doh', settingsRow({icon: 'shield', title: 'Обход блокировки DoT/DoH', sw: true, checked: S.doh_bypass == 1,
     sub: t('Если провайдер блокирует DoH и DoT: соединения с публичными DNS (Cloudflare, Google, AdGuard, Comss, XBox DNS, GeoHide и др.) идут через обход'),
     on: 'setDohBypass(this.checked, this)'}), false);
@@ -199,6 +202,74 @@ async function setDohBypass(on, el){
   } else toast(t('Сохранено'));
   await stat(true);
   renderDnsDoh();
+}
+
+/* Режим работы DNS, как у обхода: «Профили» — DNS по умолчанию и свои
+   профили по доменам; «Умный режим» — сверх того обход геоблока по ответу
+   (geodns спрашивает DNS с обходом — Comss, GeoHide, malw — вместе с обычным
+   маршрутом; ответ с адресом их прокси — домен под геоблоком) и самый
+   быстрый адрес для видео и CDN. Свои профили работают в обоих */
+const dnsSmartMode = () => S.dns_geo != 0 || S.dns_smart == 1;
+function renderDnsMode(){
+  const smart = dnsSmartMode();
+  document.querySelectorAll('#dns-mode-seg .seg').forEach(b => {
+    const on = (b.dataset.mode === 'smart') === smart;
+    b.classList.toggle('selected', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+  });
+  $('dns-smart-sec').hidden = !smart;
+}
+async function setDnsMode(mode){
+  if((mode === 'smart') === dnsSmartMode()) return;
+  renderDnsMode();
+  const smart = mode === 'smart';
+  const ok = await mdConfirm(smart ? t('Включить умный режим DNS?') : t('Перейти на профили?'),
+    smart ? t('Сервисы с геоблоком (ChatGPT, Gemini, Claude, игры) пойдут через DNS с обходом — сами, без списков, а видео и CDN — на самый быстрый адрес. Ваши профили продолжат работать.')
+          : t('Обход геоблока и ускорение видео выключатся: домены пойдут на DNS по умолчанию, а домены профилей — на их серверы.'),
+    {ok: t('Переключить')});
+  if(!ok) return;
+  const r = await withBusy(['dns-mode', mode], 40000);
+  if(r.code){ toast(errText(r, 'Не удалось сохранить')); return; }
+  toast(smart ? t('Умный режим DNS включён') : t('DNS работает по профилям'));
+  await stat(true);
+  if(await loadDnsState()) renderDns(); else renderDnsDoh();
+}
+const GEO_NAMES = {comss: 'Comss', geohide: 'GeoHide', malw: 'malw', astracat: 'AstraCat', bezmezhau: 'Bezmezhau',
+  'dns-ai': 'DNS-AI', mafioznik: 'Mafioznik', wlrus: 'WLRus', webshift: 'WebShift', zapret: 'zapret.moe'};
+function renderDnsGeo(){
+  const st = dnsSt.status || {};
+  if(st.geo_available === '0' || !$('dns-geo')){ if($('dns-geo')) setHTML('dns-geo', '', false); return; }
+  let g = null;
+  try { g = st.geo_status ? JSON.parse(st.geo_status) : null; } catch(e){ g = null; }
+  const sub = st.geo === 'running' ? t('Работает: домен идёт в обход, только если DNS с обходом ответил адресом своего прокси')
+    : st.geo === 'failed' ? t('Не запустился — DNS работает как обычно, новая попытка через 10 минут')
+    : t('Сервисы с геоблоком (ChatGPT, Gemini, Claude и др.) — через DNS с обходом, остальное — обычным маршрутом. Включится вместе с DNS модуля');
+  const rows = [settingsRow({icon: 'globe', title: 'Обход геоблока', sub})];
+  if(st.geo === 'running' && g){
+    const provs = g.providers || [], spare = provs.filter(p => p.reserve);
+    // запасные: пока основные отвечают — одной строкой, в работе — каждый
+    if(spare.length && !spare.some(p => p.active))
+      rows.push(settingsRow({icon: 'info', title: 'Запасные DNS',
+        sub: t('{0} — спрашиваются, только если Comss, GeoHide и malw все молчат', spare.map(p => GEO_NAMES[p.name] || p.name).join(', '))}));
+    provs.filter(p => !p.reserve || p.active).forEach(p => {
+      const name = (GEO_NAMES[p.name] || p.name) + (p.reserve ? ' · ' + t('запасной') : '');
+      const state = p.down ? t('не отвечает (заблокирован или нет сети)')
+        : p.proxies ? t('адресов прокси: {0} · в обход: {1}', p.proxies, p.hits)
+        : t('отвечает, адреса прокси ещё не узнаны');
+      rows.push(settingsRow({icon: p.down ? 'warn' : 'check', title: name, sub: state}));
+    });
+    const rec = (g.recent || []).slice(0, 8).map(r => r.d);
+    if(rec.length) rows.push(settingsRow({icon: 'info', title: 'Недавно в обход', sub: rec.join(', ')}));
+  }
+  setHTML('dns-geo', rows.join(''), false);
+}
+/* Видео и CDN — самый быстрый адрес из DNS сети и публичных, оптимистичный кэш */
+function renderDnsSmart(){
+  const st = (dnsSt.status || {}).cdn || '';
+  const sub = st === 'running' ? t('Работает: видео и CDN (YouTube, Instagram, TikTok, Twitch, VK) — самый быстрый адрес из DNS сети и публичных; повторные ответы — из кэша мгновенно')
+    : st === 'down' ? t('Не запустился — видео и CDN идут через основной DNS (см. журнал DNS)')
+    : t('Видео и CDN — самый быстрый адрес, повторные ответы — мгновенно. Включится вместе с DNS модуля');
+  setHTML('dns-smart', settingsRow({icon: 'auto', title: 'Скорость', sub}), false);
 }
 
 function dnsDefaultLabel(){

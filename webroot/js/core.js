@@ -809,6 +809,9 @@ document.addEventListener('pointerdown', e => {
 });
 document.addEventListener('pointermove', e => {
   if(!swipe.st || e.pointerId !== swipe.id) return;
+  // долгое нажатие начало выделение текста: дальше палец ведёт ползунок, а не
+  // страницу (иначе она уезжала, и выделение шло по невидимому тексту)
+  if(textBusy()){ if(swipe.st === 2) swipeEnd(false, 0); else swipe.st = 0; return; }
   const dx = e.clientX - swipe.x0, dy = e.clientY - swipe.y0;
   if(swipe.st === 1){
     if(Math.abs(dy) > 24 || (Math.abs(dy) > 8 && Math.abs(dy) * 2 >= Math.abs(dx))){ swipe.st = 0; return; }
@@ -1099,6 +1102,7 @@ document.addEventListener('touchmove', e => {
   const el = stretch.el;
   if(!el || e.touches.length !== 1) return;
   if(swipe.st === 2){ stretchRelease(); return; }        // страницу тянут вбок
+  if(textBusy()){ stretch.pull = 0; stretchRelease(); return; }   // выделяют текст: страница не тянется
   const y = e.touches[0].clientY, dy = y - stretch.y;
   stretch.y = y;
   const maxY = scroller.scrollHeight - scroller.clientHeight;

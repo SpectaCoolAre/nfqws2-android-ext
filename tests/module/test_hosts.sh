@@ -80,7 +80,7 @@ assert_rc 1 "$ctl_rc" "an empty batch is refused"
 
 section "bypass presets: one at a time"
 printf '1.1.1.1 chatgpt.com\n1.1.1.2 api.chatgpt.com # comment\n0.0.0.0 junk.malw.example\nnot a line\n' > "$WEB/raw.githubusercontent.com_ImMALWARE_dns.malw.link_master_hosts"
-printf '2.2.2.2 youtube.com\n' > "$WEB/geohide.ru_eu_hosts"
+printf '2.2.2.2 youtube.com\n' > "$WEB/raw.githubusercontent.com_Internet-Helper_GeoHideDNS_main_hosts_eu_hosts"
 ctl hosts-bypass-preset malw
 assert_rc 0 "$ctl_rc" "dns.malw.link is loaded into the bypass"
 b=$(cat "$H/bypass.txt")
