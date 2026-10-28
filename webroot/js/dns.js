@@ -205,10 +205,10 @@ async function setDohBypass(on, el){
 }
 
 /* Режим работы DNS, как у обхода: «Профили» — DNS по умолчанию и свои
-   профили по доменам; «Умный режим» — сверх того обход геоблока по ответу
-   (geodns спрашивает DNS с обходом — Comss, GeoHide, malw — вместе с обычным
-   маршрутом; ответ с адресом их прокси — домен под геоблоком) и самый
-   быстрый адрес для видео и CDN. Свои профили работают в обоих */
+   профили по доменам; «Умный режим» — сверх того обход геоблока по списку
+   (домены из geoblock.list идут на DNS с обходом — GeoHide, Comss, malw —
+   правилами dnsproxy, остальное на DNS сети) и самый быстрый адрес для
+   видео и CDN. Свои профили работают в обоих */
 const dnsSmartMode = () => S.dns_geo != 0 || S.dns_smart == 1;
 function renderDnsMode(){
   const smart = dnsSmartMode();
@@ -224,7 +224,7 @@ async function setDnsMode(mode){
   renderDnsMode();
   const smart = mode === 'smart';
   const ok = await mdConfirm(smart ? t('Включить умный режим DNS?') : t('Перейти на профили?'),
-    smart ? t('Сервисы с геоблоком (ChatGPT, Gemini, Claude, игры) пойдут через DNS с обходом — сами, без списков, а видео и CDN — на самый быстрый адрес. Ваши профили продолжат работать.')
+    smart ? t('Сервисы с геоблоком из списка (ChatGPT, Gemini, Claude, игры) пойдут через DNS с обходом, остальное — через DNS сети, а видео и CDN — на самый быстрый адрес. Ваши профили продолжат работать.')
           : t('Обход геоблока и ускорение видео выключатся: домены пойдут на DNS по умолчанию, а домены профилей — на их серверы.'),
     {ok: t('Переключить')});
   if(!ok) return;
@@ -234,34 +234,28 @@ async function setDnsMode(mode){
   await stat(true);
   if(await loadDnsState()) renderDns(); else renderDnsDoh();
 }
-const GEO_NAMES = {comss: 'Comss', geohide: 'GeoHide', malw: 'malw', astracat: 'AstraCat', bezmezhau: 'Bezmezhau',
-  'dns-ai': 'DNS-AI', mafioznik: 'Mafioznik', wlrus: 'WLRus', webshift: 'WebShift', zapret: 'zapret.moe'};
+/* Обход геоблока — по списку сервисов (geoblock.list): их домены идут в DNS
+   с обходом (GeoHide, Comss, malw), остальное — в DNS сети */
 function renderDnsGeo(){
   const st = dnsSt.status || {};
-  if(st.geo_available === '0' || !$('dns-geo')){ if($('dns-geo')) setHTML('dns-geo', '', false); return; }
-  let g = null;
-  try { g = st.geo_status ? JSON.parse(st.geo_status) : null; } catch(e){ g = null; }
-  const sub = st.geo === 'running' ? t('Работает: домен идёт в обход, только если DNS с обходом ответил адресом своего прокси')
-    : st.geo === 'failed' ? t('Не запустился — DNS работает как обычно, новая попытка через 10 минут')
-    : t('Сервисы с геоблоком (ChatGPT, Gemini, Claude и др.) — через DNS с обходом, остальное — обычным маршрутом. Включится вместе с DNS модуля');
-  const rows = [settingsRow({icon: 'globe', title: 'Обход геоблока', sub})];
-  if(st.geo === 'running' && g){
-    const provs = g.providers || [], spare = provs.filter(p => p.reserve);
-    // запасные: пока основные отвечают — одной строкой, в работе — каждый
-    if(spare.length && !spare.some(p => p.active))
-      rows.push(settingsRow({icon: 'info', title: 'Запасные DNS',
-        sub: t('{0} — спрашиваются, только если Comss, GeoHide и malw все молчат', spare.map(p => GEO_NAMES[p.name] || p.name).join(', '))}));
-    provs.filter(p => !p.reserve || p.active).forEach(p => {
-      const name = (GEO_NAMES[p.name] || p.name) + (p.reserve ? ' · ' + t('запасной') : '');
-      const state = p.down ? t('не отвечает (заблокирован или нет сети)')
-        : p.proxies ? t('адресов прокси: {0} · в обход: {1}', p.proxies, p.hits)
-        : t('отвечает, адреса прокси ещё не узнаны');
-      rows.push(settingsRow({icon: p.down ? 'warn' : 'check', title: name, sub: state}));
-    });
-    const rec = (g.recent || []).slice(0, 8).map(r => r.d);
-    if(rec.length) rows.push(settingsRow({icon: 'info', title: 'Недавно в обход', sub: rec.join(', ')}));
-  }
+  if(!$('dns-geo')) return;
+  const n = +st.geo_domains || 0;
+  const upd = +st.geo_updated ? new Date(st.geo_updated * 1000).toLocaleDateString() : t('вместе с модулем');
+  const rows = [
+    settingsRow({icon: 'globe', title: 'Обход геоблока',
+      sub: t('Сервисы из списка (ChatGPT, Gemini, Claude, игры) — через DNS с обходом: GeoHide, Comss и malw разом, ответ первого. Остальное — через DNS сети')}),
+    settingsRow({icon: 'list', title: 'Список сервисов', sub: t('geoblock.list · доменов: {0} · обновлён: {1}', fmtCount(n), upd),
+      on: "openSlideEditor('list', 'geoblock')", chevron: true}),
+    settingsRow({icon: 'refresh', title: 'Обновить список',
+      sub: t('Свежий список itdoginfo/allow-domains и GeoHide. Ваши домены останутся'), on: 'dnsGeoUpdate()'})
+  ];
   setHTML('dns-geo', rows.join(''), false);
+}
+async function dnsGeoUpdate(){
+  const r = await withBusy(['dns-geo-update'], 120000);
+  if(r.code){ toast(errText(r, 'Не удалось обновить список')); return; }
+  toast(t('Список обновлён: доменов {0}', fmtCount(+(r.out || '').trim() || 0)));
+  if(await loadDnsState()) renderDns();
 }
 /* Видео и CDN — самый быстрый адрес из DNS сети и публичных, оптимистичный кэш */
 function renderDnsSmart(){
@@ -282,7 +276,7 @@ function dnsDefaultLabel(){
 /* IPv6-адрес среди серверов профилей, которые сейчас работают (включённые и
    профиль по умолчанию): 2606:4700::1111, [2001:db8::1]:53, tls://[…] */
 function dnsActiveV6(){
-  const def = dnsSt.status.default;
+  const def = dnsSt.status.default_used || dnsSt.status.default;
   const v6 = a => /\[[0-9a-f]*:[0-9a-f:.]*\]/i.test(a) || /^[0-9a-f]*:[0-9a-f]*:[0-9a-f:.]*$/i.test(a);
   return dnsSt.profiles.some(p => (p.enabled || p.id === def) && p.servers.some(v6));
 }
@@ -319,13 +313,13 @@ function dnsStateRow(){
   } else if(working){
     title = t('Работает');
     sub = t('Перехвачено запросов: {0}', fmtCount(+s.hits || 0));
-  } else if(!dnsSt.profiles.some(p => p.enabled && p.servers.length && p.domains.length) && (s.default || 'net') === 'net')
+  } else if(!dnsSt.profiles.some(p => p.enabled && p.servers.length && p.domains.length) && (s.default_used || s.default || 'net') === 'net')
     title = t('Не активно: нет включённых профилей с доменами');
   else title = t('Не работает — см. журнал DNS');
   // Куда сейчас уходит всё, что не попало в профили: выбранный профиль или
   // DNS сети. Адреса сети — только когда они и правда используются.
   if(working){
-    const d = s.default || 'net', p = d !== 'net' && dnsProfile(d);
+    const d = s.default_used || s.default || 'net', p = d !== 'net' && dnsProfile(d);
     sub += ' · ' + (p ? t('остальное — через «{0}»', p.name)
       : t('остальное — через DNS сети{0}', s.net_dns ? ' (' + s.net_dns.replace(/,/g, ', ') + ')' : ''));
   }
@@ -346,7 +340,10 @@ function renderDns(){
     ? '<div class="helper">' + esc(t('«Частный DNS» в Android — «Автоматически»: если DNS сети поддерживает DoT, часть запросов может пройти мимо модуля. Надёжнее выбрать «Отключено».')) + '</div>'
     : ''), false);
   setHTML('dns-general',
-    settingsRow({icon: 'globe', title: 'DNS по умолчанию', sub: dnsDefaultLabel() + ' · ' + t('для доменов вне профилей'),
+    settingsRow({icon: 'globe', title: 'DNS по умолчанию', sub: dnsSmartMode() && (dnsSt.status.default || 'net') !== 'net'
+        // в умном режиме остальное идёт через DNS сети, выбор — для режима «Профили»
+        ? t('{0} · в умном режиме — DNS сети, этот спрашивается первым для обхода геоблока', dnsDefaultLabel())
+        : dnsDefaultLabel() + ' · ' + t('для доменов вне профилей'),
       on: 'pickDnsDefault(this)', menu: true}) +
     (dnsLoaded && on ? dnsStateRow() : ''),
     false);

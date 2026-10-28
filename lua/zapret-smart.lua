@@ -14,7 +14,14 @@
 --     переотправляет данные без ответа, — поток режут. Это ошибка того
 --     варианта, на котором шло соединение, даже если начало было удачным.
 --     Застрявшее соединение модуль обрывает (state/smart_kill → iptables), и
---     приложение сразу открывает новое — уже на другом варианте.
+--     приложение сразу открывает новое — уже на другом варианте. Быстрее
+--     наблюдателя — сам smart: после ответа сервера телефон трижды подряд
+--     переотправляет один и тот же сегмент (следующий запрос по тому же
+--     соединению), а от сервера — ничего: ТСПУ заморозил соединение после
+--     первого обмена. Повторы разных сегментов — обычные потери в мобильной
+--     сети (сервер подтверждает их сразу после), это не заморозка. Так
+--     ведут себя части сайтов на Cloudflare: первый запрос отвечает, любой
+--     следующий по этому соединению висит до тайм-аута приложения.
 --   * Удача — не только 4 КБ ответа: соединение, закрытое после ответа
 --     сервера (FIN или сброс от самого приложения), и ответившее соединение,
 --     которое 30 секунд живо и не застряло (keep-alive, HTTP/2). Сброс от
@@ -98,6 +105,8 @@ local SWITCH_GAP = 15       -- сек: не чаще одной смены ва�
 local WIN = 8               -- окно: последние соединения сайта на текущем варианте
 local WATCH_MS = 3000       -- наблюдатель за соединениями
 local STUCK_RETRANS = 4     -- столько неудачных переотправок подряд (~15 с без ответа) — поток режут
+local FROZEN_RTX = 3        -- столько переотправок одного и того же сегмента подряд после ответа сервера — соединение заморожено
+local FROZEN_IN = 12        -- входящих пакетов: дальше их может не быть видно (лимит очереди), и счёт нечем обнулять
 local NET_STUCK_IPS = 3     -- застряло у стольких разных серверов разом — это сеть, а не DPI
 local APP_UID = 10000       -- наблюдатель — только за приложениями
 local NODPI_VARIANTS = 4    -- ошибки хотя бы на стольких вариантах (и на половине набора), ни одной удачи — не DPI
@@ -672,9 +681,11 @@ local function on_err(slot, key, r, v, n, t, pass, mid, c)
 	if not found then win_push(r, c, 0) end
 	-- менять вариант — когда в окне ошибок не меньше трёх и больше, чем удач;
 	-- варианту с хорошей историей у этого сайта (80% удач, от пяти) — от четырёх.
-	-- Редкие ошибки рабочий вариант не сбрасывают
+	-- Сайту, что ещё ни разу не открылся, — от двух: к редким сайтам (API
+	-- расширений и т.п.) соединений мало, и по три ошибки на вариант перебор
+	-- шёл сутками. Редкие ошибки рабочий вариант не сбрасывают
 	local e, o = win_count(r)
-	local need = 3
+	local need = r.everok and 3 or 2
 	if share(r.ok[v], r.err[v]) >= 0.8 and (r.ok[v] or 0) >= 5 then need = 4 end
 	local bad = e >= need and e > o
 	if not bad or t - (r.sw or 0) < SWITCH_GAP then return end
@@ -685,6 +696,24 @@ local function on_err(slot, key, r, v, n, t, pass, mid, c)
 	local bad_v = 0
 	for x = 1, n do if r.early[x] then bad_v = bad_v + 1 end end
 	local nset = SM.nallow[slot] or n
+	-- перепробовал почти все варианты, а открывался считанные разы (меньше
+	-- 10% соединений; в наборе от восьми вариантов): разовая удача не делает перебор осмысленным — сайт
+	-- встаёт на вариант, где открывался чаще всего, и 6 часов не трогается
+	-- (иначе такой сайт сутками ходит по кругу)
+	local tried, tok, terr = 0, 0, 0
+	for x = 1, n do if (r.err[x] or 0) > 0 then tried = tried + 1 end end
+	for _, w in pairs(r.ok) do tok = tok + w end
+	for _, w in pairs(r.err) do terr = terr + w end
+	if r.everok and tried >= math.max(8, math.ceil(nset * 0.75)) and tok < (tok + terr) * 0.1 then
+		local best, bw = r.first or 1, 0
+		for x, w in pairs(r.ok) do if w > bw then best, bw = x, w end end
+		r.nodpi = t + NODPI_TIME
+		r.cur = best
+		r.win = {}
+		DLOG("smart: " .. key .. ": tried " .. tried .. " variants, worked on " .. string.format("%.1f", tok) .. " of " .. string.format("%.0f", tok + terr) .. " — pausing the search for " .. NODPI_TIME .. "s")
+		SJ(key .. ": перепробованы почти все варианты (" .. tried .. "), открывался считанные разы — перебор на паузе 6 часов")
+		return
+	end
 	-- «без обхода» выбирается последним и сюда может не дойти — его не ждём
 	if not r.everok and bad_v >= math.min(nset - 1, math.max(NODPI_VARIANTS, math.ceil(nset / 2))) then
 		r.nodpi = t + NODPI_TIME
@@ -842,6 +871,15 @@ local function scan_sockets()
 	return stuck, alive
 end
 
+-- Оборвать соединения: «4|6 адрес локальный-порт» в state/smart_kill, дальше —
+-- service.sh (REJECT с tcp-reset на следующий пакет приложения)
+local function kill_conns(lines)
+	if #lines == 0 or not SM.home then return end
+	local f = io.open(SM.home .. "/state/smart_kill", "a")
+	if f then f:write(table.concat(lines, "\n"), "\n"); f:close() end
+end
+local function kill_line(ip, lp) return (ip:find(":") and "6 " or "4 ") .. ip .. " " .. lp end
+
 function smart_watch()
 	local ok, err = pcall(function()
 		local t = now()
@@ -915,15 +953,12 @@ function smart_watch()
 					on_err(c.slot, c.key, r, c.v, c.n, t, c.pass, c.ok, c)
 				end
 				-- и то, и уже засчитанное — обрываем: приложение переподключится
-				kill[#kill + 1] = (h.ip:find(":") and "6 " or "4 ") .. h.ip .. " " .. h.lp
+				kill[#kill + 1] = kill_line(h.ip, h.lp)
 			end
 		end
 		-- застрявшие соединения модуль обрывает: приложение переподключится
 		-- на новом варианте, а не будет ждать своего таймаута
-		if #kill > 0 and SM.home then
-			local f = io.open(SM.home .. "/state/smart_kill", "a")
-			if f then f:write(table.concat(kill, "\n"), "\n"); f:close() end
-		end
+		kill_conns(kill)
 	end)
 	if not ok then DLOG_ERR("smart_watch: " .. tostring(err)) end
 end
@@ -1032,7 +1067,40 @@ function smart(ctx, desync)
 		end
 		local fin = tcp and bitand(tcp.th_flags, TH_FIN) ~= 0
 		local rst = tcp and bitand(tcp.th_flags, TH_RST) ~= 0
-		if fin or (rst and desync.outgoing) then
+		-- переотправки после ответа сервера: один и тот же сегмент снова и
+		-- снова, и между ними от сервера ничего. Любой пакет от сервера счёт
+		-- обнуляет — поэтому только пока пакеты сервера видны: до конца
+		-- входящего диапазона (19 КБ) и до лимита очереди на соединение
+		if tcp and not fin and not rst then
+			if desync.outgoing then
+				local len = #desync.dis.payload
+				if len > 0 then
+					local s = pos_get(desync, 's')
+					if (cs.ok or cs.maxin >= ANSWER) and cs.outmax and s < cs.outmax
+						and cs.maxin < 18000 and (cs.nin or 0) < FROZEN_IN then
+						if s == cs.rtxs then cs.rtx = (cs.rtx or 0) + 1 else cs.rtxs, cs.rtx = s, 1 end
+					else
+						cs.rtxs, cs.rtx = nil, 0
+					end
+					if not cs.outmax or s + len > cs.outmax then cs.outmax = s + len end
+				end
+			else
+				cs.rtxs, cs.rtx = nil, 0
+				cs.nin = (cs.nin or 0) + 1
+			end
+		end
+		if (cs.rtx or 0) >= FROZEN_RTX then
+			cs.done, cs.failed, cs.stuck = true, true, true
+			local lp = tcp.th_sport
+			DLOG("smart: " .. key .. ": connection :" .. lp .. " frozen after the answer on variant " .. cs.v)
+			if r.nodpi and r.nodpi > t then
+				SJ(key .. ": соединение заморожено после первого ответа — обрываем, приложение откроет новое")
+			else
+				SJ(key .. ": соединение заморожено после первого ответа — ошибка " .. vname(slot, cs.v) .. ", обрываем")
+				on_err(slot, key, r, cs.v, n, t, pass, true, cs)
+			end
+			if cs.ip then kill_conns({ kill_line(cs.ip, lp) }) end
+		elseif fin or (rst and desync.outgoing) then
 			-- соединение закрывают: FIN с любой стороны или сброс от самого
 			-- приложения (так многие закрывают ненужное соединение). Ответил
 			-- сервер — это удача, даже если ответ был коротким (API, статистика).

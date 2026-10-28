@@ -16,6 +16,7 @@ const LIST_FILES = [
   ['exclude', 'exclude.list', 'Домены-исключения', 'list'],
   ['ipset', 'ipset.list', 'IP-адреса и подсети для обхода', 'globe'],
   ['ipset_exclude', 'ipset_exclude.list', 'IP-исключения', 'globe'],
+  ['geoblock', 'geoblock.list', 'Сервисы с геоблоком — для умного режима DNS', 'globe'],
   ['probe_hosts', 'probe_hosts.list', 'Адреса для проверки доступности', 'wifi']
 ];
 

@@ -155,6 +155,12 @@ html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
 body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 input, textarea, [contenteditable], .log-view, .code-block {
   -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
+/* Поля ввода — с непрозрачным фоном (inherit — цвет своей плашки): при
+   протягивании выделения за край поле прокручивается, Android WebView
+   выносит текст в отдельный слой, и слой без фона заливается чёрным */
+input::selection, textarea::selection, .log-view ::selection, .code-block ::selection, .selectable-pre::selection {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 32%, transparent);
+  color: var(--md-sys-color-on-surface); -webkit-text-fill-color: var(--md-sys-color-on-surface); }
 button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 /* Material Symbols — заливные глифы: stroke не используется */
 svg.icon { width: 24px; height: 24px; flex: none; fill: currentColor; display: block; }
@@ -806,7 +812,7 @@ body.nav-hidden .snackbar { bottom: calc(var(--bottom-inset) + 16px); }
 .hex-group .pfx { font-size: var(--ts-title-medium); line-height: var(--lh-title-medium); font-weight: var(--w-emph);
   color: var(--md-sys-color-on-surface-variant); }
 .hex-group input.hex { flex: 1; min-width: 0; height: 100%; padding: 0; border: none; outline: none;
-  background: transparent; font-size: var(--ts-title-medium); line-height: var(--lh-title-medium);
+  background: inherit; font-size: var(--ts-title-medium); line-height: var(--lh-title-medium);
   font-weight: var(--w-emph); text-transform: uppercase; color: var(--md-sys-color-on-surface); }
 
 /* ── M3 slider (XS): трек 16dp со скруглением 8dp, ручка 4×44dp ───────── */
@@ -933,7 +939,7 @@ body.kb-open .snackbar { bottom: 16px; }
 .tf:focus-within { box-shadow: inset 0 -2px 0 var(--md-sys-color-primary); }
 .tf input {
   flex: 1; min-width: 0; height: 100%; padding: 24px 16px 6px;
-  border: 0; outline: none; background: none; appearance: none; -webkit-appearance: none;
+  border: 0; outline: none; background: inherit; border-radius: inherit; appearance: none; -webkit-appearance: none;
   color: var(--md-sys-color-on-surface); caret-color: var(--md-sys-color-primary);
   font-size: var(--ts-body-large); line-height: var(--lh-body-large);
 }
@@ -953,11 +959,11 @@ body.kb-open .snackbar { bottom: 16px; }
 /* ── M3 search bar: 56dp, полностью скруглённый ─────────────────────────── */
 .search-bar {
   display: flex; align-items: center; gap: 16px; height: 56px; padding: 0 16px;
-  border-radius: var(--shape-full);
+  border-radius: var(--shape-full); overflow: hidden; /* непрозрачный фон поля — в границах плашки */
   background: var(--md-sys-color-surface-container-high); color: var(--md-sys-color-on-surface-variant);
 }
 .search-bar input {
-  flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: none;
+  flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: inherit;
   appearance: none; -webkit-appearance: none;
   color: var(--md-sys-color-on-surface); caret-color: var(--md-sys-color-primary);
   font-size: var(--ts-body-large); line-height: var(--lh-body-large);

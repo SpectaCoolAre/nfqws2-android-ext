@@ -83,23 +83,23 @@ jobs:
           # Apache-2.0: лицензия едет вместе с бинарником
           cp -f "$dl/linux-arm64/LICENSE" licenses/dnsproxy-LICENSE
 
-      - name: Go для geodns
+      - name: Go для nfqws2-helper
         uses: actions/setup-go@v5
         with:
-          go-version-file: geodns/go.mod
+          go-version-file: helper/go.mod
           cache: false
 
-      - name: Собрать geodns (обход геоблока в DNS)
+      - name: Собрать nfqws2-helper (будильник и проверка DNS)
         run: |
           set -eu
-          cd geodns
+          cd helper
           go vet ./...
           go test ./...
           for t in android-arm:arm android-arm64:arm64 android-x86:386 android-x86_64:amd64; do
             abi=${t%%:*}; arch=${t#*:}
-            CGO_ENABLED=0 GOOS=linux GOARCH=$arch GOARM=7 go build -trimpath -ldflags "-s -w" -o "../binaries/$abi/geodns" .
-            chmod 755 "../binaries/$abi/geodns"
-            ls -lh "../binaries/$abi/geodns"
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch GOARM=7 go build -trimpath -ldflags "-s -w" -o "../binaries/$abi/nfqws2-helper" .
+            chmod 755 "../binaries/$abi/nfqws2-helper"
+            ls -lh "../binaries/$abi/nfqws2-helper"
           done
 
       - name: Собрать zip

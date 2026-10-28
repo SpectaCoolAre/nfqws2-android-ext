@@ -42,6 +42,8 @@ SMART_BENCH_FILE="$STATE_DIR/smart_bench"      # идёт отладочный �
 BENCH_DIR="$STATE_DIR/bench"                   # рабочий каталог замера
 SMART_TURBO_EVERY=15
 SK_PIDFILE="$STATE_DIR/smartkill.pid"          # обрыв застрявших соединений умного режима
+PF_PIDFILE="$STATE_DIR/pushfix.pid"            # «Вылечить уведомления»: будильник пульса Google
+HELPER_BIN="$MODDIR/bin/nfqws2-helper"         # будильник и проверка DNS (helper/, Go)
 SMART_KILL_FILE="$STATE_DIR/smart_kill"        # их пишет оркестратор: «4|6 адрес локальный-порт»
 HOME_OVERRIDE_FILE="$STATE_DIR/home_override"  # user re-enabled on this network
 
@@ -109,6 +111,7 @@ set_defaults() {
   : "${SMART_LEARN:=1}"
   : "${WL_PAUSE:=1}"
   : "${SMART_POOL:=0}"
+  : "${PUSH_FIX:=0}"
 }
 
 log_msg() {
@@ -231,6 +234,14 @@ is_running() {
   pid=$(cat "$PIDFILE" 2>/dev/null)
   case "$pid" in ''|0|*[!0-9]*) return 1 ;; esac
   kill -0 "$pid" 2>/dev/null || return 1
+  return 0
+}
+
+# Список должен кончаться переводом строки: nfqws2 дописывает выученные домены
+# в auto.list как «домен\n», и без перевода в конце новый домен склеивается с
+# последней строкой («example1.comexample2.com»)
+ensure_eol() {
+  [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ] && printf '\n' >> "$1"
   return 0
 }
 
@@ -1461,7 +1472,7 @@ render_strategy() {
 
 # Module settings (same across strategies) are carried over whole from the live
 # config on strategy change/reset. NFQWS_EXTRA_ARGS only for standard $MODE_* refs.
-USER_KEYS="DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL SMART_LEARN WL_PAUSE SMART_POOL NFQWS_EXTRA_ARGS"
+USER_KEYS="DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL SMART_LEARN WL_PAUSE SMART_POOL PUSH_FIX NFQWS_EXTRA_ARGS"
 merge_user_keys() { # <generated config> <settings source config>  -> stdout
   awk -v keys=" $USER_KEYS " -v src="$2" '
     function quotes(str,   t) { t = str; return gsub(/"/, "", t) }

@@ -49,9 +49,9 @@ cp -f "$MODPATH/binaries/$BIN/nfqws2" "$MODPATH/bin/nfqws2" ||
 cp -f "$MODPATH/binaries/$BIN/dnsproxy" "$MODPATH/bin/dnsproxy" ||
   abort "! Failed to install dnsproxy"
 [ -s "$MODPATH/bin/dnsproxy" ] || abort "! Installed dnsproxy binary is empty"
-# geodns — geo-block bypass in DNS; without it DNS works as before
-if [ -s "$MODPATH/binaries/$BIN/geodns" ]; then
-  cp -f "$MODPATH/binaries/$BIN/geodns" "$MODPATH/bin/geodns" || ui_print "! Failed to install geodns: DNS works without it"
+# nfqws2-helper — push-fix alarm and DNS answer check; the module works without it
+if [ -s "$MODPATH/binaries/$BIN/nfqws2-helper" ]; then
+  cp -f "$MODPATH/binaries/$BIN/nfqws2-helper" "$MODPATH/bin/nfqws2-helper" || ui_print "! Failed to install nfqws2-helper: the module works without it"
 fi
 rm -rf "$MODPATH/binaries"
 
@@ -174,7 +174,7 @@ fi
 busybox chmod +x "$MODPATH/bin/nfqws2"
 busybox chmod +x "$MODPATH/bin/nfqws2-ctl"
 busybox chmod +x "$MODPATH/bin/dnsproxy"
-[ -f "$MODPATH/bin/geodns" ] && busybox chmod +x "$MODPATH/bin/geodns"
+[ -f "$MODPATH/bin/nfqws2-helper" ] && busybox chmod +x "$MODPATH/bin/nfqws2-helper"
 busybox chmod +x "$MODPATH/boot-completed.sh"
 # Обёртка для терминала: без +x Magisk смонтирует её в /system/bin неисполняемой
 busybox chmod 0755 "$MODPATH/system/bin/nfqws2-ctl"

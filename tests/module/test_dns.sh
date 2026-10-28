@@ -123,6 +123,13 @@ assert_contains "$args" "77.88.8.8:53" "public bootstrap servers are there as a 
 
 echo insta > "$DNS_DEFAULT_FILE"
 dns_build
+assert_contains "$(head -n 1 "$DNS_RUN_DIR/upstreams.txt")" "192.168.1.1:53" "smart mode: the rest goes to the network DNS whatever the default"
+assert_not_contains "$(grep -v '^\[/' "$DNS_RUN_DIR/upstreams.txt")" "opennameserver" "the chosen default is not used for it"
+assert_contains "$(cat "$DNS_RUN_DIR/upstreams.txt")" "[/instagram.com/" "the profiles with domains still work"
+assert_eq "net" "$(dns_default_used)" "the DNS in use is the network one"
+assert_eq "insta" "$(dns_default)" "and the choice is kept for the profiles mode"
+DNS_GEO=0; export DNS_GEO
+dns_build
 assert_eq "https://ns2.opennameserver.org/dns-query" "$(head -n 1 "$DNS_RUN_DIR/upstreams.txt")" "a profile as the default puts its servers first"
 assert_not_contains "$(cat "$DNS_RUN_DIR/upstreams.txt")" "192.168.1.1:53" "the network DNS is then not a primary"
 assert_contains "$(cat "$DNS_RUN_DIR/fallback.txt")" "192.168.1.1:53" "but stays a fallback"
@@ -138,6 +145,7 @@ dns_build
 echo net > "$DNS_DEFAULT_FILE"
 dns_build
 assert_not_contains "$(cat "$DNS_RUN_DIR/upstreams.txt")" "mtalk.google.com" "with the network DNS as the default no rule is needed"
+unset DNS_GEO
 
 # 250 доменов — три строки правил на сервер, по 100 доменов
 printf 'NAME=Big\nENABLED=1\nSERVER=8.8.8.8\n' > "$SANDBOX/big"
@@ -177,6 +185,21 @@ svc start
 assert_rc 0 "$svc_rc" "the service starts"
 assert_file "$DNS_PIDFILE" "dnsproxy is started with it"
 assert_contains "$(cat "$MOCK_DIR/dnsproxy.args")" "$DNS_RUN_DIR/upstreams.txt" "with the generated upstream list"
+# фильтр журнала dnsproxy (читает FIFO) защищён так же, как сам dnsproxy:
+# убьёт его система — dnsproxy завершится по SIGPIPE на первой же строке
+: > "$MOCK_DIR/protected"
+( protect_process() { echo "$1" >> "$MOCK_DIR/protected"; }; dns_start "тест" force >/dev/null 2>&1 )
+flt_pid=""
+for f in /proc/[0-9]*/fd/0; do
+  [ "$(readlink "$f" 2>/dev/null)" = "$DNS_RUN_DIR/log.fifo" ] || continue
+  p=${f#/proc/}; p=${p%%/*}
+  [ "$p" = "$(cat "$DNS_PIDFILE")" ] || { flt_pid=$p; break; }
+done
+assert_match "$flt_pid" "^[0-9]+$" "dnsproxy's output goes through the log filter"
+grep -qx "$flt_pid" "$MOCK_DIR/protected"
+assert_rc 0 $? "the filter is protected like dnsproxy, or its death would kill dnsproxy"
+grep -qx "$(cat "$DNS_PIDFILE")" "$MOCK_DIR/protected"
+assert_rc 0 $? "and dnsproxy itself"
 nat=$(ipt_rules nfqws_dns nat)
 assert_contains "$nat" "-m mark --mark 0x0/0xffff -j RETURN" "packets without a netd mark are left alone (no loop)"
 assert_contains "$nat" "-p udp --dport 53 -j REDIRECT --to-ports $DNS_PORT" "UDP DNS goes to dnsproxy"
@@ -213,6 +236,44 @@ assert_contains "$log" "перехват включён: IPv4" "and that interce
 assert_match "$log" "не работает \\(PID $pid: (нет в /proc|есть в /proc, \\(sleep\\), состояние Z)" "a crash is logged with the dead PID and what was found"
 assert_contains "$log" "watchdog: запуск dnsproxy" "followed by the restart"
 assert_contains "$(cat "$SERVICE_LOG")" "DNS: dnsproxy перезапущен" "the service log confirms the restart"
+
+section "the watchdog asks dnsproxy, not only /proc"
+
+# помощник-заглушка: отвечает dnsproxy или нет — по файлу; аргументы — в лог
+cat > "$HELPER_BIN" <<EOF
+#!/bin/sh
+echo "\$*" >> "$MOCK_DIR/helper.calls"
+[ -f "$MOCK_DIR/dns_hung" ] || exit 0
+echo "nfqws2-helper: 2026/10/27 19:57:37 127.0.0.1:$DNS_PORT: нет ответа" >&2
+exit 1
+EOF
+chmod 0755 "$HELPER_BIN"
+pid=$(cat "$DNS_PIDFILE")
+: > "$MOCK_DIR/helper.calls"
+dns_check
+assert_contains "$(cat "$MOCK_DIR/helper.calls")" "-probe 127.0.0.1:$DNS_PORT,127.0.0.1:$DNS_CDN_PORT" "it asks the main and the CDN dnsproxy"
+assert_eq "$pid" "$(cat "$DNS_PIDFILE")" "an answering dnsproxy is left alone"
+: > "$MOCK_DIR/dns_hung"
+dns_check
+assert_eq "$pid" "$(cat "$DNS_PIDFILE")" "one missed answer is not enough to restart"
+assert_file "$DNS_RUN_DIR/probe_fail" "but it is counted"
+rm -f "$MOCK_DIR/dns_hung"
+dns_check
+assert_no_file "$DNS_RUN_DIR/probe_fail" "an answer in between resets the count"
+: > "$MOCK_DIR/dns_hung"
+dns_check; dns_check
+npid=$(cat "$DNS_PIDFILE" 2>/dev/null)
+[ -n "$npid" ] && [ "$npid" != "$pid" ] && kill -0 "$npid" 2>/dev/null
+assert_rc 0 $? "two missed answers in a row restart dnsproxy"
+kill -0 "$pid" 2>/dev/null; assert_rc 1 $? "the hung one is gone"
+assert_contains "$(ipt_rules nfqws_dns nat)" "REDIRECT --to-ports $DNS_PORT" "interception stays on"
+assert_contains "$(tail -n 5 "$DNS_LOG")" "работает, но не отвечает на запросы (127.0.0.1:$DNS_PORT: нет ответа )" "the DNS log says it hung, with the helper's reason"
+assert_contains "$(tail -n 3 "$SERVICE_LOG")" "DNS: dnsproxy завис" "and the service log too"
+assert_no_file "$DNS_RUN_DIR/probe_fail" "the count starts over"
+rm -f "$MOCK_DIR/dns_hung" "$HELPER_BIN"
+: > "$MOCK_DIR/helper.calls"
+dns_check
+assert_eq "" "$(cat "$MOCK_DIR/helper.calls")" "without the helper there is no check"
 
 section "one DNS operation at a time"
 
@@ -434,100 +495,81 @@ dns_rules_del 2>/dev/null
 rm -f "$DNS_ENABLED_FILE"
 assert_contains "$(sed -n '/upstream-mode/p' "$MODDIR/lib/dns.sh")" "parallel" "dnsproxy asks all servers of a profile at once"
 
-section "geo-block bypass: geodns in front, decided by the answer"
-# geodns-заглушка: записывает аргументы и живёт; geodns.fail — не стартует
-cat > "$MODDIR/bin/geodns" <<EOF
-#!/bin/sh
-[ -f "$MOCK_DIR/geodns.fail" ] && exit 1
-printf '%s\n' "\$@" > "$MOCK_DIR/geodns.args"
-exec sleep 600
-EOF
-chmod 0755 "$MODDIR/bin/geodns"
+section "geo-block bypass: domains from the list go to the bypass DNS"
+# Как nameserver-policy в mihomo: маршрут — по списку доменов (geoblock.list),
+# обычные правила dnsproxy; ничего перед ним, никакой догадки по ответу
 : > "$DNS_ENABLED_FILE"
+printf '# сервисы с геоблоком\nchatgpt.com\nClaude.ai\ninstagram.com\nvk.com\nmail.ru\ngooglevideo.com\nmtalk.google.com\nchatgpt.com\n' > "$DNS_GEO_LIST"
+: > "$DNS_RUN_DIR/geo.args"; : > "$DNS_RUN_DIR/main_port"
 dns_build
-gargs=$(cat "$DNS_RUN_DIR/geo.args")
-assert_contains "$gargs" "127.0.0.1:$DNS_PORT" "geodns takes the interception port"
-assert_contains "$gargs" "127.0.0.1:$DNS_FAST_PORT" "and asks dnsproxy as the fast route"
-assert_eq "$DNS_FAST_PORT" "$(sed -n '/^-p$/{n;p;}' "$DNS_RUN_DIR/args")" "dnsproxy moves to the inner port"
-prov=$(cat "$DNS_RUN_DIR/geo.providers")
-assert_contains "$prov" "comss https://dns.comss.one/dns-query https://router.comss.one/dns-query 83.220.169.155" "providers come from the presets: DoH and plain addresses"
-assert_contains "$prov" "geohide https://eu.geohide.ru/dns-query" "GeoHide too"
-assert_contains "$prov" "malw https://dns.malw.link/dns-query" "and malw"
-assert_contains "$prov" "geohide https://eu.geohide.ru/dns-query 5.175.161.3 5.175.161.40 37.221.93.141 37.221.93.128" "GeoHide: only its EU servers (RU ones are blocked)"
-assert_contains "$prov" "+astracat https://dns.astracat.network/dns-query" "spare providers are marked with +"
-assert_contains "$prov" "+dns-ai https://dns.dns-ai.ru/dns-query 192.144.59.14" "with their plain addresses"
-assert_contains "$prov" "+zapret https://dns.zapret.moe/dns-query 83.217.211.149" "zapret.moe too"
-assert_not_contains "$prov" "geohide.ru:444" "no blocked RU GeoHide"
-assert_eq "geohide comss malw" "$(grep -v '^+' "$DNS_RUN_DIR/geo.providers" | cut -d' ' -f1 | tr '\n' ' ' | sed 's/ $//')" "provider priority: GeoHide (its own domain list) first"
-assert_contains "$prov" "@$DNS_RUN_DIR/geo.claims.geohide" "GeoHide brings its domain list"
-assert_match "$(cat "$DNS_RUN_DIR/geo.claims.geohide")" "^game\.brawlstarsgame\.com$" "with the game servers in it"
-assert_not_contains "$prov" "geo.claims.comss" "a preset without domains has no list"
-assert_contains "$gargs" "$DNS_RUN_DIR/geo.state" "what geodns learned survives its restarts"
-olddef=$(cat "$DNS_DEFAULT_FILE" 2>/dev/null)
-echo comss > "$DNS_DEFAULT_FILE"
+geo=$(grep '/chatgpt.com/' "$DNS_RUN_DIR/upstreams.txt")
+assert_contains "$geo" "[/chatgpt.com/claude.ai/]https://eu.geohide.ru/dns-query" "list domains go to GeoHide's DoH"
+assert_contains "$geo" "]https://dns.comss.one/dns-query" "to Comss"
+assert_contains "$geo" "]https://router.comss.one/dns-query" "both of its DoH servers"
+assert_contains "$geo" "]https://dns.malw.link/dns-query" "and to malw — all at once, the first answer wins"
+assert_eq "4" "$(printf '%s\n' "$geo" | grep -c .)" "only DoH: plain DNS to them is easy for the ISP to spoil"
+assert_eq "1" "$(printf '%s\n' "$geo" | head -n 1 | grep -o '/chatgpt.com/' | grep -c .)" "a domain listed twice — once"
+assert_not_contains "$geo" "instagram.com" "an enabled profile's domain keeps the profile's route"
+assert_not_contains "$geo" "vk.com" "Russian services never go around"
+assert_not_contains "$geo" "mail.ru" "nor anything in .ru"
+assert_not_contains "$geo" "googlevideo.com" "nor video and CDN"
+assert_not_contains "$geo" "mtalk.google.com" "nor Google push notifications"
+assert_contains "$(head -n 1 "$DNS_RUN_DIR/upstreams.txt")" "192.168.1.1:53" "everything else — the network DNS"
+assert_eq "$DNS_PORT" "$(sed -n '/^-p$/{n;p;}' "$DNS_RUN_DIR/args")" "dnsproxy itself takes the interception port: nothing in front of it"
+assert_no_file "$DNS_RUN_DIR/geo.args" "leftovers of the geodns arbiter are removed"
+assert_no_file "$DNS_RUN_DIR/main_port" "all of them"
+i=0; while [ $i -lt 250 ]; do echo "g$i.example"; i=$((i + 1)); done > "$DNS_GEO_LIST"
 dns_build
-assert_eq "comss" "$(head -n 1 "$DNS_RUN_DIR/geo.providers" | cut -d' ' -f1)" "the default DNS, if it is one of them, comes first"
-if [ -n "$olddef" ]; then echo "$olddef" > "$DNS_DEFAULT_FILE"; else rm -f "$DNS_DEFAULT_FILE"; fi
-dns_build
-assert_not_contains "$prov" "tls://" "DoT is left to dnsproxy"
-never=$(cat "$DNS_RUN_DIR/geo.never")
-assert_match "$never" "^ru$" "Russian domains never go around"
-assert_contains "$never" "googlevideo.com" "nor video and CDN"
-assert_contains "$never" "mtalk.google.com" "nor Google push notifications"
-assert_contains "$never" "instagram.com" "nor the domains of an enabled profile (they have their own route)"
+assert_eq "4" "$(grep -c '/g1.example/' "$DNS_RUN_DIR/upstreams.txt")" "a long list — lines of 100 domains, one per server"
+assert_eq "12" "$(grep -c 'example/\]https://' "$DNS_RUN_DIR/upstreams.txt")" "three lines per server"
 DNS_GEO=0 dns_build
-assert_no_file "$DNS_RUN_DIR/geo.args" "off: no geodns"
-assert_eq "$DNS_PORT" "$(sed -n '/^-p$/{n;p;}' "$DNS_RUN_DIR/args")" "and dnsproxy stays on the interception port"
+assert_not_contains "$(cat "$DNS_RUN_DIR/upstreams.txt")" "g1.example" "profiles mode: the list is not used"
+: > "$DNS_GEO_LIST"
 dns_build
+assert_not_contains "$(cat "$DNS_RUN_DIR/upstreams.txt")" "eu.geohide.ru" "an empty list — no rules"
+
+# Обновление списка: свежий geoblock + домены GeoHide к тому, что уже есть
+printf '# шапка\nmy-service.example\nchatgpt.com\n' > "$DNS_GEO_LIST"
+hosts_download() { printf 'chatgpt.com\nOpenAI.com\n\n# comment\n' > "$2"; i=0; while [ $i -lt 60 ]; do echo "n$i.example"; i=$((i + 1)); done >> "$2"; }
+n=$(dns_geo_update)
+assert_rc 0 $? "the list is updated"
+assert_match "$(cat "$DNS_GEO_LIST")" "^my-service\.example$" "the user's own domains stay"
+assert_match "$(cat "$DNS_GEO_LIST")" "^openai\.com$" "new ones are added (lower case)"
+assert_match "$(cat "$DNS_GEO_LIST")" "^game\.brawlstarsgame\.com$" "GeoHide's own list too"
+assert_eq "1" "$(grep -c '^chatgpt.com$' "$DNS_GEO_LIST")" "without duplicates"
+assert_match "$(head -n 1 "$DNS_GEO_LIST")" "^# шапка$" "the header stays on top"
+assert_eq "$(list_count "$DNS_GEO_LIST")" "$n" "it answers with the number of domains"
+assert_file "$DNS_DIR/geo_updated" "and remembers when"
+cp "$DNS_GEO_LIST" "$SANDBOX/geo.before"
+hosts_download() { return 1; }
+dns_geo_update >/dev/null
+assert_rc 1 $? "a failed download is an error"
+cmp -s "$DNS_GEO_LIST" "$SANDBOX/geo.before"
+assert_rc 0 $? "and leaves the list as it was"
+hosts_download() { echo "<html>error</html>" > "$2"; }
+dns_geo_update >/dev/null
+assert_rc 1 $? "so does a page that is not a list"
+unset -f hosts_download; . "$MODDIR/lib/hosts.sh"
 
 svc start
-gpid=$(cat "$DNS_GEO_PIDFILE" 2>/dev/null)
-kill -0 "$gpid" 2>/dev/null
-assert_rc 0 $? "geodns starts with DNS"
-assert_contains "$(cat "$MOCK_DIR/geodns.args")" "$DNS_RUN_DIR/geo.providers" "with the providers file"
 ctl dns-state
-assert_contains "$ctl_out" "geo=running" "dns-state reports it"
-kill "$gpid"; sleep 0.3
-dns_check
-kill -0 "$(cat "$DNS_GEO_PIDFILE" 2>/dev/null)" 2>/dev/null
-assert_rc 0 $? "the watchdog restarts a dead geodns"
-assert_contains "$(cat "$DNS_LOG")" "geodns (обход геоблока) не работает — перезапуск" "and says so"
-
-: > "$MOCK_DIR/geodns.fail"
-kill "$(cat "$DNS_GEO_PIDFILE")"; sleep 0.3
-dns_check
-assert_file "$DNS_RUN_DIR/geo_failed" "geodns that does not start is left out for a while"
-assert_eq "$DNS_PORT" "$(sed -n '/^-p$/{n;p;}' "$DNS_RUN_DIR/running.args")" "dnsproxy takes the interception port back — DNS keeps working"
-kill -0 "$(cat "$DNS_PIDFILE")" 2>/dev/null
-assert_rc 0 $? "dnsproxy runs"
-ctl dns-state
-assert_contains "$ctl_out" "geo=failed" "dns-state says it failed"
-rm -f "$MOCK_DIR/geodns.fail"
-ctl set DNS_GEO 1
-assert_no_file "$DNS_RUN_DIR/geo_failed" "switching it on again tries at once"
+assert_contains "$ctl_out" "geo=on" "dns-state reports the bypass"
+assert_contains "$ctl_out" "geo_domains=$(list_count "$DNS_GEO_LIST")" "with the size of the list"
+assert_match "$(grep '/my-service.example/' "$DNS_RUN_DIR/running.upstreams")" "geohide" "the running dnsproxy has the rules"
 ctl dns-mode profiles
 assert_rc 0 "$ctl_rc" "the DNS mode switches to profiles"
 assert_match "$(cat "$CONFFILE")" "^DNS_GEO=\"0\"$" "geo-block bypass off"
 assert_match "$(cat "$CONFFILE")" "^DNS_SMART=\"0\"$" "and the fast CDN route too"
-dns_geo_pid >/dev/null
-assert_rc 1 $? "geodns stops"
+assert_not_contains "$(cat "$DNS_RUN_DIR/running.upstreams")" "my-service.example" "the rules are gone at once"
 ctl json-status
 assert_contains "$ctl_out" '"dns_geo":0' "json-status reports it"
 ctl dns-mode smart
 assert_match "$(cat "$CONFFILE")" "^DNS_GEO=\"1\"$" "smart mode turns both back on"
-dns_geo_pid >/dev/null
-assert_rc 0 $? "and geodns runs again"
+assert_contains "$(cat "$DNS_RUN_DIR/running.upstreams")" "my-service.example" "and the rules are back"
 ctl dns-mode fast
 assert_rc 1 "$ctl_rc" "an unknown mode is refused"
-svc stop
-dns_geo_pid >/dev/null
-assert_rc 0 $? "stopping the bypass service leaves DNS (and geodns) alone"
 svc dns_stop
-dns_geo_pid >/dev/null
-assert_rc 1 $? "stopping DNS stops geodns"
-rm -f "$MODDIR/bin/geodns" "$DNS_ENABLED_FILE"
-dns_build
-assert_no_file "$DNS_RUN_DIR/geo.args" "a build without geodns: as before"
+rm -f "$DNS_ENABLED_FILE"
 
 section "nfqws2-ctl dns-*"
 

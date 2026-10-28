@@ -568,7 +568,7 @@ async function runDomainCheck(){
   dcRunning = true;
   $('dc-go').disabled = true;
   $('dc-q').blur();
-  const st = {mode: '', lists: [], ip: '', tries: []};
+  const st = {mode: '', lists: [], ip: '', tries: [], keep: ''};
   const paint = done => setHTML('dc-res', dcRender(q, st, done), false);
   paint(false);
   const r = await ctlx(['domain-check', q], 60000, line => {
@@ -577,6 +577,7 @@ async function runDomainCheck(){
     else if(p[0] === 'LIST') st.lists.push({file: p[1], role: p[2], entry: p[3]});
     else if(p[0] === 'IP') st.ip = p[1];
     else if(p[0] === 'R'){ const [ok, v] = (p[2] || '').split(' '); st.tries.push({ok: ok === 'ok', v}); }
+    else if(p[0] === 'K') st.keep = p[1];
     else return;
     paint(false);
   });
@@ -612,6 +613,11 @@ function dcRender(q, st, done){
     else sub = t('Не открылся: {0}', [...new Set(st.tries.map(x => t(PROBE_REASON[x.v] || PROBE_REASON.other)))].join(', '));
     rows.push(dcRow('test', t('Доступность через обход'), sub, n && !done ? '' : (n ? (ok.length === n ? 'ok' : ok.length ? 'warn' : 'bad') : '')));
   } else if(done) rows.push(dcRow('test', t('Доступность через обход'), t('Нет curl или wget — открыть сайт с устройства нечем')));
+  // второй запрос по тому же соединению: так ходят приложения и браузер
+  if(st.keep === 'ok') rows.push(dcRow('refresh', t('Повторный запрос'), t('Проходит по тому же соединению'), 'ok'));
+  else if(st.keep === 'stall') rows.push(dcRow('refresh', t('Повторный запрос'),
+    t('Зависает: первый запрос отвечает, следующий по тому же соединению — нет. Соединение замораживается после первого обмена — приложения покажут ошибку со второго запроса'), 'bad'));
+  else if(n === 3 && ok.length && !done) rows.push(dcRow('refresh', t('Повторный запрос'), t('Проверяю…')));
   if(rows.length) out.push('<div class="list">' + rows.join('') + '</div>');
   if(done && st.mode){
     const acts = [];

@@ -73,7 +73,8 @@ pre.appear > * { animation: none; }
 .code-edit.plain > pre { display: none; }
 /* во время выделения текст рисует сам textarea (см. editor.js, selectionchange) */
 .code-edit.selecting > pre { visibility: hidden; }
-.code-edit.selecting > textarea { color: var(--md-sys-color-on-surface); -webkit-text-fill-color: currentColor; }
+.code-edit.selecting > textarea { color: var(--md-sys-color-on-surface); -webkit-text-fill-color: currentColor;
+  background: var(--md-sys-color-surface-container-low); }
 /* Поиск в редакторе: строка над текстом и рамка текущего совпадения — между
    подсветкой и прозрачным textarea, поэтому текст поверх неё виден */
 .find-bar { display: flex; align-items: center; gap: 8px; }

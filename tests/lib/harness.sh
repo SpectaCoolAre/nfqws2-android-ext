@@ -90,7 +90,7 @@ sandbox_init() {
     cp "$REPO_DIR/lib/dns.sh" "$MODDIR/lib/dns.sh"
     mkdir -p "$MODDIR/defaults/dns-presets"
     cp -R "$REPO_DIR"/defaults/dns-presets/. "$MODDIR/defaults/dns-presets/"
-    cp "$REPO_DIR/defaults/dns-cdn.list" "$REPO_DIR/defaults/dns-geo-never.list" "$REPO_DIR/defaults/dns-geo-reserve.list" "$MODDIR/defaults/" 2>/dev/null || true
+    cp "$REPO_DIR/defaults/dns-cdn.list" "$REPO_DIR/defaults/dns-geo-never.list" "$MODDIR/defaults/" 2>/dev/null || true
   fi
   # Редактор hosts: файл назначения — в песочнице, mount/umount — заглушки
   cp "$REPO_DIR/lib/hosts.sh" "$MODDIR/lib/hosts.sh"

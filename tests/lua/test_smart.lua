@@ -83,7 +83,8 @@ check(okconn("a.example") == 1, "first variant applied")
 check(rec("a.example").ok[1] == 1, "the success is counted")
 check(okconn("a.example") == 1, "the next connection stays on it")
 
-section("three errors in the window switch the site; one or two do not")
+section("three errors in the window switch a site that opened; one or two do not")
+okconn("b.example")
 later(); failconn("b.example")
 check(rec("b.example").cur == 1, "one error: still on 1")
 later(); failconn("b.example")
@@ -93,6 +94,12 @@ check(rec("b.example").cur ~= 1, "the third one switches")
 local nb = rec("b.example").cur
 check((rec("b.example").cool[1] or 0) > clock, "and the broken variant cools down")
 check(okconn("b.example") == nb, "the new variant is applied")
+
+section("a site that never opened switches after two errors")
+later(); failconn("n2.example")
+check(rec("n2.example").cur == 1, "one error: still on 1")
+later(); failconn("n2.example")
+check(rec("n2.example").cur ~= 1, "the second one switches: rare sites do not wait for days")
 
 section("an error between successes does not switch a good variant")
 for i = 1, 4 do later(); okconn("g.example") end
@@ -138,6 +145,38 @@ check(switches <= 24 * 10 / 15 + 1, "no more than one switch per 15 seconds (" .
 check(rec(h).nodpi == nil, "it worked once, so it is still treated as blocked")
 fails(h)
 check(clock - rec(h).sw < 65, "and it never freezes: errors still move it on")
+
+section("a site that opened once but fails on almost every variant pauses the search")
+later(400)
+-- набор из 12 вариантов (как базовый TLS): правило — от восьми
+local function plan12()
+	local p = {}
+	for v = 1, 12 do p[#p + 1] = { func = "tf", func_instance = "tf_" .. v, arg = { strategy = tostring(v) }, payload_filter = "all", range = {} } end
+	p[#p + 1] = { func = "tf", func_instance = "tf_always", arg = {}, payload_filter = "all", range = {} }
+	return p
+end
+local o12 = { slot = "big", plan = plan12, pass = 12 }
+local function big(host, ok)
+	local c = conn(host); packet(c, o12)
+	if ok then packet(c, { incoming = true, seq = 18000, slot = "big", plan = plan12, pass = 12 })
+	else for k = 1, 3 do packet(c, { retrans = true, slot = "big", plan = plan12, pass = 12 }) end end
+end
+local rare = "rare.example"
+big(rare, true)
+local paused_at = nil
+for i = 1, 600 do
+	big("alive" .. (i % 5) .. ".example", true)
+	big(rare, false)
+	later(10)
+	if (rec(rare, "big").nodpi or 0) > clock then paused_at = i; break end
+end
+check(paused_at ~= nil, "after going round almost all variants it stops (" .. tostring(paused_at) .. " errors)")
+if paused_at then
+	local rv = rec(rare, "big").cur
+	for k = 1, 3 do later(); big(rare, false) end
+	check(rec(rare, "big").cur == rv, "no more switching for now")
+	check(rec(rare, "big").everok == true, "it is still a site that opened once")
+end
 
 section("a site that never worked on any variant is not a DPI problem")
 later(400)
@@ -424,6 +463,47 @@ tcptable({ tcpline(dfc.port, true) }); smart_watch(); smart_watch()
 check((rec(dw).err[dv] or 0) == 1, "the watcher sees it stuck and does not add a second")
 check((readall(HOME .. "/state/smart_kill") or ""):find(" " .. dfc.port, 1, true) ~= nil, "but still cuts it so the app reconnects")
 tcptable({})
+
+section("frozen after the first answer: the next request on the connection is resent with no reply")
+later(400); os.remove(HOME .. "/state/smart_kill")
+local fz = "frozen.example"
+-- короткий ответ API (1,4 КБ): сервер ответил, его пакеты ещё видны
+local function apiconn(h)
+	local c = conn(h); packet(c); packet(c, { incoming = true, seq = 1, len = 1400 }); return c
+end
+local fc = apiconn(fz)
+local fv = rec(fz).cur
+packet(fc, { seq = 101, len = 325 })
+packet(fc, { seq = 101, len = 325 }); packet(fc, { seq = 101, len = 325 })
+check(next(rec(fz).err) == nil, "two resends are not enough (a lost packet and a probe happen)")
+packet(fc, { seq = 101, len = 325 })
+check((rec(fz).err[fv] or 0) == 1, "the third resend of the same request with no reply: an error of that variant")
+check((readall(HOME .. "/state/smart_kill") or ""):find(" " .. fc.port, 1, true) ~= nil, "and the connection is cut at once, so the app opens a new one")
+packet(fc, { seq = 101, len = 325 })
+check((rec(fz).err[fv] or 0) == 1, "counted once")
+later(20); os.remove(HOME .. "/state/smart_kill")
+local fc2 = apiconn(fz)
+packet(fc2, { seq = 101, len = 325 }); packet(fc2, { seq = 101, len = 325 }); packet(fc2, { seq = 101, len = 325 })
+packet(fc2, { incoming = true, seq = 1401, len = 200 })
+packet(fc2, { seq = 101, len = 325 })
+check((rec(fz).err[fv] or 0) == 1, "a reply from the server between resends: not frozen")
+-- как у видео на мобильной сети: потери, повторы разных сегментов, сервер подтверждает
+later(20)
+local fc3 = apiconn(fz)
+packet(fc3, { seq = 101, len = 64 }); packet(fc3, { seq = 165, len = 1024 }); packet(fc3, { seq = 1189, len = 546 })
+packet(fc3, { seq = 1189, len = 546 }); packet(fc3, { seq = 101, len = 64 }); packet(fc3, { seq = 1189, len = 546 })
+check((rec(fz).err[fv] or 0) == 1, "resends of different segments are ordinary losses, not a freeze")
+-- большой ответ: дальше 19 КБ пакеты сервера не видны, обнулить счёт нечем
+later(20)
+local fc4 = conn(fz); packet(fc4); packet(fc4, { incoming = true, seq = 18000, len = 1400 })
+local e4 = rec(fz).err[fv] or 0
+packet(fc4, { seq = 101, len = 325 }); for i = 1, 4 do packet(fc4, { seq = 101, len = 325 }) end
+check((rec(fz).err[fv] or 0) == e4, "after 18 KB of the answer the server is not seen: no verdict")
+check(readall(HOME .. "/state/smart_kill") == nil, "and nothing is cut")
+later(20)
+local e5 = rec(fz).err[fv] or 0
+local fc5 = conn(fz); packet(fc5); packet(fc5); packet(fc5); packet(fc5)
+check((rec(fz).err[fv] or 0) == e5, "resends before any answer are left to the usual detector")
 
 section("stuck before any answer is an error of the start, not mid-stream")
 later(400)

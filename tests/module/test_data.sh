@@ -148,6 +148,30 @@ done
 [ "$missing_blobs" = 0 ] && _ok "every referenced blob exists (directly or as a runtime alias)"
 [ "$missing_lists" = 0 ] && _ok "every referenced list exists"
 
+# Сервисы с геоблоком (lists/geoblock.list — те же домены, что умный режим DNS
+# шлёт на DNS с обходом) учатся в профиле 16 КБ, по SNI, а не по адресам
+# прокси, которые раньше собирал geodns
+geo_prof=$(tr '\n' ' ' < "$REPO_DIR/strategies/smart.conf" | sed 's/--new/\n/g' | grep -F 'hostlist=$LISTS_DIR/geoblock.list')
+if printf '%s\n' "$geo_prof" | grep -q 'slot=tls_16' && printf '%s\n' "$geo_prof" | grep -q 'slot=quic_16'; then
+  _ok "smart.conf: geo-blocked services learn in the 16 KB slots (tls and quic)"
+else _fail "smart.conf: no geoblock.list profile in tls_16/quic_16"; fi
+# Раскладка умного режима (всё, кроме комментариев) изменилась — нужна новая
+# SMART_CONF_VER: только по ней установленный конфиг пересобирается. Иначе у
+# тех, кто уже на этой версии, остаётся прежний конфиг (так test12 остался со
+# ссылкой на удалённый ipset_geoproxy.list). Отпечаток — в tests/lib/smart_layout:
+# сменили раскладку — поднимите версию и запишите новый отпечаток
+lay_ver=$(sed -n 's/^SMART_CONF_VER=//p' "$REPO_DIR/strategies/smart.conf")
+lay_sum=$(grep -v -e '^[[:space:]]*#' -e '^SMART_CONF_VER=' "$REPO_DIR/strategies/smart.conf" | cksum | cut -d' ' -f1)
+read -r rec_ver rec_sum < "$TESTS_DIR/lib/smart_layout"
+if [ "$lay_sum" = "$rec_sum" ] && [ "$lay_ver" = "$rec_ver" ]; then _ok "smart.conf: layout $lay_ver matches its fingerprint"
+elif [ "$lay_ver" = "$rec_ver" ]; then _fail "smart.conf layout changed but SMART_CONF_VER is still $lay_ver: bump it, then write '<ver> $lay_sum' to tests/lib/smart_layout"
+else _fail "SMART_CONF_VER is $lay_ver: write '$lay_ver $lay_sum' to tests/lib/smart_layout"; fi
+if grep -q geoproxy "$REPO_DIR"/strategies/*.conf "$REPO_DIR/service.sh" "$REPO_DIR/lib/"*.sh 2>/dev/null; then
+  grep -q 'rm -f "$LISTS_DIR/ipset_geoproxy.list"' "$REPO_DIR/service.sh" &&
+    ! grep -q geoproxy "$REPO_DIR"/strategies/*.conf && _ok "the old geodns proxy ipset is only cleaned up" ||
+    _fail "strategies still use ipset_geoproxy.list"
+else _ok "the old geodns proxy ipset is gone"; fi
+
 # ── rewriting keenetic paths has one definition ────────────────────────────────
 section "keenetic path rewriting"
 

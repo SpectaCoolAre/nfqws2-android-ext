@@ -40,6 +40,10 @@ load_conf >/dev/null 2>&1
 assert_contains "$(cat "$CONFFILE")" "slot=tls_16:" "an old smart config is rebuilt from the module's smart.conf"
 assert_contains "$(cat "$CONFFILE")" "LOG_LEVEL=2" "keeping the user's settings"
 assert_contains "$(cat "$SERVICE_LOG" 2>/dev/null)" "конфиг обновлён" "and says so in the log"
+# конфиг тестовой сборки с той же версией раскладки, но прежней (ipset_geoproxy)
+sed 's/^SMART_CONF_VER=.*/SMART_CONF_VER=6/; s|^ARGS_BLOCK16="|ARGS_BLOCK16="--ipset=$LISTS_DIR/ipset_geoproxy.list |' "$MODDIR/strategies/smart.conf" > "$CONFFILE"
+load_conf >/dev/null 2>&1
+assert_not_contains "$(cat "$CONFFILE")" "ipset_geoproxy" "a config of the previous layout (2.2.4 test builds) is rebuilt"
 before=$(cksum < "$CONFFILE")
 load_conf >/dev/null 2>&1
 assert_eq "$before" "$(cksum < "$CONFFILE")" "an up-to-date one is left alone"

@@ -40,7 +40,7 @@ const STATUS = JSON.stringify({
 
 // Заглушка модуля: ksu.exec разбирает команду nfqws2-ctl и отвечает из памяти.
 const STUB = `
-window.__dns = { enabled: false, def: 'net', priv: 'off', privHost: '', service: true, profiles: {}, calls: [] };
+window.__dns = { enabled: false, def: 'net', priv: 'off', privHost: '', service: true, profiles: {}, calls: [], geoN: 722, geoAt: 0 };
 window.__presets = ${JSON.stringify(PRESETS)};
 (function(){
   const st = window.__dns;
@@ -68,10 +68,7 @@ window.__presets = ${JSON.stringify(PRESETS)};
       'private=' + st.priv, 'private_host=' + st.privHost, 'net_dns=192.168.1.1', 'hits=' + (on ? 1234 : 0), 'error=',
       'max_profiles=32', 'max_servers=8', 'max_domains=1000', 'smart=' + (window.__smart === 0 ? 0 : 1),
       'cdn=' + (st.enabled && window.__smart !== 0 ? 'running' : ''),
-      'geo_available=1', 'geo=' + (st.enabled && window.__geo !== 0 ? 'running' : 'idle'),
-      'geo_status=' + (st.enabled ? JSON.stringify({providers: [{name: 'comss', proxies: 2, hits: 14, last_ok: 1, down: false},
-        {name: 'malw', proxies: 0, hits: 0, last_ok: 0, down: true},
-        {name: 'astracat', proxies: 1, hits: 0, last_ok: 1, down: false, reserve: true, active: false}], recent: [{d: 'chatgpt.com', p: 'comss', t: 1}]}) : '')];
+      'geo=' + (window.__geo !== 0 ? 'on' : 'off'), 'geo_domains=' + st.geoN, 'geo_updated=' + st.geoAt];
     Object.keys(st.profiles).forEach(id => { out.push('#profile ' + id); out = out.concat(st.profiles[id].split('\\n')); });
     window.__presets.forEach(p => { out.push('#preset ' + p.id); out = out.concat(p.text.trim().split('\\n')); });
     return out.join('\\n');
@@ -85,6 +82,7 @@ window.__presets = ${JSON.stringify(PRESETS)};
         st.def = a[1]; return [0, 'OK'];
       case 'dns-save-b64': try { st.profiles[a[1]] = norm(dec(a[2])); return [0, 'OK']; } catch (e) { return [1, '', String(e)]; }
       case 'dns-profile-enable': st.profiles[a[1]] = st.profiles[a[1]].replace(/ENABLED=\\d/, 'ENABLED=' + a[2]); return [0, 'OK'];
+      case 'dns-geo-update': st.geoN = 731; st.geoAt = 1767225600; return [0, '731'];
       case 'dns-delete': a.slice(1).forEach(id => { delete st.profiles[id]; if (st.def === id) st.def = 'net'; }); return [0, 'OK'];
     }
     return [1, '', 'unknown'];
@@ -202,10 +200,12 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     eq(false, await page.evaluate(() => $('dns-body').classList.contains('is-disabled')), 'and enables the body');
     truthy((await page.textContent('#dns-general')).includes('Не активно'), 'the state says nothing is applied yet');
     const geoTxt = await page.textContent('#dns-geo');
-    truthy(geoTxt.includes('Comss') && geoTxt.includes('адресов прокси: 2 · в обход: 14'), 'with DNS on: each bypass DNS, its proxy addresses and bypassed queries');
-    truthy(geoTxt.includes('не отвечает'), 'a blocked one says so');
-    truthy(geoTxt.includes('Недавно в обход') && geoTxt.includes('chatgpt.com'), 'and recent domains that went around');
-    truthy(geoTxt.includes('Запасные DNS') && geoTxt.includes('AstraCat') && !geoTxt.includes('AstraCat · запасной'), 'spare DNS on standby are one line');
+    truthy(geoTxt.includes('GeoHide, Comss и malw'), 'the geo-block bypass names its bypass DNS');
+    truthy(geoTxt.includes('geoblock.list · доменов: 722 · обновлён: вместе с модулем'), 'the service list shows its size and that it came with the module');
+    await page.click('#dns-geo .clickable:has-text("Обновить список")'); await idle(); await page.waitForTimeout(400);
+    truthy(await page.evaluate(() => window.__dns.calls.includes('dns-geo-update')), 'the update button downloads a fresh list');
+    const geoTxt2 = await page.textContent('#dns-geo');
+    truthy(geoTxt2.includes('доменов: 731') && !geoTxt2.includes('вместе с модулем'), 'and the new size and date are shown');
 
     sect(`${mode}: a preset`);
     await page.click('#dns-add'); await menuPick('Из пресетов');

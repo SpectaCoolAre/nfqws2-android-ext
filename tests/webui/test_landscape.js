@@ -60,7 +60,7 @@ window.ksu = { exec: function(cmd, o, cb){
   var out = 'OK', rc = 0;
   if (cmd.indexOf('json-status') >= 0) out = ${JSON.stringify(STATUS)}.replace('"home_wifi":0', '"home_wifi":' + (window.__home || 0));
   else if (cmd.indexOf('get-logs') >= 0) out = 'line one\\nline two';
-  else if (cmd.indexOf("'dns-state'") >= 0) out = '#status\\nenabled=1\\ndefault=net\\nproxy=running\\nrules=on\\nipv6=redirect\\nprivate=off\\nnet_dns=192.168.1.1\\nhits=1234\\nmax_profiles=32\\nmax_servers=12\\nmax_domains=1000\\nsmart=1\\ncdn=running\\ngeo_available=1\\ngeo=running\\ngeo_status={"providers":[{"name":"geohide","proxies":7,"hits":40,"last_ok":1,"down":false},{"name":"comss","proxies":3,"hits":12,"last_ok":1,"down":false}],"recent":[{"d":"chatgpt.com","p":"geohide","t":1}]}\\n#profile instagram\\nNAME=Instagram\\nENABLED=1\\nSERVER=https://doh.cleanbrowsing.org/doh/family-filter/\\nDOMAIN=instagram.com';
+  else if (cmd.indexOf("'dns-state'") >= 0) out = '#status\\nenabled=1\\ndefault=net\\nproxy=running\\nrules=on\\nipv6=redirect\\nprivate=off\\nnet_dns=192.168.1.1\\nhits=1234\\nmax_profiles=32\\nmax_servers=12\\nmax_domains=1000\\nsmart=1\\ncdn=running\\ngeo=on\\ngeo_domains=722\\ngeo_updated=\\n#profile instagram\\nNAME=Instagram\\nENABLED=1\\nSERVER=https://doh.cleanbrowsing.org/doh/family-filter/\\nDOMAIN=instagram.com';
   else if (cmd.indexOf('get-list') >= 0) out = 'example.com\\nsite.org';
   else if (cmd.indexOf('list-apps') >= 0) out = 'com.termux\\ncom.example.one';
   else if (cmd.indexOf("'set' 'HOME_WIFI'") >= 0) { window.__home = cmd.indexOf("'1'") >= 0 ? 1 : 0; out = 'OK'; }

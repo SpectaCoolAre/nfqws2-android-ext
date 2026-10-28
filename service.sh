@@ -42,6 +42,7 @@ start_failed() {
 # наблюдатели сами завершаются на следующем шаге, запуск службы поднимет снова
 # Белые списки проверяются, пока обход должен работать или стоит на паузе
 wl_wanted() { [ "$WL_PAUSE" = "1" ] && { [ -f "$DESIRED_FILE" ] || [ -f "$HOME_PAUSED_FILE" ]; }; }
+pushfix_wanted() { [ "$PUSH_FIX" = "1" ]; }
 watchers_wanted() {
   { [ -f "$DESIRED_FILE" ] && { [ "$WATCHDOG" = "1" ] || smart_active; }; } || [ "$HOME_WIFI" = "1" ] || [ "$VPN_PAUSE" = "1" ] || dns_enabled
 }
@@ -88,6 +89,16 @@ _start() {
   kernel_modules
   rotate_logs start
 
+  # сервисы с геоблоком — профиль 16 КБ умного режима; список нужен и пустым.
+  # Адреса прокси прежнего geodns (тестовые сборки 2.2.4) больше не нужны, но
+  # конфиг, собранный тогда (своя правка, MartinBacker), может на них ссылаться:
+  # без файла nfqws2 не запустится — тогда остаётся пустой
+  [ -f "$LISTS_DIR/geoblock.list" ] || : > "$LISTS_DIR/geoblock.list"
+  # nfqws2 дописывает выученное в auto.list: файл, испорченный раньше (правка
+  # без перевода строки в конце), склеил бы новый домен с последней строкой
+  ensure_eol "$LISTS_DIR/auto.list"
+  if grep -q 'ipset_geoproxy\.list' "$CONFFILE" 2>/dev/null; then : > "$LISTS_DIR/ipset_geoproxy.list"
+  else rm -f "$LISTS_DIR/ipset_geoproxy.list"; fi
   local args
   args=$(_startup_args)
   printf '%s\n' "$args" > "$ARGS_FILE"
@@ -247,9 +258,41 @@ ensure_watchdog() {
   # обрыв застрявших соединений — пока работает умный режим
   is_running && ensure_helper "$SK_PIDFILE" smartkill smart_active
   ensure_helper "$WL_PIDFILE" wlwatch wl_wanted
+  ensure_helper "$PF_PIDFILE" pushfix pushfix_wanted
   watchers_wanted || return 0
   ensure_helper "$WD_PIDFILE" watchdog || return 0
   ensure_netwatch
+}
+
+# «Вылечить уведомления» (для разработчиков). Мобильный оператор молча
+# выбрасывает соединение уведомлений Google, если оно молчит дольше его
+# таймаута, а пульс Google — раз в 28 минут: уведомления копятся до следующего
+# пульса. Будильник (nfqws2-helper -alarm, таймер ядра будит телефон и из глубокого
+# сна) раз в 5 минут просит Google Play Services послать пульс — только в
+# мобильной сети: на Wi‑Fi роутер держит соединение сам, а пробуждения стоят
+# батареи. Код 3 из push_beat — опция выключена, будильник завершается
+PUSH_EVERY=5m
+pushfix() {
+  echo $$ > "$PF_PIDFILE"
+  protect_process
+  if [ -x "$HELPER_BIN" ] || chmod 0755 "$HELPER_BIN" 2>/dev/null; then
+    exec "$HELPER_BIN" -alarm "$PUSH_EVERY" -run "sh $MODDIR/service.sh push_beat"
+  fi
+  # без помощника — паузами (во сне они стоят, пульс уйдёт при пробуждении)
+  while :; do
+    sleep 300
+    push_beat; [ $? = 3 ] && break
+  done
+  rm -f "$PF_PIDFILE"
+}
+push_beat() {
+  pushfix_wanted || return 3
+  on_wifi && return 0
+  local a
+  for a in com.google.android.intent.action.GTALK_HEARTBEAT com.google.android.intent.action.MCS_HEARTBEAT; do
+    am broadcast -a "$a" -p com.google.android.gms >/dev/null 2>&1
+  done
+  return 0
 }
 
 # Умный режим замечает соединения, которые DPI оборвал посреди работы (телефон
@@ -644,6 +687,8 @@ case "$1" in
   watchdog)           watchdog ;;
   netwatch)           netwatch ;;
   smartkill)          smartkill ;;
+  pushfix)            pushfix ;;
+  push_beat)          push_beat ;;
   wlwatch)            wlwatch ;;
   firewall_apply)     firewall_start ;;
   firewall_stop)      firewall_stop ;;
@@ -661,7 +706,7 @@ case "$1" in
     # служба «уже запущена», наблюдатель «уже работает», а stop убил бы чужое.
     # desired — «служба должна работать»: без сброса boot-completed поднимал бы
     # её и при выключенном автозапуске
-    rm -f "$PIDFILE" "$WD_PIDFILE" "$WN_PIDFILE" "$SK_PIDFILE" "$WL_PIDFILE" "$WL_FILE" "$DESIRED_FILE" "$STARTED_FILE" "$STARTED_CS_FILE"
+    rm -f "$PIDFILE" "$WD_PIDFILE" "$WN_PIDFILE" "$SK_PIDFILE" "$WL_PIDFILE" "$PF_PIDFILE" "$WL_FILE" "$DESIRED_FILE" "$STARTED_FILE" "$STARTED_CS_FILE"
     rm -f "$STATE_DIR"/conf_seen.*
     rmdir "$STATE_DIR/start.lock" 2>/dev/null
     until [ "$(getprop sys.boot_completed 2>/dev/null)" = "1" ]; do sleep 3; done

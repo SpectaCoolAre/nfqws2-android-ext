@@ -52,6 +52,7 @@ list_file() {
     probe_dns|probe_dns.list) echo "$LISTS_DIR/probe_dns.list" ;;
     probe_tg|probe_tg.list) echo "$LISTS_DIR/probe_tg.list" ;;
     whitelist_sni|whitelist_sni.list) echo "$LISTS_DIR/whitelist_sni.list" ;;
+    geoblock|geoblock.list) echo "$LISTS_DIR/geoblock.list" ;;
     apps|apps.list) echo "$CONFDIR/apps.list" ;;
     home|home_wifi.list) echo "$HOME_FILE" ;;
     # Любой другой существующий список (rkn, youtube…): только простое имя
@@ -271,17 +272,17 @@ cmd_json_status() {
   cur_strat=$(get_current_strategy)
   local qdrop
   qdrop=$(awk -v q="$NFQUEUE_NUM" '$1 == q { print $6 + $7; f = 1 } END { if (!f) print 0 }' /proc/net/netfilter/nfnetlink_queue 2>/dev/null)
-  local appn cnt_user cnt_auto cnt_excl cnt_ipset cnt_ipset_excl cnt_apps cnt_rkn cnt_flowseal v
+  local appn cnt_user cnt_auto cnt_excl cnt_ipset cnt_ipset_excl cnt_apps cnt_rkn cnt_flowseal cnt_geo v
   appn=$(app_uid_count 2>/dev/null)
   set -- $(list_counts "$LISTS_DIR/user.list" "$LISTS_DIR/auto.list" "$LISTS_DIR/exclude.list" \
                       "$LISTS_DIR/ipset.list" "$LISTS_DIR/ipset_exclude.list" "$CONFDIR/apps.list")
   cnt_user="$1" cnt_auto="$2" cnt_excl="$3" cnt_ipset="$4" cnt_ipset_excl="$5" cnt_apps="$6"
-  set -- $(list_counts "$LISTS_DIR/rkn.list" "$LISTS_DIR/ipset_flowseal.list")
-  cnt_rkn="$1" cnt_flowseal="$2"
+  set -- $(list_counts "$LISTS_DIR/rkn.list" "$LISTS_DIR/ipset_flowseal.list" "$LISTS_DIR/geoblock.list")
+  cnt_rkn="$1" cnt_flowseal="$2" cnt_geo="$3"
   # нечисловое значение обваливает весь JSON и убивает WebUI, поэтому проверяем каждое поле
-  for v in appn cnt_user cnt_auto cnt_excl cnt_ipset cnt_ipset_excl cnt_apps cnt_rkn cnt_flowseal uptime upms qdrop \
+  for v in appn cnt_user cnt_auto cnt_excl cnt_ipset cnt_ipset_excl cnt_apps cnt_rkn cnt_flowseal cnt_geo uptime upms qdrop \
            PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC AUTOSTART WATCHDOG IPV6_ENABLED LOG_LEVEL NFQUEUE_NUM HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT \
-           DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL WL_PAUSE SMART_POOL; do
+           DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL WL_PAUSE SMART_POOL PUSH_FIX; do
     eval "case \"\${$v}\" in ''|*[!0-9]*) $v=0 ;; esac"
   done
 
@@ -298,8 +299,8 @@ cmd_json_status() {
 {"running":$run,"pid":"$pid","uptime":$uptime,"uptime_ms":$upms,"strategy":"$(json_str "$cur_strat")","version":"$(json_str "$ver")","mode":"$(json_str "$(current_mode)")",
 "pkt_limit_out":$PKT_LIMIT_OUT,"pkt_limit_in":$PKT_LIMIT_IN,"block_quic":$BLOCK_QUIC,"app_mode":"$(json_str "$APP_MODE")","autostart":$AUTOSTART,
 "ipv6":$IPV6_ENABLED,"log_level":$LOG_LEVEL,"qdrop":$qdrop,"queue":$NFQUEUE_NUM,"app_uids":$appn,
-"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":$DOH_BYPASS,"meta_quic":$META_QUIC_REJECT,"calls_bypass":$CALLS_BYPASS,"dns_smart":$DNS_SMART,"dns_geo":$DNS_GEO,"extra_rkn":$EXTRA_RKN,"extra_flowseal":$EXTRA_FLOWSEAL,"wl_pause":$WL_PAUSE,"smart_pool":$SMART_POOL,"dns_paused":"$dnspause","dns_home_pause":$([ -f "$DNS_HOME_FILE" ] && echo 1 || echo 0),"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")",
-"counts":{"user":$cnt_user,"auto":$cnt_auto,"exclude":$cnt_excl,"ipset":$cnt_ipset,"ipset_exclude":$cnt_ipset_excl,"apps":$cnt_apps,"rkn":$cnt_rkn,"flowseal":$cnt_flowseal}}
+"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":$DOH_BYPASS,"meta_quic":$META_QUIC_REJECT,"calls_bypass":$CALLS_BYPASS,"dns_smart":$DNS_SMART,"dns_geo":$DNS_GEO,"extra_rkn":$EXTRA_RKN,"extra_flowseal":$EXTRA_FLOWSEAL,"wl_pause":$WL_PAUSE,"smart_pool":$SMART_POOL,"push_fix":$PUSH_FIX,"dns_paused":"$dnspause","dns_home_pause":$([ -f "$DNS_HOME_FILE" ] && echo 1 || echo 0),"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")",
+"counts":{"user":$cnt_user,"auto":$cnt_auto,"exclude":$cnt_excl,"ipset":$cnt_ipset,"ipset_exclude":$cnt_ipset_excl,"apps":$cnt_apps,"rkn":$cnt_rkn,"flowseal":$cnt_flowseal,"geoblock":$cnt_geo}}
 JSON
 }
 
@@ -981,6 +982,28 @@ probe_attempt() { # <вид> <путь к утилите> <host[/путь]>  -> 
   esac
 }
 
+# Повторный запрос по тому же соединению (curl). ТСПУ замораживает часть
+# соединений после первого обмена: первый запрос отвечает, следующий по этому
+# соединению (так ходят приложения и браузер) висит до тайм-аута. Проверка
+# с новым соединением на каждую попытку этого не видит.
+# -> ok | stall | skip (первый запрос сам не прошёл или нет curl)
+probe_keepalive() { # <путь к curl> <host[/путь]>
+  local bin="$1" url="https://$2" out rc to="" rate="--rate 30/m"
+  command -v timeout >/dev/null 2>&1 && to="timeout 25"
+  while :; do
+    # пауза 2 с между запросами (--rate): приложение тоже спрашивает не сразу
+    out=$($to "$bin" -s -k -o /dev/null -o /dev/null $rate -m 8 --connect-timeout 6 -A 'Mozilla/5.0' \
+      -w '%{http_code} %{num_connects}\n' "$url" "$url" 2>/dev/null); rc=$?
+    # старый curl без --rate — без паузы
+    [ "$rc" = 2 ] && [ -n "$rate" ] && { rate=""; continue; }
+    break
+  done
+  printf '%s\n' "$out" | awk 'NR == 1 { first = $1 } NR == 2 { code = $1; nc = $2 } END {
+    if (first == "" || first == "000") print "skip"
+    else if (code == "000" && nc == "0") print "stall"
+    else print "ok" }'
+}
+
 cmd_net_info() {
   local ip="" loc="" isp="" asn="" iface="" gw="" dns1="" dns2=""
   local tool kind bin to=""
@@ -1264,7 +1287,7 @@ cmd_share() { # <file|text> <путь>
 # списка покрывает и поддомены), какие из них подключены к текущему запуску
 # nfqws2, попадает ли его IP в ipset-списки и открывается ли он через обход.
 # Строки (TAB): MODE <list|auto|all|custom> | LIST <файл> <роль> <запись>
-# | IP <адрес> | R <попытка> <ok мс|fail причина> | done
+# | IP <адрес> | R <попытка> <ok мс|fail причина> | K <ok|stall|skip> | done
 # Роли: host, exclude, auto — из аргументов запуска; ipset, ipset-exclude —
 # по IP; idle — список есть, но текущий запуск его не использует.
 domain_norm() {
@@ -1336,6 +1359,8 @@ cmd_domain_check() {
   trap 'exit 143' INT TERM
   for k in 1 2 3; do ( printf 'R\t%s\t%s\n' "$k" "$(probe_attempt "$kind" "$bin" "$d")" ) & done
   wait
+  # WebSocket Discord — не запрос-ответ, повторять нечего
+  [ "$kind" = curl ] && [ "$d" != "$PROBE_WS_HOST" ] && printf 'K\t%s\n' "$(probe_keepalive "$bin" "$d")"
   cleanup_probe_app_rule
   echo done
 }
@@ -2167,13 +2192,16 @@ case "$1" in
     # Проверяем саму запись: без этого упавший mv (полный диск, права, каталог
     # на месте файла) заканчивался `echo OK`, и правки пользователя молча
     # терялись — UI показывал успех.
-    { b64d "$3" | tr -d '\r' > "$f.tmp"; } && mv -f "$f.tmp" "$f" ||
+    # редактор присылает текст без перевода строки в конце — дописываем его
+    { b64d "$3" | tr -d '\r' > "$f.tmp"; } && ensure_eol "$f.tmp" && mv -f "$f.tmp" "$f" ||
       { rm -f "$f.tmp"; echo "Не удалось сохранить ${f##*/}" >&2; exit 1; }
     chmod 0644 "$f"
     # имя списка — короткое или с .list: list_file принимает оба
     case "$2" in
       apps|apps.list) cmd_apply_apps; exit $? ;;
       home|home_wifi.list) sh "$SERVICE" home_check >/dev/null 2>&1; echo OK; exit 0 ;;
+      # из списка сервисов с геоблоком собираются и правила DNS
+      geoblock|geoblock.list) dns_apply_now ;;
     esac
     reload_after_change; echo OK ;;
   add-domain)
@@ -2182,7 +2210,7 @@ case "$1" in
     ul="$LISTS_DIR/user.list"
     # echo >> склеил бы новый домен с последней строкой, если файл не заканчивается переводом:
     # портились обе записи, и проверка дедупликации ниже тоже переставала срабатывать.
-    if [ -s "$ul" ] && [ -n "$(tail -c 1 "$ul")" ]; then printf '\n' >> "$ul"; fi
+    ensure_eol "$ul"
     if ! grep -qxF -- "$d" "$ul" 2>/dev/null; then
       printf '%s\n' "$d" >> "$ul" || { echo "Не удалось записать ${ul##*/}" >&2; exit 1; }
     fi
@@ -2203,7 +2231,7 @@ case "$1" in
 
   set)
     case "$2" in
-      BLOCK_QUIC|AUTOSTART|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|VPN_PAUSE|ENABLE_HOTSPOT|DOH_BYPASS|META_QUIC_REJECT|CALLS_BYPASS|DNS_PUSH|DNS_SMART|DNS_GEO|EXTRA_RKN|EXTRA_FLOWSEAL|SMART_LEARN|WL_PAUSE|SMART_POOL) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
+      BLOCK_QUIC|AUTOSTART|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|VPN_PAUSE|ENABLE_HOTSPOT|DOH_BYPASS|META_QUIC_REJECT|CALLS_BYPASS|DNS_PUSH|DNS_SMART|DNS_GEO|EXTRA_RKN|EXTRA_FLOWSEAL|SMART_LEARN|WL_PAUSE|SMART_POOL|PUSH_FIX) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
       PKT_LIMIT_OUT|PKT_LIMIT_IN) case "$3" in [1-9]|1[0-5]) ;; *) echo "Допустимо 1..15" >&2; exit 1 ;; esac ;;
       APP_MODE) case "$3" in off|include|exclude) ;; *) echo "off|include|exclude" >&2; exit 1 ;; esac ;;
       *) echo "Параметр $2 нельзя менять этой командой" >&2; exit 1 ;;
@@ -2229,6 +2257,9 @@ case "$1" in
       AUTOSTART|SMART_LEARN) ;;
       # расширенный пул оркестратор подхватит сам, через несколько секунд
       SMART_POOL) load_conf >/dev/null 2>&1; smart_pool_sync ;;
+      # будильник пульса: включили — запускается, выключили — останавливается сразу
+      PUSH_FIX) if [ "$3" = 1 ]; then sh "$SERVICE" ensure_watchdog >/dev/null 2>&1
+        else p=$(cat "$PF_PIDFILE" 2>/dev/null); [ -n "$p" ] && kill "$p" 2>/dev/null; rm -f "$PF_PIDFILE"; fi ;;
       # DNS применяет сразу, служба обхода тут ни при чём
       DNS_PUSH|DNS_SMART) load_conf >/dev/null 2>&1; dns_apply_now ;;
       # включили снова — без ожидания 10 минут после неудачного запуска

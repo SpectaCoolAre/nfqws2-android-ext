@@ -24,7 +24,13 @@ printf 'WATCHDOG=0\nIPV6_ENABLED=0\n' >> "$CONFFILE"
 # ── start ─────────────────────────────────────────────────────────────────────
 section "start: the daemon comes up and the arguments are assembled"
 
+# auto.list, испорченный раньше (без перевода строки в конце), чинится до
+# запуска: иначе первый же выученный домен склеится с последней строкой
+printf 'learned.example.com' > "$CONFDIR/lists/auto.list"
 svc start
+assert_eq "learned.example.com" "$(cat "$CONFDIR/lists/auto.list")" "auto.list keeps its entries"
+[ -z "$(tail -c 1 "$CONFDIR/lists/auto.list")" ]
+assert_rc 0 $? "and ends with a newline before nfqws2 appends to it"
 assert_rc 0 "$svc_rc" "start succeeds with the stub daemon"
 assert_file "$CONFDIR/state/nfqws2.pid" "the pidfile is written"
 assert_file "$CONFDIR/state/last.args" "the argument file is written"
@@ -494,5 +500,36 @@ protect_process ""
 assert_rc 0 $? "protect_process handles empty pid gracefully"
 protect_process "99999999"
 assert_rc 0 $? "protect_process handles non-existent pid gracefully"
+
+# ── «Вылечить уведомления»: пульс Google только в мобильной сети ─────────────────
+section "push fix"
+printf '#!/bin/sh\necho "$*" >> "$MOCK_DIR/am.log"\n' > "$MOCKBIN/am"
+chmod 0755 "$MOCKBIN/am"; : > "$MOCK_DIR/am.log"
+NFQWS_SYSNET="$SANDBOX/sysnet"; export NFQWS_SYSNET
+mkdir -p "$NFQWS_SYSNET/wlan0"; echo down > "$NFQWS_SYSNET/wlan0/operstate"
+assert_match "$(cat "$CONFFILE" "$MODDIR/defaults/"*.conf 2>/dev/null | grep -c '^PUSH_FIX="*1')" "^0$" "off by default"
+svc push_beat
+assert_rc 3 "$svc_rc" "off: the alarm is told to stop"
+assert_eq "" "$(cat "$MOCK_DIR/am.log")" "and nothing is sent"
+ctl set PUSH_FIX 1
+svc push_beat
+assert_rc 0 "$svc_rc" "on"
+assert_contains "$(cat "$MOCK_DIR/am.log")" "-a com.google.android.intent.action.MCS_HEARTBEAT -p com.google.android.gms" "mobile network: Google Play Services is asked for a heartbeat"
+assert_contains "$(cat "$MOCK_DIR/am.log")" "GTALK_HEARTBEAT" "both heartbeat broadcasts"
+: > "$MOCK_DIR/am.log"; echo up > "$NFQWS_SYSNET/wlan0/operstate"
+svc push_beat
+assert_rc 0 "$svc_rc" "Wi-Fi: the alarm keeps running"
+assert_eq "" "$(cat "$MOCK_DIR/am.log")" "but no heartbeat (the router keeps the connection, waking costs battery)"
+p=$(cat "$PF_PIDFILE" 2>/dev/null)
+kill -0 "$p" 2>/dev/null
+assert_rc 0 $? "switching it on starts the alarm helper"
+ctl set PUSH_FIX 0
+sleep 0.3
+# завершённый процесс может постоять зомби, пока его не приберёт родитель
+st=$(sed -n 's/^[0-9]* ([^)]*) \(.\).*/\1/p' "/proc/$p/stat" 2>/dev/null)
+case "$st" in ''|Z|X) false ;; *) true ;; esac
+assert_rc 1 $? "switching it off stops it at once"
+assert_no_file "$PF_PIDFILE" "and its PID file is gone"
+rm -f "$MOCKBIN/am"; unset NFQWS_SYSNET
 
 harness_finish

@@ -11,7 +11,7 @@ fi
 # Наблюдатели: PID из файла может быть устаревшим (Magisk зовёт uninstall.sh при
 # следующей загрузке, когда номер уже мог достаться чужому процессу) — убиваем,
 # только если это и правда наш service.sh
-for pf in /data/adb/nfqws2/state/watchdog.pid /data/adb/nfqws2/state/netwatch.pid; do
+for pf in /data/adb/nfqws2/state/watchdog.pid /data/adb/nfqws2/state/netwatch.pid /data/adb/nfqws2/state/pushfix.pid; do
   p=$(cat "$pf" 2>/dev/null)
   [ -n "$p" ] && tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q 'service\.sh' && kill "$p" 2>/dev/null
 done

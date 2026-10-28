@@ -300,7 +300,8 @@ const DEV_SW = [
   ['META_QUIC_REJECT', 'Отказ QUIC для Instagram', 'meta_quic'],
   ['CALLS_BYPASS', 'Обход звонков (не тестировалось)', 'calls_bypass'],
   ['WL_PAUSE', 'Отключать при белых списках', 'wl_pause'],
-  ['SMART_POOL', 'Расширенный пул умного режима', 'smart_pool']
+  ['SMART_POOL', 'Расширенный пул умного режима', 'smart_pool'],
+  ['PUSH_FIX', 'Вылечить уведомления (пульс Google в мобильной сети)', 'push_fix']
 ];
 /* Переключатели разработчика, доступные в этой сборке */
 const devSwitches = () => DEV_SW;

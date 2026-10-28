@@ -181,6 +181,18 @@ two.example.com')"
 assert_rc 0 "$ctl_rc" "save-list-b64 works"
 assert_eq "2" "$(list_count "$CONFDIR/lists/user.list")" "the list is replaced"
 
+# редактор присылает текст без перевода строки в конце; nfqws2 дописывает
+# в auto.list «домен\n» — без перевода в конце домены склеивались
+ctl save-list-b64 auto "$(b64 'one.example.com
+two.example.com')"
+assert_rc 0 "$ctl_rc" "auto.list is saved from the editor"
+printf '%s\n' three.example.com >> "$CONFDIR/lists/auto.list"   # как дописывает nfqws2
+assert_eq "one.example.com
+two.example.com
+three.example.com" "$(cat "$CONFDIR/lists/auto.list")" "a domain nfqws2 appends after an edit gets its own line"
+ctl save-list-b64 auto "$(b64 '')"
+assert_eq "0" "$(wc -c < "$CONFDIR/lists/auto.list" | tr -d ' ')" "an emptied list stays empty, without a stray blank line"
+
 ctl get-list nosuchlist
 assert_rc 1 "$ctl_rc" "an unknown list name is rejected"
 
@@ -536,6 +548,24 @@ ctl domain-check rich.example
 assert_match "$ctl_out" "R	[123]	ok" "a big page that only mentions blocking is the site itself"
 assert_eq "" "$(ls "$STATE_DIR"/probe.body.* 2>/dev/null)" "page bodies are removed after the attempt"
 
+# Повторный запрос по тому же соединению: curl с двумя адресами, по строке
+# «код соединений» на каждый. Второй без ответа по старому соединению — заморожено
+cat > "$MOCKBIN/curl" <<'X'
+#!/bin/sh
+n=0; for a; do case "$a" in https://*) n=$((n + 1)) ;; esac; done
+[ "$n" = 2 ] || { o=""; for a; do [ "$p" = "-o" ] && o="$a"; p="$a"; done; printf 'ok' > "$o"; exit 0; }
+case "$a" in *frozen.example*) printf '200 1\n000 0\n'; exit 28 ;;
+  *down.example*) printf '000 0\n000 0\n'; exit 28 ;;
+  *) printf '200 1\n200 0\n' ;; esac
+X
+chmod 0755 "$MOCKBIN/curl"
+ctl domain-check fine.example
+assert_match "$ctl_out" "K	ok" "the second request on the same connection is answered: ok"
+ctl domain-check frozen.example
+assert_match "$ctl_out" "K	stall" "the first is answered, the second on the same connection is not: frozen after the first exchange"
+ctl domain-check down.example
+assert_match "$ctl_out" "K	skip" "the first request itself failed: nothing to say about the second"
+
 # Discord: WebSocket gateway — удача только при ответе 101 (curl после него
 # ждёт данных до тайм-аута и выходит с кодом 28)
 cat > "$MOCKBIN/curl" <<'X'
@@ -551,6 +581,7 @@ echo 101 > "$MOCK_DIR/ws.code"; : > "$MOCK_DIR/ws.log"
 ctl domain-check gateway.discord.gg
 assert_match "$ctl_out" "R	[123]	ok" "Discord gateway answers 101 to a WebSocket upgrade: works (curl's timeout after it does not matter)"
 assert_eq "" "$(cat "$MOCK_DIR/ws.log")" "it is asked for WebSocket"
+assert_no_match "$ctl_out" "K	" "and no repeat request: WebSocket is not request-response"
 echo 403 > "$MOCK_DIR/ws.code"
 ctl domain-check gateway.discord.gg
 assert_match "$ctl_out" "R	[123]	fail ws_blocked" "the server answered but WebSocket did not go through: blocked"
