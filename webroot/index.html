@@ -314,7 +314,7 @@
       <input type="checkbox" class="switch" role="switch" id="dns-toggle" aria-label="DNS по профилям" data-ta="aria-label"
              onchange="setDnsEnabled(this.checked)">
     </label>
-    <div class="helper" data-t>Как в Keenetic: запросы к доменам профиля и их поддоменам идут на его DNS-серверы (DoH, DoT, DoQ или обычные), остальные — на DNS по умолчанию. Работает независимо от службы обхода: остановка или пауза его не выключают.</div>
+    <div class="helper" data-t>Домены профилей — на их серверы, остальное — на DNS по умолчанию. Работает и при остановленном обходе.</div>
     <div id="dns-warn" class="stack"></div>
     <div class="seg-mode" id="dns-mode-seg" role="radiogroup" aria-label="Режим работы DNS" data-ta="aria-label">
       <button type="button" class="seg state" role="radio" data-mode="profiles" onclick="setDnsMode('profiles')">
@@ -324,6 +324,7 @@
         <svg aria-hidden="true" class="icon s18 seg-check"><use href="#i-check"/></svg><span data-t>Умный режим</span>
       </button>
     </div>
+    <div class="list" id="dns-general"></div>
     <div id="dns-smart-sec" class="stack">
       <div class="list" id="dns-geo"></div>
       <div class="list" id="dns-smart"></div>
@@ -332,13 +333,10 @@
     </div>
     <div class="pcol">
     <div id="dns-body" class="stack">
-      <div class="list" id="dns-general"></div>
-      <div class="subhead-row">
-        <h2 class="subhead" data-t>Профили</h2>
-        <span class="helper" id="dns-count"></span>
-      </div>
+      <!-- Группа «Профили»: первая строка списка раскрывает его (так же, как
+           группа «Обход геоблока» в умном режиме) -->
       <div class="list" id="dns-profiles"></div>
-      <div class="row">
+      <div class="row" id="dns-addrow">
         <button class="btn text with-icon state" id="dns-add" aria-haspopup="menu" onclick="addDnsProfile(this)">
           <svg aria-hidden="true" class="icon s18"><use href="#i-add"/></svg><span data-t>Добавить профиль</span>
         </button>

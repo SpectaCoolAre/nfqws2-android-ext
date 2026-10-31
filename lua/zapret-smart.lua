@@ -108,6 +108,7 @@ local STUCK_RETRANS = 4     -- столько неудачных переотп�
 local FROZEN_RTX = 3        -- столько переотправок одного и того же сегмента подряд после ответа сервера — соединение заморожено
 local FROZEN_IN = 12        -- входящих пакетов: дальше их может не быть видно (лимит очереди), и счёт нечем обнулять
 local NET_STUCK_IPS = 3     -- застряло у стольких разных серверов разом — это сеть, а не DPI
+local SILENT_SEC = 4        -- сек: ClientHello дошёл (переотправок нет), а сервер молчит — DPI съел ответ
 local APP_UID = 10000       -- наблюдатель — только за приложениями
 local NODPI_VARIANTS = 4    -- ошибки хотя бы на стольких вариантах (и на половине набора), ни одной удачи — не DPI
 local NODPI_TIME = 6 * 3600
@@ -121,6 +122,17 @@ local MUT_MAX = 32          -- подстроек на набор вариант
 local MUT_DEPTH = 3         -- изменённых параметров в одной подстройке, не больше
 local MUT_EVERY = 30        -- сек: новая подстройка в наборе — не чаще
 local TUNE_GAP = 600        -- сек: подстраивать вариант одного сайта — не чаще
+-- Медленное соединение: сервер отвечает, но данные идут еле-еле (замедление
+-- ТСПУ, как у raw.githubusercontent.com). Скорость — по продвижению данных
+-- между пакетами сервера, медиана: пауза сервера перед ответом — одна, а
+-- замедление растягивает каждый пакет. Видно только начало соединения (лимит
+-- очереди — ~20 КБ), этого хватает. Медленная сама по себе сеть — не
+-- замедление: сравниваем с обычной скоростью в этой сети
+local SLOW_N = 6            -- столько интервалов между пакетами сервера, чтобы судить
+local SLOW_BYTES = 12000    -- и столько байт ответа
+local SLOW_BPS = 32768      -- байт/с: медленнее — похоже на замедление,
+local SLOW_RATIO = 4        --   если ещё и во столько раз медленнее обычного для сети
+local SLOW_BASE_N = 5       -- обычная скорость сети — после стольких соединений
 
 -- Общие зоны: сайт в них — на уровень глубже
 local SLD2 = { co = 1, com = 1, net = 1, org = 1, gov = 1, edu = 1, ac = 1, ["or"] = 1, ne = 1, go = 1,
@@ -542,6 +554,7 @@ local function check_net()
 	if SM.net then save() end
 	local prev = SM.net
 	SM.net = net
+	SM.rate, SM.raten = nil, 0   -- обычная скорость — у каждой сети своя
 	if load_net(net) then
 		DLOG("smart: network '" .. net .. "': loaded")
 		SJ("сеть " .. net .. ": выученное загружено")
@@ -639,6 +652,37 @@ local function win_count(r)
 	local e, o = 0, 0
 	for _, x in ipairs(r.win or {}) do if x.v == 1 then o = o + (x.w or 1) else e = e + 1 end end
 	return e, o
+end
+
+-- время с долями секунды (в nfqws2 — clock_getfloattime)
+local function ftime() return clock_getfloattime and clock_getfloattime() or os.time() end
+local function median(a)
+	local s = {}
+	for i = 1, #a do s[i] = a[i] end
+	table.sort(s)
+	return s[math.floor((#s + 1) / 2)]
+end
+-- Продвижение ответа сервера: копит скорости между пакетами; когда их
+-- достаточно — вердикт: nil (ещё рано или не медленно) или скорость в байт/с
+local function slow_sample(cs, p)
+	local ft = ftime()
+	if cs.lt and p > (cs.lpos or 0) then
+		local dt = ft - cs.lt
+		if dt > 0 then
+			cs.rs = cs.rs or {}
+			cs.rs[#cs.rs + 1] = (p - (cs.lpos or 0)) / dt
+		end
+	end
+	if p > (cs.lpos or 0) then cs.lt, cs.lpos = ft, p end
+	if cs.slowdone or not cs.rs or #cs.rs < SLOW_N or p < SLOW_BYTES then return nil end
+	cs.slowdone = true
+	local m = median(cs.rs)
+	-- обычная скорость сети: средняя (в логарифмах) по соединениям
+	local base = SM.rate
+	SM.raten = (SM.raten or 0) + 1
+	SM.rate = base and math.exp(0.8 * math.log(base) + 0.2 * math.log(math.max(m, 1))) or m
+	if base and SM.raten > SLOW_BASE_N and m < SLOW_BPS and m * SLOW_RATIO < base then return m, base end
+	return nil
 end
 
 local function on_ok(slot, r, v, t, c)
@@ -934,6 +978,37 @@ function smart_watch()
 				end
 			end
 		end
+		-- Молчание после ClientHello: соединение живо и не застряло (переотправок
+		-- нет — сервер всё принял), а от сервера ни байта: ни в пакетах, ни в
+		-- подтверждениях телефона. Так ТСПУ глушит ответ сервера; приложение ждёт
+		-- свой тайм-аут (браузер — до 30 с), видео стоит. Обрываем — оно сразу
+		-- откроет новое, уже на другом варианте. Пакеты соединения nfqws2 видит
+		-- не все (лимит очереди): перестал видеть хоть в одну сторону — не судим
+		local silent = {}
+		for lp, c in pairs(SM.conns) do
+			if c.cht and alive[lp] == c.ip and not stuck[lp] and not c.done and not c.ok
+				and not c.srv and c.maxin == 0 and (c.nin or 0) < FROZEN_IN and (c.nout or 0) < FROZEN_IN
+				and t - c.cht >= SILENT_SEC then
+				silent[#silent + 1] = { c = c, ip = c.ip, lp = lp }
+			end
+		end
+		if #silent > 0 then
+			local sips, sn = {}, 0
+			for _, h in ipairs(silent) do if not sips[h.ip] then sips[h.ip] = true; sn = sn + 1 end end
+			local kill = {}
+			for _, h in ipairs(silent) do
+				local c, r = h.c, SM.db[h.c.key]
+				c.done, c.failed = true, true
+				-- молчат разом несколько серверов — это сеть, а не DPI: не считаем
+				if r and sn < NET_STUCK_IPS and not (r.nodpi and r.nodpi > t) then
+					DLOG("smart: " .. c.key .. ": connection :" .. h.lp .. " silent after ClientHello on variant " .. c.v)
+					SJ(c.key .. ": сервер принял ClientHello и молчит — ошибка " .. vname(c.slot, c.v) .. ", обрываем")
+					on_err(c.slot, c.key, r, c.v, c.n, t, c.pass, false, c)
+				end
+				kill[#kill + 1] = kill_line(h.ip, h.lp)
+			end
+			kill_conns(kill)
+		end
 		if #hits == 0 then return end
 		-- застряло разом у нескольких сайтов или у соединений к нескольким
 		-- серверам (у любых приложений) — это связь, а не DPI
@@ -1060,10 +1135,21 @@ function smart(ctx, desync)
 	if cs and not cs.done then
 		local okin = tonumber(desync.arg.okin) or 4096
 		local tcp = desync.dis.tcp
+		local slowbps, slowbase
 		if tcp and not desync.outgoing and #desync.dis.payload > 0 then
 			local p = pos_get(desync, 'p')
 			if p > cs.maxin then cs.maxin = p end
 			cs.tin = t
+			cs.srv = true
+			slowbps, slowbase = slow_sample(cs, p)
+		end
+		if slowbps then
+			DLOG("smart: " .. key .. ": slow answer, " .. math.floor(slowbps) .. " B/s vs " .. math.floor(slowbase) .. " B/s usual here")
+			if not (r.nodpi and r.nodpi > t) then
+				SJ(key .. ": медленно — " .. math.floor(slowbps / 1024 + 0.5) .. " КБ/с при обычных для сети " ..
+					math.floor(slowbase / 1024 + 0.5) .. " КБ/с — ошибка " .. vname(slot, cs.v))
+				on_err(slot, key, r, cs.v, n, t, pass, true, cs)
+			end
 		end
 		local fin = tcp and bitand(tcp.th_flags, TH_FIN) ~= 0
 		local rst = tcp and bitand(tcp.th_flags, TH_RST) ~= 0
@@ -1074,7 +1160,20 @@ function smart(ctx, desync)
 		if tcp and not fin and not rst then
 			if desync.outgoing then
 				local len = #desync.dis.payload
+				-- ответ сервера видно и по подтверждениям телефона: пакеты сервера
+				-- nfqws2 может уже не видеть (лимит очереди съели его пустые ACK),
+				-- а телефон их подтверждает. ack0 — подтверждение до ответа (ISN+1)
+				cs.nout = (cs.nout or 0) + 1
+				local a = tcp.th_ack
+				if a then
+					if not cs.ack0 then cs.ack0 = a
+					else
+						local d = (a - cs.ack0) % 4294967296
+						if d > 0 and d < 2147483648 then cs.srv = true end
+					end
+				end
 				if len > 0 then
+					if not cs.cht and desync.l7payload == "tls_client_hello" then cs.cht = t end
 					local s = pos_get(desync, 's')
 					if (cs.ok or cs.maxin >= ANSWER) and cs.outmax and s < cs.outmax
 						and cs.maxin < 18000 and (cs.nin or 0) < FROZEN_IN then

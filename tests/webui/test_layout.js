@@ -905,6 +905,22 @@ const VIEWPORTS = [
     await page.evaluate(() => openSlideEditor('list', 'exclude')); await page.waitForTimeout(700);
     eq(true, await page.isHidden('#find-bar'), 'another list opened later has no leftover search');
     await page.evaluate(() => closeSlideEditor(true)); await page.waitForTimeout(500);
+    // «Вероятная причина»: попытки через обход, без него, скорость и DNS
+    const dcRun = async out => { await page.evaluate(o => { window.__dc = o; }, out); await page.click('#dc-go'); await page.waitForTimeout(400); return page.textContent('#dc-res'); };
+    res = await dcRun('MODE\tall\nIP\t1.2.3.4\nR\t1\tfail tls_rst\nR\t2\tfail tls_rst\nR\t3\tfail tls_rst\nN\tok 90\ndone');
+    truthy(res.includes('Вероятная причина') && res.includes('Обход мешает'), 'fails through the bypass but opens without it: the bypass is to blame');
+    res = await dcRun('MODE\tall\nR\t1\tfail drop\nR\t2\tfail drop\nR\t3\tfail drop\nN\tfail drop\ndone');
+    truthy(res.includes('ни через обход, ни без него'), 'fails both ways: the variant does not get past the block, or the site is down');
+    res = await dcRun('MODE\tall\nR\t1\tok 200\nR\t2\tok 210\nR\t3\tok 190\nK\tok\nN\tfail tls_rst\nS\t900000 4096\nD\tdefault\topportunistic\ndone');
+    truthy(res.includes('очень медленно (4 КБ/с)'), 'opens but crawls: looks like throttling');
+    truthy(res.includes('4 КБ/с — медленно'), 'with the measured speed');
+    truthy(res.includes('«Частный DNS»') && res.includes('автоматически'), 'Private DNS on «automatic» is pointed out');
+    truthy(res.includes('через DNS по умолчанию'), 'and the route of the module DNS is shown');
+    res = await dcRun('MODE\tall\nR\t1\tok 200\nR\t2\tok 210\nR\t3\tok 190\nN\tok 80\nS\t2000 900000\nD\tgeo\toff\ndone');
+    truthy(res.includes('не заблокирован'), 'opens both ways: not blocked at all');
+    truthy(res.includes('слишком маленький для замера'), 'a tiny answer is not taken for a speed');
+    truthy(!res.includes('«Частный DNS»'), 'Private DNS off: no warning');
+    truthy(res.includes('с обходом геоблока'), 'a geo-blocked service goes to the bypass DNS');
     await page.click('#test-tabs .seg[data-tab="all"]');
     eq(true, await page.isVisible('#tb'), 'back on All the batch run button returns');
     eq(false, await page.isVisible('#test-sec-domain'), 'and the domain form hides');

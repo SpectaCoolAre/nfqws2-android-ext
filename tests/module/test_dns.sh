@@ -30,6 +30,9 @@ EOF
 chmod 0755 "$MOCKBIN/dumpsys" "$MOCKBIN/settings" "$MODDIR/bin/dnsproxy"
 export STUB_PRIVATE STUB_PRIVATE_HOST
 load_common
+# проверка DNS обхода геоблока в фоне здесь не запускается: её раздел зовёт
+# dns_geo_scan сам (иначе фоновая гонялась бы с заглушками других разделов)
+dns_geo_scan_bg() { :; }
 conf_reset
 printf 'WATCHDOG=0\nIPV6_ENABLED=0\n' >> "$CONFFILE"
 
@@ -158,11 +161,13 @@ rm -f "$DNS_PROFILES_DIR/big.conf"
 section "smart DNS: video and CDN get the fastest address"
 dns_build
 up=$(cat "$DNS_RUN_DIR/upstreams.txt")
-assert_match "$up" "\[/googlevideo\.com/ytimg\.com/[^]]*\]127\.0\.0\.1:$DNS_CDN_PORT" "CDN domains go to the CDN dnsproxy"
+assert_match "$up" "\[/ytimg\.com/ggpht\.com/[^]]*\]127\.0\.0\.1:$DNS_CDN_PORT" "CDN domains go to the CDN dnsproxy"
+assert_not_contains "$(grep "127.0.0.1:$DNS_CDN_PORT" "$DNS_RUN_DIR/upstreams.txt")" "googlevideo.com" "but not YouTube video: its names already pick the node, waiting for every server only delays it"
 assert_not_contains "$(grep "127.0.0.1:$DNS_CDN_PORT" "$DNS_RUN_DIR/upstreams.txt")" "/cdninstagram.com/" "a CDN domain of an enabled profile keeps the profile's route"
 cargs=$(cat "$DNS_RUN_DIR/cdn.args")
 assert_contains "$cargs" "--upstream-mode=fastest_addr" "the CDN dnsproxy gives the fastest address"
 assert_contains "$cargs" "--cache-optimistic" "with an optimistic cache"
+assert_contains "$cargs" "--timeout=1s" "and a silent server holds an answer back for a second at most"
 assert_contains "$cargs" "$DNS_CDN_PORT" "on its own port"
 cup=$(cat "$DNS_RUN_DIR/cdn.upstreams.txt")
 assert_contains "$cup" "192.168.1.1:53" "it asks the network DNS (the ISP has nearby caches)"
@@ -188,6 +193,7 @@ assert_contains "$(cat "$MOCK_DIR/dnsproxy.args")" "$DNS_RUN_DIR/upstreams.txt" 
 # фильтр журнала dnsproxy (читает FIFO) защищён так же, как сам dnsproxy:
 # убьёт его система — dnsproxy завершится по SIGPIPE на первой же строке
 : > "$MOCK_DIR/protected"
+echo 0 > "$DNS_RUN_DIR/started_at"   # иначе свежий dnsproxy не перезапускается
 ( protect_process() { echo "$1" >> "$MOCK_DIR/protected"; }; dns_start "тест" force >/dev/null 2>&1 )
 flt_pid=""
 for f in /proc/[0-9]*/fd/0; do
@@ -388,6 +394,9 @@ assert_rc 0 $? "and runs a new dnsproxy"
 assert_contains "$(ipt_rules OUTPUT nat)" "-j nfqws_dns" "with the interception back in place"
 pid=$(cat "$DNS_PIDFILE")
 dns_start "смена сети" force
+assert_eq "$pid" "$(cat "$DNS_PIDFILE")" "a dnsproxy started seconds ago with this config is not restarted for a network change"
+echo 0 > "$DNS_RUN_DIR/started_at"   # запущен давно
+dns_start "смена сети" force
 [ -f "$DNS_PIDFILE" ] && [ "$(cat "$DNS_PIDFILE")" != "$pid" ]
 assert_rc 0 $? "a network or VPN change restarts dnsproxy even with the same config"
 assert_contains "$(ipt_rules OUTPUT nat)" "-j nfqws_dns" "keeping the interception, so nothing leaks to the carrier DNS meanwhile"
@@ -503,11 +512,16 @@ printf '# сервисы с геоблоком\nchatgpt.com\nClaude.ai\ninstagra
 : > "$DNS_RUN_DIR/geo.args"; : > "$DNS_RUN_DIR/main_port"
 dns_build
 geo=$(grep '/chatgpt.com/' "$DNS_RUN_DIR/upstreams.txt")
-assert_contains "$geo" "[/chatgpt.com/claude.ai/]https://eu.geohide.ru/dns-query" "list domains go to GeoHide's DoH"
-assert_contains "$geo" "]https://dns.comss.one/dns-query" "to Comss"
-assert_contains "$geo" "]https://router.comss.one/dns-query" "both of its DoH servers"
-assert_contains "$geo" "]https://dns.malw.link/dns-query" "and to malw — all at once, the first answer wins"
-assert_eq "4" "$(printf '%s\n' "$geo" | grep -c .)" "only DoH: plain DNS to them is easy for the ISP to spoil"
+assert_contains "$geo" "[/chatgpt.com/claude.ai/]https://dns.comss.one/dns-query" "before the first check of the bypass DNS the list goes to Comss DoH — the same server as its Private DNS"
+assert_eq "1" "$(printf '%s\n' "$geo" | grep -c .)" "only it: the first answer of several led Claude to a proxy that does not work here"
+assert_eq "Comss — до первой проверки" "$(dns_geo_label)" "the DNS log names the bypass DNS"
+# Profile overlap: an enabled profile of its own with domains of the list
+# takes them away from the bypass — the screen warns
+assert_contains "$(dns_geo_overlap)" "insta 1" "an enabled profile with a domain of the list is found, with how many it takes"
+assert_contains "$(dns_state)" "geo_overlap_insta=1" "and the screen is told"
+assert_eq "" "$(DNS_GEO=0 dns_geo_overlap)" "profiles mode: there is no bypass to take from"
+dns_build
+geo=$(grep '/chatgpt.com/' "$DNS_RUN_DIR/upstreams.txt")
 assert_eq "1" "$(printf '%s\n' "$geo" | head -n 1 | grep -o '/chatgpt.com/' | grep -c .)" "a domain listed twice — once"
 assert_not_contains "$geo" "instagram.com" "an enabled profile's domain keeps the profile's route"
 assert_not_contains "$geo" "vk.com" "Russian services never go around"
@@ -515,13 +529,23 @@ assert_not_contains "$geo" "mail.ru" "nor anything in .ru"
 assert_not_contains "$geo" "googlevideo.com" "nor video and CDN"
 assert_not_contains "$geo" "mtalk.google.com" "nor Google push notifications"
 assert_contains "$(head -n 1 "$DNS_RUN_DIR/upstreams.txt")" "192.168.1.1:53" "everything else — the network DNS"
+# проверка домена говорит, куда DNS модуля его отправит
+sleep 30 & fake=$!; old_pid=$(cat "$DNS_PIDFILE" 2>/dev/null); echo "$fake" > "$DNS_PIDFILE"
+assert_eq "geo" "$(dns_route chat.chatgpt.com)" "domain check: a listed service (and its subdomains) goes to the bypass DNS"
+assert_eq "cdn" "$(dns_route i.ytimg.com)" "YouTube images go to the smart CDN DNS"
+assert_eq "default" "$(dns_route rr1---sn-x.googlevideo.com)" "YouTube video — to the network DNS"
+assert_eq "default" "$(dns_route example.org)" "anything else to the default DNS"
+assert_match "$(dns_route instagram.com)" "^rule " "a profile's domain to the profile's server"
+kill "$fake" 2>/dev/null; wait "$fake" 2>/dev/null
+assert_eq "off" "$(dns_route chatgpt.com)" "and «off» while dnsproxy is not running"
+[ -n "$old_pid" ] && echo "$old_pid" > "$DNS_PIDFILE"
 assert_eq "$DNS_PORT" "$(sed -n '/^-p$/{n;p;}' "$DNS_RUN_DIR/args")" "dnsproxy itself takes the interception port: nothing in front of it"
 assert_no_file "$DNS_RUN_DIR/geo.args" "leftovers of the geodns arbiter are removed"
 assert_no_file "$DNS_RUN_DIR/main_port" "all of them"
 i=0; while [ $i -lt 250 ]; do echo "g$i.example"; i=$((i + 1)); done > "$DNS_GEO_LIST"
 dns_build
-assert_eq "4" "$(grep -c '/g1.example/' "$DNS_RUN_DIR/upstreams.txt")" "a long list — lines of 100 domains, one per server"
-assert_eq "12" "$(grep -c 'example/\]https://' "$DNS_RUN_DIR/upstreams.txt")" "three lines per server"
+assert_eq "1" "$(grep -c '/g1.example/' "$DNS_RUN_DIR/upstreams.txt")" "a long list — lines of 100 domains, one per server"
+assert_eq "3" "$(grep -c 'example/\]https://' "$DNS_RUN_DIR/upstreams.txt")" "three lines per server"
 DNS_GEO=0 dns_build
 assert_not_contains "$(cat "$DNS_RUN_DIR/upstreams.txt")" "g1.example" "profiles mode: the list is not used"
 : > "$DNS_GEO_LIST"
@@ -555,7 +579,7 @@ svc start
 ctl dns-state
 assert_contains "$ctl_out" "geo=on" "dns-state reports the bypass"
 assert_contains "$ctl_out" "geo_domains=$(list_count "$DNS_GEO_LIST")" "with the size of the list"
-assert_match "$(grep '/my-service.example/' "$DNS_RUN_DIR/running.upstreams")" "geohide" "the running dnsproxy has the rules"
+assert_match "$(grep '/my-service.example/' "$DNS_RUN_DIR/running.upstreams")" "comss" "the running dnsproxy has the rules"
 ctl dns-mode profiles
 assert_rc 0 "$ctl_rc" "the DNS mode switches to profiles"
 assert_match "$(cat "$CONFFILE")" "^DNS_GEO=\"0\"$" "geo-block bypass off"
@@ -570,6 +594,78 @@ ctl dns-mode fast
 assert_rc 1 "$ctl_rc" "an unknown mode is refused"
 svc dns_stop
 rm -f "$DNS_ENABLED_FILE"
+
+section "geo-block bypass: the module picks the bypass DNS itself"
+# Проверка — nfqws2-helper -geoscan (helper/geoscan.go); здесь поддельный
+# помощник печатает её итог: сервер ok|fail мс прокси образцов отметки
+cat > "$HELPER_BIN" <<'EOF'
+#!/bin/sh
+[ "$1" = -geoscan ] || exit 2
+echo "$@" > "$MOCK_DIR/geoscan.args"
+printf 'slow.example\tok\t300\t7\t7\tchatgpt.com=p\n'
+printf 'fast.example\tok\t40\t7\t7\tchatgpt.com=p\n'
+printf 'ai.example\tok\t20\t3\t7\tchatgpt.com=p,gamea.clashofclans.com=s\n'
+printf 'mid.example\tok\t90\t7\t7\tchatgpt.com=p\thttps\n'
+printf 'next.example\tok\t120\t7\t7\tchatgpt.com=p\n'
+printf 'dead.example\tfail\t0\t0\t7\tchatgpt.com=f\ttimeout\n'
+EOF
+chmod 0755 "$HELPER_BIN"
+printf 'chatgpt.com\nclaude.ai\n' > "$DNS_GEO_LIST"
+rm -rf "$DNS_GEO_SCAN_DIR"
+assert_eq "" "$(dns_geo_pick)" "no check yet — no pool"
+dns_geo_scan_due
+assert_rc 0 $? "so a check is due"
+dns_apply_now() { echo applied >> "$MOCK_DIR/geo.applied"; }
+dns_geo_scan
+assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "-boot 192.168.1.1:53" "reference answers and server addresses come from the network DNS"
+assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "dns.zapret.moe" "all the DoT servers of the list are checked"
+assert_eq "fast.example mid.example next.example" "$(dns_geo_pick | tr '\n' ' ' | sed 's/ $//')" "the pool: the three fastest of those that bypass every sample"
+assert_not_contains "$(dns_geo_pick)" "ai.example" "a faster server that serves only part of the services stays out (its real address would lead a game into the geo-block)"
+assert_eq "applied" "$(cat "$MOCK_DIR/geo.applied")" "a new pool is applied at once"
+ctl dns-geo-scan
+assert_rc 3 "$ctl_rc" "a manual check right after one is refused (calls to the servers only make things worse)"
+assert_contains "$ctl_out" "Слишком часто — повторить можно через 5 мин" "the screen says so"
+date +%s > "$DNS_DIR/geo_updated"
+ctl dns-geo-update
+assert_rc 3 "$ctl_rc" "updating the list again so soon is refused too"
+assert_contains "$ctl_out" "через 30 мин" "for half an hour"
+rm -f "$DNS_DIR/geo_updated"
+dns_geo_scan_due
+assert_rc 1 $? "after a check nothing is due for hours"
+dns_build
+geo=$(grep '/chatgpt.com/' "$DNS_RUN_DIR/upstreams.txt")
+assert_contains "$geo" "]tls://fast.example" "the list goes to the pool over DoT"
+assert_eq "3" "$(printf '%s\n' "$geo" | grep -c .)" "to the three of it"
+assert_contains "$geo" "]https://mid.example/dns-query" "a server that got through only over DoH on this network goes there over DoH"
+assert_eq "fast.example, mid.example, next.example" "$(dns_geo_label)" "the log and the screen name the pool"
+rm -f "$MOCK_DIR/geo.applied"; dns_geo_scan
+assert_no_file "$MOCK_DIR/geo.applied" "the same pool again — nothing to apply"
+sed -i '1s/^#time=[0-9]*/#time=1/' "$(dns_geo_scan_file)"
+dns_geo_scan_due
+assert_rc 0 $? "an old check is due again"
+printf '#time=%s boot=x\nfast.example\tfail\t0\t0\t7\tchatgpt.com=f\n' "$(date +%s)" > "$(dns_geo_scan_file)"
+assert_eq "" "$(dns_geo_pick)" "no server answered (the network was not up yet)"
+assert_contains "$(dns_geo_servers)" "https://dns.comss.one/dns-query" "Comss for now"
+dns_geo_scan_due
+assert_rc 1 $? "and a new check — not at once"
+sed -i '1s/^#time=[0-9]*/#time='"$(( $(date +%s) - 700 ))"'/' "$(dns_geo_scan_file)"
+dns_geo_scan_due
+assert_rc 0 $? "but ten minutes later"
+DNS_GEO=0 dns_geo_scan_due
+assert_rc 1 $? "profiles mode needs no check"
+dns_geo_scan >/dev/null
+unset -f dns_apply_now
+# Профили обхода геоблока в умном режиме: свои правила не ставят, их домены —
+# в обход геоблока (иначе включённый GeoHide уводил Claude на свои прокси)
+printf 'NAME=GeoHide\nENABLED=1\nSERVER=https://eu.geohide.ru/dns-query\nDOMAIN=claude.ai\nDOMAIN=only-geohide.example\n' > "$DNS_PROFILES_DIR/geohide.conf"
+dns_build
+up=$(cat "$DNS_RUN_DIR/upstreams.txt")
+assert_not_contains "$up" "eu.geohide.ru" "smart mode: the enabled GeoHide profile sets no rules of its own"
+assert_contains "$(grep '/only-geohide.example/' "$DNS_RUN_DIR/upstreams.txt")" "]tls://fast.example" "its domains go to the bypass pool"
+DNS_GEO=0 dns_build
+assert_contains "$(cat "$DNS_RUN_DIR/upstreams.txt")" "[/claude.ai/only-geohide.example/]https://eu.geohide.ru/dns-query" "profiles mode: it is a profile like any other"
+rm -f "$DNS_PROFILES_DIR/geohide.conf" "$HELPER_BIN" "$MOCK_DIR/geoscan.args"
+rm -rf "$DNS_GEO_SCAN_DIR"
 
 section "nfqws2-ctl dns-*"
 

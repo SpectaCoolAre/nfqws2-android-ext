@@ -390,3 +390,8 @@ html[data-containers="true"] .settings-grid .list > .list-item:active {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mode-card-sub { font-size: var(--ts-body-medium); line-height: var(--lh-body-medium); opacity: .85;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Группы экрана DNS («Профили», «Обход геоблока»): стрелка заголовка
+   поворачивается вниз, когда группа раскрыта */
+.dns-group .li-trail svg { transition: transform var(--dur-short) var(--standard); }
+.dns-group[aria-expanded="true"] .li-trail svg { transform: rotate(90deg); }

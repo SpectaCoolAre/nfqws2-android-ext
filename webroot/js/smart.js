@@ -27,7 +27,6 @@ function smartLearnState(m){
   return {value: t('Идёт'), sub: t('открыто сайтов: {0}', (m.bg || {}).n || 0), on: true};
 }
 
-async function smartInit(){ await smartLoad(); }
 async function smartLoad(){
   const r = await ctlx(smartView ? ['smart-status', smartView] : ['smart-status']);
   try { SMS = JSON.parse(r.out); } catch(e){ SMS = null; }
@@ -255,7 +254,7 @@ const BENCH_FAM = {tls: 'TLS', google: 'Google и YouTube', quic: 'QUIC'};
 function benchHtml(st, rep){
   const parts = [];
   const run = st.running == 1;
-  parts.push('<div class="helper">' + esc(t('Сайты, выученные в этой сети, по очереди открываются на каждом варианте умного режима и расширенного пула, затем лучшие варианты — ещё дважды. Это занимает 30–60 минут и расходует трафик; в обучение замер не попадает. Умный режим должен работать.')) + '</div>');
+  parts.push('<div class="helper">' + esc(t('Сайты, выученные в этой сети, по очереди открываются на каждом варианте из набора замера (в этой сборке — кандидаты Zapret Manager против лучших прежних), затем лучшие варианты — ещё дважды. Это занимает 30–60 минут и расходует трафик; в обучение замер не попадает. Умный режим должен работать.')) + '</div>');
   let state;
   if(run){
     const min = st.start ? Math.max(0, Math.round((Date.now() / 1000 - st.start) / 60)) : 0;

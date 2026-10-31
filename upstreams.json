@@ -1,7 +1,7 @@
 {
   "about": "Что взято из чужих проектов и до какой версии. Обновляется при каждом переносе изменений; читает модуль «трекер обновлений» (extras/update-tracker).",
-  "updated": "2026-10-23",
-  "module": "nfqws2-android-ext v2.2.0",
+  "updated": "2026-10-31",
+  "module": "nfqws2-android-ext v2.2.4",
   "projects": [
     {
       "id": "original",
@@ -9,9 +9,9 @@
       "repo": "Dea1hwa1cher/nfqws2-android",
       "branch": "main",
       "track": "commits",
-      "ref": "46f2dd91f0bccb1616f93d22e809285d1e7f8879",
-      "label": "v1.13.0",
-      "date": "2026-10-23T09:07:21Z",
+      "ref": "a5e6aab2237114e2a723f93b301b2862b593b669",
+      "label": "v2.0.3",
+      "date": "2026-10-30T15:13:04Z",
       "use": "Основа модуля: служба, правила iptables, WebUI, сборка. Списки отсюда не берём"
     },
     {
@@ -21,10 +21,22 @@
       "branch": "main",
       "path": "strategies",
       "track": "commits",
-      "ref": "8f78e35b8dff78ffbabd85c7de439380b3a83448",
-      "label": "8f78e35",
-      "date": "2026-10-23T15:48:19Z",
+      "ref": "b61c87de08a0378477b9700cacf05633de8432e6",
+      "label": "b61c87d",
+      "date": "2026-10-30T14:04:57Z",
       "use": "Все стратегии (с IPv6 и без fastpath), списки lists/, блобы, hosts (пресет «nfqws-menu»)"
+    },
+    {
+      "id": "zapret-manager",
+      "name": "Zapret Manager — конфиг zapret2",
+      "repo": "StressOzz/Zapret-Manager",
+      "branch": "main",
+      "path": "files/Zapret2/zapret2",
+      "track": "commits",
+      "ref": "1545dca3b20b15aa9038f2c5211a6066b8907a50",
+      "label": "v4.24",
+      "date": "2026-10-23T15:55:56Z",
+      "use": "Стратегия «Zapret Manager» и кандидаты умного режима (TLS 38–54, Google 21–42) из его готового конфига zapret2. Следим только за этим файлом: изменения в нём — повод подтянуть стратегии"
     },
     {
       "id": "zapret2",

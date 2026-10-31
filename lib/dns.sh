@@ -36,7 +36,8 @@ DNS_CDN_PORT=15354
 DNS_CDN_PIDFILE="$STATE_DIR/dnsproxy-cdn.pid"
 DNS_CDN_LIST="$MODDIR/defaults/dns-cdn.list"
 # Обход геоблока (DNS_GEO, умный режим): домены из списка geoblock.list идут
-# в DNS с обходом (DoH GeoHide, Comss, malw — всем сразу, ответ первого), всё
+# в DNS с обходом (DNS_GEO_VIA: по умолчанию DoH Comss — тот же сервер, что
+# «Частный DNS» dns.comss.one; можно GeoHide, dns.zapret.moe или всех сразу), всё
 # остальное — в DNS сети. Так делают mihomo (nameserver-policy), chinadns-ng
 # (тег gfw) и smartdns (nameserver /домен/группа): маршрут — по списку, а не по
 # догадке из ответа. Это обычные правила dnsproxy, как у профилей. Список —
@@ -46,7 +47,16 @@ DNS_CDN_LIST="$MODDIR/defaults/dns-cdn.list"
 # обход не идут.
 DNS_GEO_LIST="$LISTS_DIR/geoblock.list"
 DNS_GEO_URL="https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Categories/geoblock.lst"
-DNS_GEO_PRESETS="geohide comss malw"
+DNS_GEO_CAND="$MODDIR/defaults/dns-geo-servers.list"
+# Домены-образцы проверки: ИИ, игры Supercell, сервисы с геоблоком для России.
+# Прокси — ответ, не совпавший с DNS сети (см. helper/geoscan.go)
+DNS_GEO_SAMPLES="chatgpt.com,claude.ai,gemini.google.com,gamea.clashofclans.com,accounts.supercell.com,intel.com,spotify.com"
+DNS_GEO_SCAN_DIR="$CONFDIR/dns/geoscan"
+DNS_GEO_SCAN_EVERY=21600     # 6 часов
+DNS_GEO_POOL=3
+DNS_GEO_FALLBACK="https://dns.comss.one/dns-query"
+DNS_GEO_SCAN_COOL=300        # ручная проверка — не чаще раза в 5 минут
+DNS_GEO_UPD_COOL=1800        # обновление списка — раз в 30 минут
 DNS_GEO_NEVER="$MODDIR/defaults/dns-geo-never.list"
 DNS_CHAIN=nfqws_dns          # nat OUTPUT: перехват в dnsproxy
 DNS_CHAIN6F=nfqws_dns6       # filter OUTPUT (IPv6 без nat): отказ, резолвер уйдёт на IPv4
@@ -63,7 +73,7 @@ DNS_PUBLIC="77.88.8.8 1.1.1.1 8.8.8.8"
 
 # Push-уведомления (FCM): сервисы Google держат одно соединение с mtalk.google.com,
 # через него приходят уведомления почти всех приложений. DNS «для обхода»
-# (Comss, GeoHide, malw) отдают для доменов Google адреса своих прокси, а те
+# (Comss, GeoHide, zapret.moe) отдают для доменов Google адреса своих прокси, а те
 # не принимают порт 5228: FCM не мог переподключиться, уведомления копились и
 # приходили пачкой, когда приложение открывали. Поэтому, если DNS по умолчанию
 # — профиль, эти домены всегда идут в DNS Google (настройка разработчика
@@ -77,6 +87,116 @@ dns_enabled() { [ -f "$DNS_ENABLED_FILE" ] && [ -f "$DNS_BIN" ]; }
 dns_smart_on() { [ "${DNS_SMART:-1}" = 1 ]; }
 dns_geo_on() { [ "${DNS_GEO:-1}" = 1 ]; }
 dns_geo_count() { list_count "$DNS_GEO_LIST"; }
+# DNS для обхода геоблока выбирает сам модуль, как умный режим обхода —
+# вариант: раз в несколько часов тихо проверяет DoT-серверы из defaults/dns-
+# geo-servers.list (nfqws2-helper -geoscan) и берёт самые быстрые из тех, что
+# для доменов-образцов отдают адреса своих прокси, — см. dns_geo_scan. Свой
+# сервер для своих сервисов — профилем. Раньше был ручной выбор (Comss,
+# GeoHide, «все сразу»): у каждого свои прокси, и первым отвечал ближний, а не
+# тот, чей прокси работает в этой сети
+dns_geo_label() {
+  local p; p=$(dns_geo_pick | tr '\n' ' ' | sed 's/ $//; s/ /, /g')
+  if [ -n "$p" ]; then echo "$p"; else echo "Comss — до первой проверки"; fi
+}
+# Серверы обхода геоблока через пробел: пул проверки, пока её не было — DoH Comss
+dns_geo_servers() {
+  local h; h=$(dns_geo_pick_up | tr '\n' ' ' | sed 's/ $//')
+  echo "${h:-$DNS_GEO_FALLBACK}"
+}
+
+# ---------------------------------------------------------------- авто-выбор
+# Проверка серверов — своя для каждой сети (ключ — DNS сети): то, что
+# открывается у одного оператора, у другого может быть закрыто. Строки файла —
+# вывод nfqws2-helper -geoscan (сервер ok|fail мс прокси образцов отметки),
+# первая — «#time=… boot=…».
+dns_geo_net_key() {
+  local s; s=$(dns_net_servers); [ -n "$s" ] || s=default
+  printf '%s' "$s" | tr -c 'A-Za-z0-9.' '_'
+}
+dns_geo_scan_file() { echo "$DNS_GEO_SCAN_DIR/$(dns_geo_net_key).tsv"; }
+dns_geo_scan_time() { sed -n '1s/^#time=\([0-9]*\).*/\1/p' "$(dns_geo_scan_file)" 2>/dev/null; }
+# Пул: доступные серверы с наибольшим покрытием образцов (прокси для всех,
+# если такие есть), самые быстрые — до DNS_GEO_POOL штук. Сервер, который
+# обслуживает только часть сервисов (dns.zapret.moe — сервисы ИИ), в общий
+# пул не идёт, пока есть серверы шире: dnsproxy берёт первый ответ, и его
+# «настоящий» адрес для игры увёл бы её в геоблок
+dns_geo_pool() { # -> «мс сервер протокол» пула, лучшие сверху
+  local f; f=$(dns_geo_scan_file); [ -s "$f" ] || return 0
+  awk -F'\t' '!/^#/ && $2 == "ok" && $4 > 0 { c++; h[c] = $1; ms[c] = $3; pr[c] = ($7 == "https" ? "https" : "tls"); p[c] = $4 + 0; if (p[c] > max) max = p[c] }
+    END { for (i = 1; i <= c; i++) if (p[i] == max) print ms[i] "\t" h[i] "\t" pr[i] }' "$f" | sort -n | head -n "$DNS_GEO_POOL"
+}
+dns_geo_pick() { dns_geo_pool | cut -f2; }
+# Адреса пула для dnsproxy: DoT, а где в этой сети прошёл только DoH — DoH
+dns_geo_pick_up() {
+  dns_geo_pool | awk -F'\t' '{ print ($3 == "https" ? "https://" $2 "/dns-query" : "tls://" $2) }'
+}
+# Пора проверять: проверки в этой сети не было, она старше DNS_GEO_SCAN_EVERY
+# или ни один сервер тогда не ответил (сеть ещё не поднялась) — через 10 минут
+dns_geo_scan_due() {
+  local t now f
+  dns_geo_on && [ -x "$HELPER_BIN" ] || return 1
+  f=$(dns_geo_scan_file); t=$(dns_geo_scan_time); now=$(date +%s)
+  [ -n "$t" ] || return 0
+  [ $((now - t)) -ge "$DNS_GEO_SCAN_EVERY" ] && return 0
+  grep -q '	ok	' "$f" 2>/dev/null && return 1
+  [ $((now - t)) -ge 600 ]
+}
+# Проверить серверы; пул сменился — применить. Запросов немного (сервер —
+# одно соединение и по запросу на образец), раз в несколько часов
+dns_geo_scan() {
+  local f boot cand before after n ok lock="$DNS_RUN_DIR/geoscan.lock"
+  [ -x "$HELPER_BIN" ] && [ -f "$DNS_GEO_CAND" ] || return 1
+  mkdir -p "$DNS_GEO_SCAN_DIR" "$DNS_RUN_DIR"
+  # прошлая проверка оборвалась — её метка старше двух минут
+  [ -d "$lock" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +2 2>/dev/null)" ] && rmdir "$lock" 2>/dev/null
+  mkdir "$lock" 2>/dev/null || return 0
+  boot=$(dns_net_servers | tr ',' '\n' | awk '/^[0-9]+(\.[0-9]+)(\.[0-9]+)(\.[0-9]+)$/ { print; exit }')
+  boot="${boot:-77.88.8.8}:53"
+  cand=$(tr -d '\r' < "$DNS_GEO_CAND" | sed 's/[[:space:]]*#.*//; s/[[:space:]]//g' | awk NF | tr '\n' ',' | sed 's/,$//')
+  f=$(dns_geo_scan_file); before=$(dns_geo_pick | tr '\n' ' ')
+  { echo "#time=$(date +%s) boot=$boot"
+    "$HELPER_BIN" -geoscan "$cand" -samples "$DNS_GEO_SAMPLES" -boot "$boot" -wait 8s 2>/dev/null
+  } > "$f.tmp" && mv -f "$f.tmp" "$f"
+  rmdir "$lock" 2>/dev/null
+  after=$(dns_geo_pick | tr '\n' ' ')
+  n=$(grep -c -v '^#' "$f" 2>/dev/null); ok=$(grep -c '	ok	' "$f" 2>/dev/null)
+  dns_log "проверка DNS обхода геоблока: ответили ${ok:-0} из ${n:-0}; пул — ${after:-пусто (остаётся Comss)}"
+  [ "$before" != "$after" ] && dns_apply_now
+  return 0
+}
+# Кулдаун: <время прошлого раза, unix> <секунд>. Рано — сообщение и код 1
+dns_cool() {
+  local left
+  [ -n "$1" ] || return 0
+  left=$(( $1 + $2 - $(date +%s) ))
+  [ "$left" -gt 0 ] || return 0
+  echo "Слишком часто — повторить можно через $(( (left + 59) / 60 )) мин" >&2
+  return 1
+}
+# Включённые свои профили, перехватывающие домены из списка геоблока (в
+# умном режиме у профиля свой маршрут, и обход геоблока для этих доменов не
+# работает): строки «id число» — сколько доменов списка уходит в профиль
+dns_geo_overlap() {
+  local f id
+  dns_geo_on && [ -s "$DNS_GEO_LIST" ] || return 0
+  for f in "$DNS_PROFILES_DIR"/*.conf; do
+    [ -f "$f" ] && grep -q '^ENABLED=1$' "$f" 2>/dev/null || continue
+    id=${f##*/}; id=${id%.conf}
+    dns_geo_profile "$id" && continue
+    sed -n 's/^DOMAIN=//p' "$f" | tr -d '\r' | tr 'A-Z' 'a-z' | awk -v id="$id" -v lf="$DNS_GEO_LIST" '
+      BEGIN { while ((getline l < lf) > 0) { sub(/[[:space:]]*#.*/, "", l); gsub(/[[:space:]]/, "", l); if (l != "") g[tolower(l)] = 1 } }
+      NF { p[$0] = 1 }
+      END {
+        for (d in g) { x = d; while (1) { if (x in p) { n++; break }; if ((i = index(x, ".")) == 0) break; x = substr(x, i + 1) } }
+        if (n) print id, n
+      }'
+  done
+}
+# В фоне, отвязанно: проверка идёт до 10 секунд, ждать её никому не нужно
+dns_geo_scan_bg() {
+  ( dns_geo_scan >/dev/null 2>&1 & ) 2>/dev/null
+}
+
 # Обновить список геоблока: свежий geoblock из itdoginfo и домены пресета
 # GeoHide добавляются к тому, что уже есть, — свои домены пользователя
 # остаются. Код 1 — не скачалось (старый список не тронут). -> число доменов
@@ -244,6 +364,33 @@ dns_addr_port() {
   case "$1" in *:*) printf '[%s]:53' "$1" ;; *) printf '%s:53' "$1" ;; esac
 }
 
+# Профили, которые участвуют в правилах. В умном режиме профили DNS обхода
+# геоблока (GeoHide, Comss, zapret.moe, malw — пресеты, включённые как свои
+# профили) своих правил не ставят: их домены идут в обход геоблока вместе со
+# списком. Иначе включённый профиль GeoHide со своими 352 доменами уводил
+# Claude и остальное на прокси GeoHide при любом выборе DNS для обхода
+DNS_GEO_PROFILE_IDS="geohide comss zapret malw"
+dns_geo_profile() { dns_geo_on && case " $DNS_GEO_PROFILE_IDS " in *" $1 "*) return 0 ;; esac; return 1; }
+dns_profile_files() {
+  local f id
+  for f in "$DNS_PROFILES_DIR"/*.conf; do
+    [ -f "$f" ] || continue
+    id=${f##*/}; id=${id%.conf}
+    dns_geo_profile "$id" || echo "$f"
+  done
+}
+# Домены включённых профилей: own — с собственным маршрутом, geo — профилей
+# обхода геоблока (в умном режиме они уходят в обход геоблока)
+dns_profile_domains() {
+  local f id
+  for f in "$DNS_PROFILES_DIR"/*.conf; do
+    [ -f "$f" ] && grep -q '^ENABLED=1$' "$f" 2>/dev/null || continue
+    id=${f##*/}; id=${id%.conf}
+    if dns_geo_profile "$id"; then [ "$1" = geo ] || continue; else [ "$1" = own ] || continue; fi
+    sed -n 's/^DOMAIN=//p' "$f"
+  done | tr -d '\r'
+}
+
 # ---------------------------------------------------------------- конфиг dnsproxy
 # Пишет $DNS_RUN_DIR/upstreams.txt (основные серверы и правила по доменам),
 # fallback.txt и args (аргументы запуска). Код 1 — включённых правил нет,
@@ -271,7 +418,7 @@ dns_build() {
         for (i = 1; i <= ns; i++) print line srv[i]
       }
     }
-    END { flush() }' "$DNS_PROFILES_DIR"/*.conf 2>/dev/null > "$up.rules"
+    END { flush() }' $(dns_profile_files) < /dev/null 2>/dev/null > "$up.rules"
   if dns_push_on; then
     local d s pl="[/"
     for d in $DNS_PUSH_DOMAINS; do pl="$pl$d/"; done
@@ -282,9 +429,7 @@ dns_build() {
   rm -f "$DNS_RUN_DIR/cdn.args.new" "$DNS_RUN_DIR/cdn.upstreams.txt.new"
   if dns_smart_on && [ -f "$DNS_CDN_LIST" ]; then
     local cdn f
-    for f in "$DNS_PROFILES_DIR"/*.conf; do
-      grep -q '^ENABLED=1$' "$f" 2>/dev/null && sed -n 's/^DOMAIN=//p' "$f"
-    done > "$DNS_RUN_DIR/cdn.taken"
+    dns_profile_domains own > "$DNS_RUN_DIR/cdn.taken"
     cdn=$(tr -d '\r' < "$DNS_CDN_LIST" | awk -v tf="$DNS_RUN_DIR/cdn.taken" '
       BEGIN { while ((getline l < tf) > 0) taken[l] = 1 }
       /^[[:space:]]*(#|$)/ { next } !($1 in taken) { printf "%s/", $1 }')
@@ -297,29 +442,28 @@ dns_build() {
         echo "-p"; echo "$DNS_CDN_PORT"
         echo "-u"; echo "$DNS_RUN_DIR/cdn.upstreams.txt"
         echo "--cache"; echo "--cache-optimistic"
-        # ждёт ответа всех серверов: молчащий не должен задерживать надолго
-        echo "--timeout=2s"
+        # ждёт ответа всех серверов: молчащий не должен задерживать надолго.
+        # DNS в сети отвечает за 30–100 мс, ответ позже секунды — уже потеря
+        echo "--timeout=1s"
         echo "--upstream-mode=fastest_addr"
         [ "${LOG_LEVEL:-0}" = 1 ] && echo "-v"
       } > "$DNS_RUN_DIR/cdn.args.new"
     fi
   fi
-  # Обход геоблока: домены списка — серверам DoH пресетов GeoHide, Comss и
-  # malw. Без доменов, у которых свой маршрут (профили, CDN, push Google), и
+  # Обход геоблока: домены списка (и профилей обхода геоблока) — серверам
+  # dns_geo_servers; проверки серверов в этой сети ещё не было или она
+  # устарела — в фоне, пул применится по её итогу. Без доменов, у которых свой маршрут (профили, CDN, push Google), и
   # без «никогда в обход»; совпадение — по окончанию имени, как у dnsproxy
   if dns_geo_on && [ -s "$DNS_GEO_LIST" ]; then
-    local gp gs=""
-    for gp in $DNS_GEO_PRESETS; do
-      gs="$gs $(sed -n 's/^SERVER=//p' "$DNS_PRESETS_DIR/$gp.conf" 2>/dev/null | tr -d '\r' | grep '^https://' | tr '\n' ' ')"
-    done
+    local gp gs
+    dns_geo_scan_due && dns_geo_scan_bg
+    gs=$(dns_geo_servers)
     {
-      for gp in "$DNS_PROFILES_DIR"/*.conf; do
-        grep -q '^ENABLED=1$' "$gp" 2>/dev/null && sed -n 's/^DOMAIN=//p' "$gp"
-      done
+      dns_profile_domains own
       cat "$DNS_GEO_NEVER" "$DNS_CDN_LIST" 2>/dev/null
       for gp in $DNS_PUSH_DOMAINS; do echo "$gp"; done
     } | tr -d '\r' > "$DNS_RUN_DIR/geo.skip"
-    tr -d '\r' < "$DNS_GEO_LIST" | tr 'A-Z' 'a-z' | awk -v sf="$DNS_RUN_DIR/geo.skip" -v srv="$gs" '
+    { cat "$DNS_GEO_LIST"; dns_profile_domains geo; } | tr -d '\r' | tr 'A-Z' 'a-z' | awk -v sf="$DNS_RUN_DIR/geo.skip" -v srv="$gs" '
       BEGIN { while ((getline l < sf) > 0) { sub(/[[:space:]]*#.*/, "", l); if (l != "") skip[l] = 1 }; ns = split(srv, s, " ") }
       { sub(/[[:space:]]*#.*/, ""); gsub(/[[:space:]]/, "") }
       $0 == "" || seen[$0]++ { next }
@@ -598,6 +742,7 @@ dns_proxy_start() {
   protect_process "$pid"
   cp -f "$DNS_RUN_DIR/upstreams.txt" "$DNS_RUN_DIR/running.upstreams" 2>/dev/null
   cp -f "$DNS_RUN_DIR/args" "$DNS_RUN_DIR/running.args" 2>/dev/null
+  read -r i _ < /proc/uptime && echo "${i%.*}" > "$DNS_RUN_DIR/started_at"
   dns_cdn_start
   return 0
 }
@@ -765,7 +910,7 @@ dns_describe() {
   prof=$(grep -l '^ENABLED=1$' "$DNS_PROFILES_DIR"/*.conf 2>/dev/null | sed 's#.*/##; s#\.conf$##' | tr '\n' ' ' | sed 's/ $//')
   up=$(grep -v '^\[/' "$DNS_RUN_DIR/upstreams.txt" 2>/dev/null | grep . | tr '\n' ' ' | sed 's/ $//')
   if [ "$def" = net ]; then def="DNS сети"; else def="профиль $def"; fi
-  dns_log "по умолчанию: $def ($up); включённые профили: ${prof:-нет}; правил по доменам: ${rules:-0}; DNS сети: ${net:-не определён}$(dns_push_on && echo "; push-уведомления Google — через DNS Google")$([ -f "$DNS_RUN_DIR/cdn.args" ] && echo "; умный DNS: видео и CDN — самый быстрый адрес из DNS сети и публичных, оптимистичный кэш")$(dns_geo_on && echo "; обход геоблока: доменов из списка — $(dns_geo_count), через DNS с обходом (GeoHide, Comss, malw)")"
+  dns_log "по умолчанию: $def ($up); включённые профили: ${prof:-нет}; правил по доменам: ${rules:-0}; DNS сети: ${net:-не определён}$(dns_push_on && echo "; push-уведомления Google — через DNS Google")$([ -f "$DNS_RUN_DIR/cdn.args" ] && echo "; умный DNS: видео и CDN — самый быстрый адрес из DNS сети и публичных, оптимистичный кэш")$(dns_geo_on && echo "; обход геоблока: доменов из списка — $(dns_geo_count), через DNS с обходом ($(dns_geo_label))")"
   pm=$(dns_private_mode)
   case "$pm" in hostname|opportunistic)
     dns_log "внимание: «Частный DNS» = $pm — запросы через DoT системы идут мимо перехвата" ;;
@@ -794,6 +939,10 @@ _dns_start() { # <причина> [force — перезапуск dnsproxy и п
   fi
   if ! dns_build; then _dns_stop "$why: применять нечего — DNS сети и нет включённых профилей"; return 0; fi
   mkdir -p "$DNS_RUN_DIR"
+  # Свежий dnsproxy (меньше 20 с) с тем же конфигом уже открыл соединения в
+  # новой сети: одна смена сети — несколько событий и запуск службы, и он
+  # перезапускался трижды за 15 секунд
+  if [ "$2" = force ] && dns_fresh; then set -- "$1"; fi
   if [ "$2" = force ] && dns_pid >/dev/null && dns_rules_ok; then
     # Сеть или VPN сменились: соединения dnsproxy к серверам привязаны к старой
     # сети. Правила перехвата не снимаем — на время перезапуска (доли секунды)
@@ -833,6 +982,15 @@ _dns_start() { # <причина> [force — перезапуск dnsproxy и п
 }
 
 dns_stop() { _dns_locked 1 _dns_stop "$@"; [ $? = 2 ] && return 1; return 0; }
+dns_fresh() { # запущен меньше 20 с назад с тем конфигом, что собран сейчас
+  local at up
+  dns_pid >/dev/null || return 1
+  cmp -s "$DNS_RUN_DIR/upstreams.txt" "$DNS_RUN_DIR/running.upstreams" &&
+    cmp -s "$DNS_RUN_DIR/args" "$DNS_RUN_DIR/running.args" || return 1
+  [ -f "$DNS_RUN_DIR/started_at" ] && IFS= read -r at < "$DNS_RUN_DIR/started_at" || return 1
+  read -r up _ < /proc/uptime
+  [ $(( ${up%.*} - ${at:-0} )) -lt 20 ]
+}
 _dns_stop() {
   local had=0
   { dns_pid >/dev/null || dns_rules_ok; } && had=1
@@ -856,8 +1014,8 @@ _dns_stop() {
 # Процесс жив — ещё не значит, что он отвечает. Помощник спрашивает dnsproxy
 # (и CDN-экземпляр) о том, на что тот отвечает сам, без серверов (helper/
 # probe.go): молчащие серверы и пропавшая сеть сюда не попадают — только
-# зависший dnsproxy. Два раза подряд без ответа (watchdog — раз в 20 секунд) —
-# перезапуск. Без помощника проверки нет
+# зависший dnsproxy. Два раза подряд без ответа (watchdog спрашивает раз в
+# минуту) — перезапуск. Без помощника проверки нет
 dns_probe_check() {
   local ports="127.0.0.1:$DNS_PORT" n=0
   [ -x "$HELPER_BIN" ] || return 0
@@ -902,12 +1060,34 @@ _dns_check() {
     elif ! dns_rules_ok; then
       dns_log "watchdog: правила перехвата пропали — восстанавливаю"
       dns_rules_add || dns_fail "не удалось восстановить перехват"
-    else
+    elif [ "${DNS_PROBE:-1}" = 1 ]; then
       dns_probe_check
+      dns_geo_scan_due && dns_geo_scan_bg
     fi
   elif dns_pid >/dev/null || dns_rules_ok; then
     _dns_stop "watchdog: больше не нужен"
   fi
+}
+
+# Куда DNS модуля отправит домен: geo — DNS с обходом геоблока, cdn — умный
+# DNS видео и CDN, rule <сервер> — профиль, default — DNS по умолчанию,
+# off — DNS модуля не работает
+dns_route() { # <домен>
+  local up="$DNS_RUN_DIR/upstreams.txt"
+  dns_pid >/dev/null && [ -f "$up" ] || { echo off; return; }
+  awk -v d="$1" -v cdn="127.0.0.1:$DNS_CDN_PORT" -v geo="$(dns_geo_servers 2>/dev/null)" '
+    BEGIN { n = split(d, p, "."); for (i = 1; i <= n; i++) { s = p[i]; for (j = i + 1; j <= n; j++) s = s "." p[j]; c[s] = 1 } }
+    /^\[\// {
+      k = index($0, "/]"); doms = substr($0, 3, k - 3); srv = substr($0, k + 2)
+      m = split(doms, a, "/")
+      for (i = 1; i <= m; i++) if ((a[i] in c) && length(a[i]) > best) { best = length(a[i]); hit = srv }
+    }
+    END {
+      if (hit == "") print "default"
+      else if (hit == cdn) print "cdn"
+      else if (index(" " geo " ", " " hit " ")) print "geo"
+      else print "rule " hit
+    }' "$up"
 }
 
 # ---------------------------------------------------------------- состояние для WebUI
@@ -936,7 +1116,11 @@ dns_state() {
   echo "cdn=$(dns_cdn_pid >/dev/null && echo running || { [ -f "$DNS_RUN_DIR/cdn.args" ] && echo down; })"
   # обход геоблока: сколько доменов в списке и когда его обновляли (unix)
   echo "geo=$(dns_geo_on && echo on || echo off)"
+  echo "geo_label=$(dns_geo_label)"
+  echo "geo_scan_time=$(dns_geo_scan_time)"
+  echo "geo_pool=$(dns_geo_pick | tr '\n' ' ' | sed 's/ $//')"
   echo "geo_domains=$(dns_geo_count)"
+  dns_geo_overlap | while read -r id n; do echo "geo_overlap_$id=$n"; done
   echo "geo_updated=$(cat "$DNS_DIR/geo_updated" 2>/dev/null)"
   echo "default=$(dns_default)"
   echo "default_used=$(dns_default_used)"
@@ -951,6 +1135,9 @@ dns_state() {
   echo "max_profiles=$DNS_MAX_PROFILES"
   echo "max_servers=$DNS_MAX_SERVERS"
   echo "max_domains=$DNS_MAX_DOMAINS"
+  # проверка DNS обхода геоблока в этой сети: строки nfqws2-helper -geoscan
+  echo "#geoscan"
+  grep -v '^#' "$(dns_geo_scan_file)" 2>/dev/null
   for f in "$DNS_PROFILES_DIR"/*.conf; do
     [ -f "$f" ] || continue
     id="${f##*/}"; echo "#profile ${id%.conf}"; cat "$f"
@@ -1046,7 +1233,15 @@ dns_ctl() {
       dns_apply_now; echo OK ;;
     dns-profile-enable) dns_profile_set_enabled "$1" "$2" || return 1; dns_apply_now; echo OK ;;
     # обновить список сервисов с геоблоком и применить
-    dns-geo-update) n=$(dns_geo_update) || { echo "Не удалось скачать список — старый оставлен" >&2; return 1; }; dns_apply_now; echo "$n" ;;
+    # dns-geo-scan — проверить DNS обхода геоблока сейчас (кнопка на экране DNS)
+    # ручные проверка и обновление — не чаще DNS_GEO_*_COOL: частые вызовы серверам
+    # и GitHub только вредят (код 3 — «слишком часто», текст — для тоста)
+    dns-geo-scan)
+      dns_cool "$(dns_geo_scan_time)" "$DNS_GEO_SCAN_COOL" || return 3
+      dns_geo_scan || { echo "Проверка недоступна: нет nfqws2-helper" >&2; return 1; }; dns_geo_label ;;
+    dns-geo-update)
+      dns_cool "$(cat "$DNS_DIR/geo_updated" 2>/dev/null)" "$DNS_GEO_UPD_COOL" || return 3
+      n=$(dns_geo_update) || { echo "Не удалось скачать список — старый оставлен" >&2; return 1; }; dns_apply_now; echo "$n" ;;
     dns-delete) # <id>… — несколько сразу (выбор в WebUI), применяется один раз
       local id def
       [ $# -gt 0 ] || { echo "Профиль не найден" >&2; return 1; }

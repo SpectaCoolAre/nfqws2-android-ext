@@ -673,7 +673,7 @@ cmd_export_logs() {
   else
     name="nfqws2-logs-$stamp.tar"
     out_file="$dir/$name"
-    if ! (cd "$tmp" && tar_cmd -cf "$out_file" .) 2>/dev/null; then
+    if ! (cd "$tmp" && set -- * && tar_cmd -cf "$out_file" "$@") 2>/dev/null; then
       rm -f "$out_file"   # недописанный архив выглядел бы как настоящий
       if [ "$mode" = share ]; then rm -rf "$tmp"; echo "Не удалось собрать архив (нет tar)" >&2; return 1; fi
       local d="$BACKUP_DIR/nfqws2-logs"
@@ -696,16 +696,21 @@ cmd_export_logs() {
   echo
 }
 # «Поделиться» файлом из общей памяти: file:// в ACTION_SEND с Android 7
-# запрещён — отдаём content:// из MediaStore
+# запрещён — отдаём content:// из MediaStore. Ссылка — ещё и в данных
+# intent: am, в отличие от приложения, не переносит EXTRA_STREAM в ClipData,
+# и флаг чтения (0x1) без этого не выдаёт доступ — Telegram отвечал
+# «unsupported attachment». Тип — настоящий, не */*
+share_mime() { case "$1" in *.tar) echo application/x-tar ;; *.zip) echo application/zip ;; *.txt|*.log|*.conf|*.tsv) echo text/plain ;; *) echo application/octet-stream ;; esac; }
 share_stream() { # <файл> <имя>
-  local f="$1" rf u out
+  local f="$1" rf u out mime
   case "$f" in /sdcard/*) rf="/storage/emulated/0/${f#/sdcard/}" ;; *) rf="$f" ;; esac
   am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d "file://$rf" >/dev/null 2>&1
   u=$(content insert --uri content://media/external/file --bind _data:s:"$rf" --bind mime_type:s:application/octet-stream 2>/dev/null | grep -o 'content://[^ ]*')
   [ -n "$u" ] || u=$(content query --uri content://media/external/file --projection _id --where "_data='$f' OR _data='$rf'" 2>/dev/null |
     grep -o '_id=[0-9]*' | head -n 1 | sed 's#_id=#content://media/external/file/#')
   [ -n "$u" ] || u="file://$rf"
-  out=$(am start -a android.intent.action.SEND --user 0 -t '*/*' --eu android.intent.extra.STREAM "$u" \
+  mime=$(share_mime "$2")
+  out=$(am start -a android.intent.action.SEND --user 0 -d "$u" -t "$mime" --eu android.intent.extra.STREAM "$u" \
     --es android.intent.extra.SUBJECT "$2" --es android.intent.extra.TITLE "$2" -f 0x10000001 2>&1)
   case "$out" in *Error*|*Exception*) echo "Не удалось открыть «Поделиться»: $out" >&2; return 1 ;; esac
   return 0
@@ -778,6 +783,8 @@ backup_migrate() {
   : > "$CONFDIR/.backup_moved"
 }
 BACKUP_LISTS="user exclude ipset ipset_exclude auto probe_hosts tcp16 probe_dns probe_tg whitelist_sni"
+# Архив — по именам, без «./» в начале: MT Manager и другие проводники
+# открывают tar как папку и показывали бы внутри папку «.»
 tar_cmd() {
   if command -v tar >/dev/null 2>&1; then tar "$@"; else busybox tar "$@"; fi
 }
@@ -797,7 +804,7 @@ cmd_backup_create() { # [ui.json в base64] [path — без содержимо�
   dns_backup_add "$tmp/dns"
   hosts_backup_add "$tmp/hosts"
   [ -n "$1" ] && b64d "$1" > "$tmp/ui.json"
-  if ! (cd "$tmp" && tar_cmd -cf "$BACKUP_DIR/$name" .) 2>/dev/null; then
+  if ! (cd "$tmp" && set -- * && tar_cmd -cf "$BACKUP_DIR/$name" "$@") 2>/dev/null; then
     rm -rf "$tmp" "$BACKUP_DIR/$name"
     echo "Не удалось создать архив" >&2
     return 1
@@ -913,7 +920,9 @@ is_block_notice() {
 # 101 ждёт данных до тайм-аута, поэтому смотрим на код ответа, а не на итог
 PROBE_WS_HOST=gateway.discord.gg
 probe_attempt() { # <вид> <путь к утилите> <host[/путь]>  -> "ok <мс>" | "fail <причина>"
-  local kind="$1" bin="$2" url="https://$3" t0 t1 out rc to="" body code
+  # PROBE_IP — соединяться с этим адресом (проверка без обхода, curl)
+  local kind="$1" bin="$2" url="https://$3" t0 t1 out rc to="" body code pin=""
+  [ -n "$PROBE_IP" ] && pin="--resolve ${3%%/*}:443:$PROBE_IP"
   command -v timeout >/dev/null 2>&1 && to="timeout 12"
   body=$(mktemp "$STATE_DIR/probe.body.XXXXXX" 2>/dev/null) || body="$STATE_DIR/probe.body.$$.$(uptime_cs)"
   t0=$(uptime_cs)
@@ -935,7 +944,7 @@ probe_attempt() { # <вид> <путь к утилите> <host[/путь]>  -> 
       # сервер ответил, но не перешёл на WebSocket — его режут после рукопожатия
       case "$code" in ''|000) ;; *) echo "fail ws_blocked"; return ;; esac
     else
-      out=$($to "$bin" -s -k -L --max-redirs 5 -m 10 --connect-timeout 6 -o "$body" -A 'Mozilla/5.0' \
+      out=$($to "$bin" -s -k -L --max-redirs 5 -m 10 --connect-timeout 6 -o "$body" -A 'Mozilla/5.0' $pin \
         -b "$jar" -c "$jar" -w "\nREDIRECT_URL:%{redirect_url}\n" "$url" 2>&1); rc=$?
       rm -f "$jar"
     fi
@@ -1004,6 +1013,28 @@ probe_keepalive() { # <путь к curl> <host[/путь]>
     else print "ok" }'
 }
 
+# Без обхода: тот же адрес, но мимо nfqws2 (RETURN первым правилом цепочки
+# для этого адреса от root). Открылся без обхода — сайт не заблокирован или
+# обход ему мешает; не открылся ни так, ни так — обход не помогает.
+# -> как probe_attempt | skip
+probe_nobypass() { # <путь к curl> <host[/путь]> <ip>
+  local bin="$1" ip="$3" rule r
+  is_running || { echo skip; return; }
+  rule="-m owner --uid-owner 0 -d $ip -p tcp -j RETURN"
+  iptables -w -t mangle -I $IPT_GROUP_POST 1 $rule 2>/dev/null || { echo skip; return; }
+  r=$(PROBE_IP="$ip" probe_attempt curl "$bin" "$2")
+  iptables -w -t mangle -D $IPT_GROUP_POST $rule 2>/dev/null
+  echo "$r"
+}
+# Скорость скачивания через обход: замедленный сайт открывается, но данные
+# идут еле-еле. -> «<байт> <байт/с>» | skip
+probe_speed() { # <путь к curl> <host[/путь]>
+  local out to=""
+  command -v timeout >/dev/null 2>&1 && to="timeout 15"
+  out=$($to "$1" -s -k -L --max-redirs 5 -m 12 --connect-timeout 6 -o /dev/null -A 'Mozilla/5.0' \
+    -w '%{size_download} %{speed_download}' "https://$2" 2>/dev/null)
+  case "$out" in [0-9]*\ [0-9]*) echo "${out%%.*}" | awk '{ printf "%d %d\n", $1, $2 }' ;; *) echo skip ;; esac
+}
 cmd_net_info() {
   local ip="" loc="" isp="" asn="" iface="" gw="" dns1="" dns2=""
   local tool kind bin to=""
@@ -1359,8 +1390,19 @@ cmd_domain_check() {
   trap 'exit 143' INT TERM
   for k in 1 2 3; do ( printf 'R\t%s\t%s\n' "$k" "$(probe_attempt "$kind" "$bin" "$d")" ) & done
   wait
-  # WebSocket Discord — не запрос-ответ, повторять нечего
-  [ "$kind" = curl ] && [ "$d" != "$PROBE_WS_HOST" ] && printf 'K\t%s\n' "$(probe_keepalive "$bin" "$d")"
+  # Почему не работает: повторный запрос по тому же соединению и скорость —
+  # разом (каждая строка печатается целиком), потом та же попытка без обхода:
+  # её правило пускает мимо nfqws2 весь трафик root к этому адресу. WebSocket
+  # Discord — не запрос-ответ, повторять и мерить там нечего
+  if [ "$kind" = curl ] && [ "$d" != "$PROBE_WS_HOST" ]; then
+    ( printf 'K\t%s\n' "$(probe_keepalive "$bin" "$d")" ) &
+    ( printf 'S\t%s\n' "$(probe_speed "$bin" "$d")" ) &
+    wait
+    [ -n "$ip" ] && printf 'N\t%s\n' "$(probe_nobypass "$bin" "$d" "$ip")"
+  fi
+  if dns_enabled; then
+    printf 'D\t%s\t%s\n' "$(dns_route "${d%%/*}")" "$(dns_private_mode)"
+  fi
   cleanup_probe_app_rule
   echo done
 }
@@ -1605,7 +1647,6 @@ cmd_smart_import_b64() { # <base64 файла> -> число добавленн�
 #   connect tls ttfb total байт   (время — в секундах, как у curl)
 BENCH_W=6
 BENCH_TOP=8
-bench_family() { case "$1" in google) echo google ;; quic*) echo quic ;; *) echo tls ;; esac; }
 # Одна попытка: <исполнитель> <сайт> <вариант> <этап>
 bench_one() {
   local w="$1" h="$2" v="$3" st="$4" out rc cls code tc ta tt tot=0 sz t0 t1 jar url hop=0 red rh ip
@@ -1687,6 +1728,20 @@ bench_names() { # <сайт>
 bench_profile() { # <сайт> -> «профиль число_вариантов», если оркестратор его видел
   awk -F'\t' -v h="$1" '$1 == h { s = $2; n = $3 } END { if (s != "") print s, n }' "$STATE_DIR/smart_bench.seen" 2>/dev/null
 }
+# Варианты, которые замер проверяет в профиле: <профиль> <число вариантов>.
+# Строка «#@bench-<семейство> 1,15,38-54» в шапке strategies/smart.conf
+# (семейства tls, google, quic) ограничивает замер этими номерами — так
+# кандидаты сравниваются с лучшими прежними в равных условиях, не прогоняя
+# весь пул. Нет строки — все варианты 1…N
+bench_set() {
+  local f
+  case "$1" in google) f=google ;; quic*) f=quic ;; *) f=tls ;; esac
+  sed -n "s/^#@bench-$f //p" "$STRATEGIES_DIR/smart.conf" 2>/dev/null | head -n 1 | awk -v n="$2" '
+    { c = split($0, p, ","); for (i = 1; i <= c; i++) { gsub(/[^0-9-]/, "", p[i]); if (p[i] == "") continue
+        a = p[i]; b = p[i]; if (index(p[i], "-")) { split(p[i], r, "-"); a = r[1]; b = r[2] }
+        for (v = a + 0; v <= b + 0; v++) if (v >= 1 && v <= n + 0 && !seen[v]++) print v } }
+    END { if (NR == 0) for (v = 1; v <= n + 0; v++) print v }'
+}
 # Подготовка сайта к этапу 1: <исполнитель> <сайт>. Имя, под которым сайт
 # попадает в профиль умного режима (пробы — этап 0, в отчёт не идут), и
 # попытка без обхода. Сайт с профилем встаёт в очередь q.<исполнитель>.
@@ -1714,13 +1769,14 @@ bench_prep() {
   bench_one "$w" "$h" 0 1
   [ -n "$line" ] || return 1
   [ "$BENCH_CLS" = connect ] && echo "$h 0" >> "$BENCH_DIR/redo.$w"
-  n=${line#* }
   k=$(grep -c . "$BENCH_DIR/q.$w")
-  printf '%s %s %s %s\n' "$h" "${line% *}" "$n" "$url" >> "$BENCH_DIR/q.$w"
   # варианты — в случайном порядке, у каждого сайта своём
-  awk -v n="$n" -v seed="$$$w$k$(date +%s)" 'BEGIN { srand(seed % 2147483647); for (i = 1; i <= n; i++) a[i] = i
+  bench_set "${line% *}" "${line#* }" | awk -v seed="$$$w$k$(date +%s)" '{ a[++n] = $1 }
+    END { srand(seed % 2147483647)
       for (i = n; i > 1; i--) { j = int(rand() * i) + 1; t = a[i]; a[i] = a[j]; a[j] = t }
       for (i = 1; i <= n; i++) print a[i] }' > "$BENCH_DIR/ord.$w.$k"
+  n=$(grep -c . "$BENCH_DIR/ord.$w.$k")
+  printf '%s %s %s %s\n' "$h" "${line% *}" "$n" "$url" >> "$BENCH_DIR/q.$w"
   echo "$n" >> "$BENCH_DIR/plan.$w"
   return 0
 }

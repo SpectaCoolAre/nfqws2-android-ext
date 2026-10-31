@@ -568,16 +568,19 @@ async function runDomainCheck(){
   dcRunning = true;
   $('dc-go').disabled = true;
   $('dc-q').blur();
-  const st = {mode: '', lists: [], ip: '', tries: [], keep: ''};
+  const st = {mode: '', lists: [], ip: '', tries: [], keep: '', nb: '', speed: null, dns: null};
   const paint = done => setHTML('dc-res', dcRender(q, st, done), false);
   paint(false);
-  const r = await ctlx(['domain-check', q], 60000, line => {
+  const r = await ctlx(['domain-check', q], 90000, line => {
     const p = line.split('\t');
     if(p[0] === 'MODE') st.mode = p[1];
     else if(p[0] === 'LIST') st.lists.push({file: p[1], role: p[2], entry: p[3]});
     else if(p[0] === 'IP') st.ip = p[1];
     else if(p[0] === 'R'){ const [ok, v] = (p[2] || '').split(' '); st.tries.push({ok: ok === 'ok', v}); }
     else if(p[0] === 'K') st.keep = p[1];
+    else if(p[0] === 'N') st.nb = p[1] || '';
+    else if(p[0] === 'S'){ const [b, s] = (p[1] || '').split(' '); st.speed = b === 'skip' ? null : {bytes: +b || 0, bps: +s || 0}; }
+    else if(p[0] === 'D') st.dns = {route: p[1] || '', pmode: p[2] || ''};
     else return;
     paint(false);
   });
@@ -593,6 +596,31 @@ function dcVerdict(st){
   if(st.mode === 'all') return ['ok', 'check', t('Под обходом: режим «все сайты, кроме исключений»')];
   return ['warn', 'info', t('Не под обходом: домена нет в списках, которые использует текущая стратегия')];
 }
+/* Почему не работает: что дали попытки через обход, без него (тот же адрес
+   мимо nfqws2), повторный запрос и скорость. -> [вид, значок, текст] | null */
+const DC_SLOW = 32768;   // байт/с: медленнее — похоже на замедление
+const DC_SPEED_MIN = 100000;   // байт: на меньшем ответе скорость не измерить
+function dcDiagnosis(st){
+  const n = st.tries.length, ok = st.tries.filter(x => x.ok).length;
+  if(!n) return null;
+  const nbOk = st.nb.startsWith('ok'), nbFail = st.nb.startsWith('fail');
+  if(!ok){
+    if(st.tries.every(x => x.v === 'dns_fail')) return ['danger', 'error', t('Адрес сайта не находится — дело в DNS, а не в обходе')];
+    if(nbOk) return ['danger', 'error', t('Обход мешает этому сайту: без обхода он открывается. Добавьте домен в exclude.list')];
+    if(nbFail) return ['danger', 'error', t('Не открывается ни через обход, ни без него: текущий вариант эту блокировку не обходит, или сайт недоступен. Умный режим переберёт варианты сам; со стратегией — попробуйте другую')];
+    return ['danger', 'error', t('Через обход не открывается')];
+  }
+  if(st.keep === 'stall') return ['danger', 'error', t('Соединение замораживается после первого обмена: первый запрос проходит, следующие — нет')];
+  if(st.speed && st.speed.bytes >= DC_SPEED_MIN && st.speed.bps < DC_SLOW)
+    return ['warn', 'warn', t('Сайт открывается, но очень медленно ({0} КБ/с) — похоже на замедление. Умный режим считает такие соединения ошибкой варианта и подберёт другой', Math.round(st.speed.bps / 1024))];
+  if(nbOk && ok === n) return ['', 'info', t('Сайт не заблокирован: открывается и без обхода')];
+  if(nbFail && ok === n) return ['', 'check', t('Открывается благодаря обходу: без него не открывается')];
+  return null;
+}
+const DC_DNS_ROUTE = {
+  geo: 'через DNS с обходом геоблока', cdn: 'через умный DNS видео и CDN',
+  default: 'через DNS по умолчанию', off: 'DNS модуля сейчас не работает'
+};
 function dcRender(q, st, done){
   const out = [];
   if(st.mode){
@@ -600,6 +628,11 @@ function dcRender(q, st, done){
     out.push(banner(kind === 'ok' ? '' : 'warn', ic, text));
     if(!S.running) out.push(banner('', 'info', t('Служба остановлена — сейчас обход не работает ни для каких доменов.')));
   }
+  const dg = done ? dcDiagnosis(st) : null;
+  if(dg) out.push(banner(dg[0], dg[1], t('Вероятная причина: {0}', dg[2])));
+  // «Частный DNS» Android шлёт запросы по DoT мимо DNS модуля
+  if(done && st.dns && (st.dns.pmode === 'opportunistic' || st.dns.pmode === 'hostname'))
+    out.push(banner('warn', 'warn', t('«Частный DNS» в Android включён ({0}) — запросы могут идти мимо DNS модуля. Лучше выключить: Настройки → Сеть → Частный DNS', st.dns.pmode === 'hostname' ? t('свой сервер') : t('автоматически'))));
   const rows = [];
   if(st.mode) rows.push(dcRow('list', t('Списки'), st.lists.length
     ? st.lists.map(l => l.file + ' — ' + l.entry + ' (' + t(DC_ROLE[l.role] || l.role) + ')').join('\n')
@@ -618,6 +651,19 @@ function dcRender(q, st, done){
   else if(st.keep === 'stall') rows.push(dcRow('refresh', t('Повторный запрос'),
     t('Зависает: первый запрос отвечает, следующий по тому же соединению — нет. Соединение замораживается после первого обмена — приложения покажут ошибку со второго запроса'), 'bad'));
   else if(n === 3 && ok.length && !done) rows.push(dcRow('refresh', t('Повторный запрос'), t('Проверяю…')));
+  if(st.nb.startsWith('ok')) rows.push(dcRow('shield', t('Без обхода'), t('Открывается и без обхода')));
+  else if(st.nb.startsWith('fail')) rows.push(dcRow('shield', t('Без обхода'), t('Не открывается: {0}', t(PROBE_REASON[st.nb.split(' ')[1]] || PROBE_REASON.other))));
+  if(st.speed){
+    const kb = Math.round(st.speed.bps / 1024);
+    if(st.speed.bytes >= DC_SPEED_MIN)
+      rows.push(dcRow('download', t('Скорость через обход'), st.speed.bps < DC_SLOW ? t('{0} КБ/с — медленно', kb) : t('{0} КБ/с', kb), st.speed.bps < DC_SLOW ? 'bad' : 'ok'));
+    else
+      rows.push(dcRow('download', t('Скорость через обход'), t('Ответ слишком маленький для замера ({0} КБ). Чтобы измерить, укажите адрес файла: домен/путь', Math.round(st.speed.bytes / 1024))));
+  }
+  if(st.dns){
+    const r = st.dns.route;
+    rows.push(dcRow('dns', t('DNS модуля'), r.startsWith('rule ') ? t('через профиль: {0}', r.slice(5)) : t(DC_DNS_ROUTE[r] || DC_DNS_ROUTE.default)));
+  }
   if(rows.length) out.push('<div class="list">' + rows.join('') + '</div>');
   if(done && st.mode){
     const acts = [];

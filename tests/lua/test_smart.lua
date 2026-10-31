@@ -53,7 +53,7 @@ local function packet(track, opts)
 	if opts.incoming then tcp.pos = (opts.seq or 1) + (opts.len or 1400) end
 	local desync = { target = {},
 		track = track, outgoing = not opts.incoming, l7payload = "tls_client_hello",
-		dis = { tcp = { th_flags = (opts.rst and TH_RST or 0) + (opts.fin and TH_FIN or 0), th_sport = track.port, th_dport = 443 }, payload = string.rep("x", opts.len or 100) },
+		dis = { tcp = { th_flags = (opts.rst and TH_RST or 0) + (opts.fin and TH_FIN or 0), th_sport = track.port, th_dport = 443, th_ack = opts.ack }, payload = string.rep("x", opts.len or 100) },
 		arg = { slot = opts.slot or "tls", home = HOME, pass = tostring(opts.pass or N), first = opts.first, base = opts.base },
 		func_instance = "smart_" .. (opts.slot or "tls"), plan = (opts.plan or plan)()
 	}
@@ -694,6 +694,85 @@ do
 	local v = packet(conn("bench.example"))
 	check(v ~= nil, "benchmark over: the site is handled by the smart mode again")
 end
+
+section("a slow answer is a failure of the variant")
+-- часы с долями секунды: замедление видно по интервалам между пакетами
+local fclock = 5000
+clock_getfloattime = function() return fclock end
+-- соединение, ответ которого идёт пакетами по 1400 байт с интервалом gap;
+-- think — пауза сервера перед ответом
+local function rated(host, gap, think)
+	local c = conn(host)
+	packet(c)
+	local seq = 1
+	for i = 1, 11 do
+		fclock = fclock + (i == 4 and (think or gap) or gap)
+		packet(c, { incoming = true, seq = seq, len = 1400 })
+		seq = seq + 1400
+	end
+	fclock = fclock + 5
+	return c
+end
+local function errs(host) local r = rec(host); local e = 0; for _, w in pairs(r and r.err or {}) do e = e + w end; return e end
+SMART.rate, SMART.raten = nil, 0
+for i = 1, 6 do later(); rated("fast" .. i .. ".example", 0.002) end
+check(SMART.rate and SMART.rate > 200000, "the usual speed of the network is learned from ordinary connections (" .. math.floor(SMART.rate or 0) .. " B/s)")
+later(); rated("slowgh.example", 0.5)
+check(errs("slowgh.example") >= 1, "an answer crawling at ~3 KB/s here, where others get hundreds, is an error of its variant")
+check((readall(HOME .. "/logs/smart.log") or ""):find("slowgh.example: медленно", 1, true) ~= nil, "and the smart log says so with the speed")
+later(); rated("think.example", 0.002, 3)
+check(errs("think.example") == 0, "a server that thinks 3 s and then answers fast is not slow")
+-- медленная сама по себе сеть: всё по 3 КБ/с — это не замедление
+SMART.rate, SMART.raten = nil, 0
+for i = 1, 6 do later(); rated("edge" .. i .. ".example", 0.5) end
+later(); rated("edgeslow.example", 0.5)
+check(errs("edgeslow.example") == 0, "on a network that is slow for everyone a slow site is not blamed on the variant")
+SMART.rate, SMART.raten = nil, 0
+later(); rated("early.example", 0.5)
+check(errs("early.example") == 0, "no verdict before the usual speed of the network is known")
+
+section("a server that takes the ClientHello and stays silent")
+-- ТСПУ глушит ответ: ClientHello подтверждён (переотправок нет), ответа нет;
+-- браузер ждал бы свои 30 секунд. Соединение живо в таблице, но не застряло
+later(400); os.remove(HOME .. "/state/smart_kill")
+host_ip = function(d) return d.track.ip or "104.244.42.1" end
+local function aliveline(lp, iphex) local l = tcpline(lp, false); return iphex and l:gsub("012AF468", iphex) or l end
+local sc = conn("silent.example"); sc.ip = "192.168.1.9"; local sv = packet(sc)
+later(2); tcptable({ aliveline(sc.port, "0901A8C0") }); smart_watch()
+check(next(rec("silent.example").err) == nil, "two seconds of silence are not judged yet")
+later(3); smart_watch()
+check((rec("silent.example").err[sv] or 0) > 0, "after four seconds of silence the variant gets an error")
+check((readall(HOME .. "/state/smart_kill") or ""):find(" " .. sc.port .. "\n", 1, true) ~= nil, "and the connection is cut: the app reconnects at once")
+check((readall(HOME .. "/logs/smart.log") or ""):find("silent.example: сервер принял ClientHello и молчит", 1, true) ~= nil, "the smart log says so")
+smart_watch()
+check((rec("silent.example").err[sv] or 0) <= 1.01, "counted once")
+later(400); os.remove(HOME .. "/state/smart_kill")
+local tc = conn("talk.example"); tc.ip = "192.168.1.9"; packet(tc); packet(tc, { incoming = true, seq = 1, len = 1400 })
+later(5); tcptable({ aliveline(tc.port, "0901A8C0") }); smart_watch()
+check(next(rec("talk.example").err) == nil, "a server that answered is not silent")
+-- журнал test16: восстановление сеанса TLS — ответ всего 203 байта
+local rs = conn("resume.example"); rs.ip = "192.168.1.9"; packet(rs); packet(rs, { incoming = true, seq = 1, len = 203 })
+later(5); tcptable({ aliveline(rs.port, "0901A8C0") }); smart_watch()
+check(next(rec("resume.example").err) == nil, "a 203-byte answer (TLS session resumption) is an answer")
+-- журнал test16: пакеты сервера nfqws2 уже не видит (лимит очереди), но
+-- телефон подтверждает его данные — ответ был
+local bl = conn("blind.example"); bl.ip = "192.168.1.9"
+packet(bl, { ack = 1000 }); for i = 1, 6 do packet(bl, { incoming = true, len = 0 }) end
+packet(bl, { ack = 5400, len = 0, outgoing = true })
+later(5); tcptable({ aliveline(bl.port, "0901A8C0") }); smart_watch()
+check(next(rec("blind.example").err) == nil, "server data acknowledged by the phone counts as an answer even when nfqws2 did not see it")
+-- пакетов в обе стороны столько, что дальше их не видно: не судим
+local fl = conn("flood.example"); fl.ip = "192.168.1.9"; packet(fl)
+for i = 1, 12 do packet(fl, { incoming = true, len = 0 }) end
+later(5); tcptable({ aliveline(fl.port, "0901A8C0") }); smart_watch()
+check(next(rec("flood.example").err) == nil, "past the visible packets of a connection there is nothing to judge")
+later(400); os.remove(HOME .. "/state/smart_kill")
+local q1, q2, q3 = conn("q1.example"), conn("q2.example"), conn("q3.example")
+q1.ip, q2.ip, q3.ip = "192.168.1.1", "192.168.1.2", "192.168.1.3"
+packet(q1); packet(q2); packet(q3); later(5)
+tcptable({ aliveline(q1.port, "0101A8C0"), aliveline(q2.port, "0201A8C0"), aliveline(q3.port, "0301A8C0") }); smart_watch()
+check(next(rec("q1.example").err) == nil and next(rec("q2.example").err) == nil, "silent servers everywhere at once are the network, not DPI: no errors")
+tcptable({})
 
 section("slots are separate")
 check(okconn("b.example", "quic") == 1, "the same site in another slot starts fresh")

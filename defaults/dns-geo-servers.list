@@ -1,0 +1,17 @@
+# DoT-серверы для автовыбора DNS обхода геоблока (DNS_GEO_VIA=auto): модуль
+# раз в несколько часов проверяет каждый — отвечает ли в этой сети, как быстро
+# и отдаёт ли для сервисов с геоблоком адреса своих прокси, — и берёт самые
+# быстрые из самых полных. Список — от автора GeoHide. Порт 853, имя — для TLS
+dns.bezmezhau.com
+dns.commonnet.work
+dns.comss.one
+router.comss.one
+dns.dagami.ru
+dns.dns-ai.ru
+dns.mafioznik.xyz
+dns.malw.link
+dns.magicdns.ru
+dns.zapret.moe
+dns.wlrus.cfd
+d.webshiftvpn.ru
+free.shecan.ir

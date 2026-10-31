@@ -460,6 +460,7 @@ ctl export-logs path dns,service
 assert_match "$ctl_out" "^nfqws2-logs-.*\.tar	" "two of them — an archive"
 assert_contains "$(tar -tf "$(printf '%s' "$ctl_out" | cut -f2)")" "dns.log" "with what was chosen"
 assert_not_contains "$(tar -tf "$(printf '%s' "$ctl_out" | cut -f2)")" "doctor.txt" "and nothing else"
+assert_eq "" "$(tar -tf "$(printf '%s' "$ctl_out" | cut -f2)" | grep '^\./')" "entries are plain names: no «.» folder when a file manager opens the archive"
 ctl export-logs path nosuch
 assert_rc 1 "$ctl_rc" "an unknown log is refused"
 rm -f "$LOG_DIR/nfqws2-debug.log" "$CONFDIR/logs/nfqws2-debug.log"
@@ -471,6 +472,7 @@ ctl export-logs share dns,smart
 assert_rc 0 "$ctl_rc" "share builds a temporary archive"
 assert_match "$ctl_out" "$SANDBOX/exp/.share/nfqws2-logs-" "in its own folder"
 assert_contains "$(cat "$MOCK_DIR/am.log")" "android.intent.action.SEND" "and opens the share sheet"
+assert_match "$(cat "$MOCK_DIR/am.log")" "SEND --user 0 -d [^ ]+ -t application/x-tar" "the link is also the intent data, so the read grant reaches the app (Telegram), and the type is tar"
 rm -f "$MOCKBIN/am"
 if [ -n "$EXP_OLD" ]; then NFQWS_BACKUP_DIR="$EXP_OLD"; else unset NFQWS_BACKUP_DIR; fi
 
@@ -585,6 +587,40 @@ assert_no_match "$ctl_out" "K	" "and no repeat request: WebSocket is not request
 echo 403 > "$MOCK_DIR/ws.code"
 ctl domain-check gateway.discord.gg
 assert_match "$ctl_out" "R	[123]	fail ws_blocked" "the server answered but WebSocket did not go through: blocked"
+# Почему не работает: та же попытка мимо обхода (curl --resolve на тот же
+# адрес, правило RETURN для него) и скорость скачивания
+cat > "$MOCKBIN/curl" <<'X'
+#!/bin/sh
+nb=0; sp=0; o=""
+for a; do
+  [ "$p" = "-o" ] && o="$a"
+  [ "$a" = "--resolve" ] && nb=1
+  case "$a" in *size_download*) sp=1 ;; esac
+  p="$a"
+done
+if [ "$sp" = 1 ]; then printf '%s' "$(cat "$MOCK_DIR/speed")"; exit 0; fi
+if [ "$nb" = 1 ]; then
+  iptables -w -t mangle -S nfqws_post 2>/dev/null | grep -q 'uid-owner 0 -d 203.0.113.7' && echo rule >> "$MOCK_DIR/nb.log"
+  exit "$(cat "$MOCK_DIR/nb.rc")"
+fi
+[ -n "$o" ] && printf 'ok' > "$o"
+exit "$(cat "$MOCK_DIR/via.rc")"
+X
+chmod 0755 "$MOCKBIN/curl"
+iptables -w -t mangle -N nfqws_post 2>/dev/null
+sleep 30 & fakesvc=$!; echo "$fakesvc" > "$PIDFILE"
+echo 35 > "$MOCK_DIR/via.rc"; echo 0 > "$MOCK_DIR/nb.rc"; echo '900000 2500.000' > "$MOCK_DIR/speed"; : > "$MOCK_DIR/nb.log"
+ctl domain-check blocked-by-bypass.example
+assert_match "$ctl_out" "N	ok" "the same address without the bypass is tried too"
+assert_eq "rule" "$(head -n 1 "$MOCK_DIR/nb.log")" "past nfqws2: a RETURN rule for that address only while it runs"
+assert_not_contains "$(iptables -w -t mangle -S nfqws_post 2>/dev/null)" "uid-owner 0" "and the rule is removed afterwards"
+assert_match "$ctl_out" "S	900000 2500" "the download speed through the bypass is measured"
+echo 0 > "$MOCK_DIR/via.rc"; echo 35 > "$MOCK_DIR/nb.rc"
+ctl domain-check needs-bypass.example
+assert_match "$ctl_out" "N	fail tls" "a site that needs the bypass fails without it"
+kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; rm -f "$PIDFILE"
+ctl domain-check stopped.example
+assert_match "$ctl_out" "N	skip" "with the service stopped there is nothing to compare"
 rm -f "$MOCKBIN/ping" "$MOCKBIN/curl"
 
 # ── поделиться файлом ─────────────────────────────────────────────────────────

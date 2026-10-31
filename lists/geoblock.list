@@ -1,5 +1,5 @@
 # Сервисы с геоблоком: в умном режиме DNS их домены идут в DNS с обходом
-# (GeoHide, Comss, malw). Основа — itdoginfo/allow-domains (geoblock) и список
+# (Comss, GeoHide, zapret.moe). Основа — itdoginfo/allow-domains (geoblock) и список
 # GeoHide; свои домены можно дописать — обновление списка их сохранит
 37signals.com
 4pda.to

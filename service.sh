@@ -321,7 +321,8 @@ smartkill() {
   echo $$ > "$SK_PIDFILE"
   protect_process
   trap 'smartkill_exit; exit 0' TERM INT HUP
-  local w="$SMART_KILL_FILE.work" ver ip lp c up flush=0 n learn_at=0 lp_pid= every
+  local w="$SMART_KILL_FILE.work" ver ip lp c up flush=0 n learn_at=0 lp_pid= every ss=""
+  command -v ss >/dev/null 2>&1 && ss=ss
   # заявки прошлого запуска — до того, как цепочка заработает: их порты уже
   # могли достаться другим соединениям
   rm -f "$SMART_KILL_FILE"
@@ -355,6 +356,11 @@ smartkill() {
         case "$ip" in ''|*[!0-9a-fA-F.:]*) continue ;; esac
         case "$lp" in ''|*[!0-9]*) continue ;; esac
         $c -w -t filter -A $SK_CHAIN -p tcp -d "$ip" --sport "$lp" -j REJECT --reject-with tcp-reset 2>/dev/null && n=$((n + 1))
+        # REJECT срабатывает на следующий пакет приложения, а то, что ждёт
+        # ответа сервера (он молчит после ClientHello), ничего не шлёт. ss -K
+        # закрывает сокет сразу (SOCK_DESTROY — так Android закрывает сокеты
+        # при смене сети); нет ss или ядро не умеет — остаётся REJECT
+        [ -n "$ss" ] && $ss -K dst "$ip" sport = ":$lp" >/dev/null 2>&1
       done < "$w"
       rm -f "$w"
       [ "$n" -gt 0 ] && flush=$((up + 15))
@@ -383,7 +389,7 @@ wlwatch() {
     conf_refresh
     wl_wanted || break
     read -r up _ < /proc/uptime; up=${up%.*}
-    net=$(cat "$SMART_NET_FILE" 2>/dev/null)
+    net=""; [ -f "$SMART_NET_FILE" ] && read -r net < "$SMART_NET_FILE"
     [ "$net" != "$last" ] && { last="$net"; next=0; pend=0; }
     [ "$up" -ge "$next" ] || continue
     if on_wifi || vpn_active; then
@@ -514,9 +520,16 @@ netwatch() {
       netsig="$sig"
       # умный режим переключается на выученное для новой сети сам, без перезапуска
       smart_net_update
+      # Без ISP_INTERFACE и точки доступа правила от интерфейса не зависят:
+      # пересобирать их нужно, только если система их сбросила (раньше —
+      # при каждой смене сети, десятки раз в день)
       if [ -f "$DESIRED_FILE" ] && is_running; then
-        log_msg "netwatch: сеть изменилась (ip monitor) — пересобираю правила"
-        firewall_start
+        if [ -n "$ISP_INTERFACE" ] || [ "$ENABLE_HOTSPOT" = "1" ] || ! firewall_ok; then
+          log_msg "netwatch: сеть изменилась (ip monitor) — пересобираю правила"
+          firewall_start
+        else
+          log_msg "netwatch: сеть изменилась (ip monitor) — правила на месте"
+        fi
       fi
       home_check
       read -r up _ < /proc/uptime; recheck=$(( ${up%.*} + 30 ))
@@ -537,12 +550,12 @@ netwatch() {
 watchdog() {
   echo $$ > "$WD_PIDFILE"
   # убитый извне — без PID-файла, иначе следующий запуск верил бы мёртвому PID (оригинал, 00c1a16)
-  trap 'rm -f "$WD_PIDFILE"; exit 0' INT TERM
+  trap 'rm -f "$WD_PIDFILE" "$STATE_DIR/conf_seen.$$"; exit 0' INT TERM
   protect_process
   local fails=0 tick=0 dpid
   while :; do
     sleep 20
-    load_conf >/dev/null 2>&1
+    conf_refresh
     watchers_wanted || break
     tick=$((tick + 1))
     # once a minute: cmd wifi is the expensive part
@@ -551,7 +564,7 @@ watchdog() {
     [ $((tick % 3)) -eq 0 ] && is_running && smart_net_update
     # DNS — до проверки WATCHDOG: упавший dnsproxy с правилами перехвата
     # оставил бы телефон совсем без DNS
-    dns_enabled && dns_check
+    dns_enabled && DNS_PROBE=$((tick % 3 == 0)) dns_check
     [ "$WATCHDOG" = "1" ] || continue
     [ -f "$DESIRED_FILE" ] || continue
 
@@ -574,7 +587,7 @@ watchdog() {
 
     # Защита от LMK: периодически поддерживаем иммунитет демона и вотчдога
     dpid=$(cat "$PIDFILE" 2>/dev/null)
-    [ -n "$dpid" ] && protect_process "$dpid"
+    [ -n "$dpid" ] && protect_process "$dpid" norenice
     protect_process
 
     # fast iptables recovery after a network switch
@@ -584,7 +597,7 @@ watchdog() {
     fi
     [ $((tick % 25)) -eq 0 ] && rotate_logs
   done
-  rm -f "$WD_PIDFILE"
+  rm -f "$WD_PIDFILE" "$STATE_DIR/conf_seen.$$"
 }
 
 # home Wi-Fi: networks from home_wifi.list pause the service; leaving resumes.
@@ -709,7 +722,19 @@ case "$1" in
     rm -f "$PIDFILE" "$WD_PIDFILE" "$WN_PIDFILE" "$SK_PIDFILE" "$WL_PIDFILE" "$PF_PIDFILE" "$WL_FILE" "$DESIRED_FILE" "$STARTED_FILE" "$STARTED_CS_FILE"
     rm -f "$STATE_DIR"/conf_seen.*
     rmdir "$STATE_DIR/start.lock" 2>/dev/null
-    until [ "$(getprop sys.boot_completed 2>/dev/null)" = "1" ]; do sleep 3; done
+    # Ждём загрузку: resetprop -w (Magisk, KernelSU, APatch) спит до смены
+    # свойства, а не опрашивает его. Ему передаётся только что прочитанное
+    # значение — иначе, если свойство стало 1 между чтением и вызовом, он ждал
+    # бы следующей смены вечно. Нет resetprop или он не умеет -w — опрос.
+    # Вернулся, а свойство то же (сборка, где -w не ждёт) — пауза, без круга
+    # вхолостую
+    bs=$(getprop sys.boot_completed 2>/dev/null)
+    while [ "$bs" != "1" ]; do
+      command -v resetprop >/dev/null 2>&1 && resetprop -w sys.boot_completed "$bs" >/dev/null 2>&1 || sleep 3
+      nb=$(getprop sys.boot_completed 2>/dev/null)
+      [ "$nb" = "$bs" ] && sleep 1
+      bs=$nb
+    done
     sleep 4
     [ -f "$CONFDIR/disable" ] && { log_msg "Найден $CONFDIR/disable — автозапуск пропущен"; : > "$STATE_DIR/boot_done"; exit 0; }
     rm -f "$HOME_PAUSED_FILE" "$HOME_OVERRIDE_FILE" "$HOME_AT_FILE"

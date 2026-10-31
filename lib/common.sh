@@ -67,8 +67,6 @@ TG_NET4="91.105.192.0/23 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/
 TG_NET6="2001:67c:4e8::/48 2001:b28:f23c::/48 2001:b28:f23d::/48 2001:b28:f23f::/48 2a0a:f280::/32"
 IPT_CAP_CACHE="$STATE_DIR/iptables-capabilities"
 
-# xt_owner allows max 128 ranges per rule
-APP_UID_MAX=128
 
 CNT_OUT_MASK=0x0f000000
 CNT_OUT_STEP=16777216
@@ -228,10 +226,12 @@ validate_args_conf() {
   return 0
 }
 
+# Читает файл встроенным read, без запуска cat: это зовут циклы помощников
+# каждые несколько секунд
 is_running() {
   [ -f "$PIDFILE" ] || return 1
-  local pid
-  pid=$(cat "$PIDFILE" 2>/dev/null)
+  local pid=""
+  IFS= read -r pid < "$PIDFILE" || [ -n "$pid" ] || return 1
   case "$pid" in ''|0|*[!0-9]*) return 1 ;; esac
   kill -0 "$pid" 2>/dev/null || return 1
   return 0
@@ -372,11 +372,15 @@ app_rules() {
   [ "$APP_MODE" = "exclude" ] && mark="$MARK_EXCLUDE"
   $CMD -w -t mangle -N $IPT_GROUP_APP 2>/dev/null
   $CMD -w -t mangle -F $IPT_GROUP_APP
-  chunks=$(printf '%s\n' "$uids" | tr ',' '\n' | grep -E '^[0-9]+$' | sort -n -u | awk -v mx="$APP_UID_MAX" '
-      # не a[b] = (b in a ? …): mawk и toybox awk заводят a[b] до проверки,
-      # и первый UID получал запятую впереди («--uid-owner ,10201»)
-      { b = int((NR - 1) / mx); if (b in a) a[b] = a[b] "," $0; else a[b] = $0 }
-      END { for (i = 0; i <= b; i++) if (i in a) print a[i] }')
+  # xt_owner принимает один UID или диапазон «от-до», списка через запятую
+  # не понимает: правило с «10201,10305» не добавлялось, и фильтр с двумя и
+  # больше приложениями не работал. Подряд идущие UID — диапазоном, остальные
+  # по одному (как в оригинале, a924a9a)
+  chunks=$(printf '%s\n' "$uids" | tr ',' '\n' | grep -E '^[0-9]+$' | sort -n -u | awk '
+      NR == 1 { s = p = $1; next }
+      $1 == p + 1 { p = $1; next }
+      { print (s == p ? s : s "-" p); s = p = $1 }
+      END { if (NR) print (s == p ? s : s "-" p) }')
   # не «| while read»: тело в подоболочке, и пакетный режим (_fw_batch_cmd
   # копит строки в переменной) терял бы эти правила. В пачке пробелов нет,
   # так что хватает обычного разбиения по словам
@@ -386,10 +390,12 @@ app_rules() {
   $CMD -w -t mangle -A $IPT_GROUP_POST -j $IPT_GROUP_APP
   if [ "$APP_MODE" = "exclude" ]; then
     $CMD -w -t mangle -A $IPT_GROUP_POST -m connmark --mark "$MARK_EXCLUDE" -j RETURN
-    [ "$LIMITER" = "connbytes" ] && $CMD -w -t mangle -A $IPT_GROUP_PRE -m connmark --mark "$MARK_EXCLUDE" -j RETURN
+    # ответы чужих соединений — мимо очереди при любом ограничителе (раньше
+    # только с connbytes: с CONNMARK входящие исключённых приложений шли в nfqws2)
+    $CMD -w -t mangle -A $IPT_GROUP_PRE -m connmark --mark "$MARK_EXCLUDE" -j RETURN
   else
     $CMD -w -t mangle -A $IPT_GROUP_POST -m connmark ! --mark "$MARK_INCLUDE" -j RETURN
-    [ "$LIMITER" = "connbytes" ] && $CMD -w -t mangle -A $IPT_GROUP_PRE -m connmark ! --mark "$MARK_INCLUDE" -j RETURN
+    $CMD -w -t mangle -A $IPT_GROUP_PRE -m connmark ! --mark "$MARK_INCLUDE" -j RETURN
   fi
   log_msg "Фильтр по приложениям ($APP_MODE): $n UID"
   return 0
@@ -1157,12 +1163,14 @@ firewall_start() {
   else
     firewall_iptables || rc=1
   fi
+  # fw6 — правила IPv6 стоят: по нему firewall_ok проверяет и их
+  rm -f "$STATE_DIR/fw6"
   if [ "$IPV6_ENABLED" = "0" ]; then
     :
   elif command -v ip6tables-restore >/dev/null 2>&1; then
-    firewall_ip6tables_restore || { firewall_ip6tables || rc=1; }
+    if firewall_ip6tables_restore || firewall_ip6tables; then : > "$STATE_DIR/fw6"; else rc=1; fi
   else
-    firewall_ip6tables || rc=1
+    if firewall_ip6tables; then : > "$STATE_DIR/fw6"; else rc=1; fi
   fi
   meta_quic_start
   apply_tether_offload
@@ -1179,7 +1187,9 @@ firewall_stop() {
 
 firewall_ok() {
   iptables -w -t mangle -C POSTROUTING -j $IPT_GROUP_POST 2>/dev/null || return 1
-  iptables -w -t mangle -S $IPT_GROUP_POST 2>/dev/null | grep -qE -- 'NFQUEUE|nfqws_qout'
+  iptables -w -t mangle -S $IPT_GROUP_POST 2>/dev/null | grep -qE -- 'NFQUEUE|nfqws_qout' || return 1
+  [ -f "$STATE_DIR/fw6" ] || return 0
+  ip6tables -w -t mangle -C POSTROUTING -j $IPT_GROUP_POST 2>/dev/null
 }
 
 # Some ROMs freeze the app cgroup the root process started in; move it to the
@@ -1200,8 +1210,9 @@ protect_process() {   # $1 - PID; default: current process
     echo "$p" > /dev/cpuset/cgroup.procs 2>/dev/null
   fi
   # демону — высший приоритет: пакеты в очереди ждут его (из оригинала,
-  # 18ed353). Наблюдателям (без аргумента) не нужно: они почти всё время спят
-  if [ -n "$1" ] && command -v renice >/dev/null 2>&1; then
+  # 18ed353). Наблюдателям (без аргумента) не нужно: они почти всё время спят.
+  # Приоритет не сбрасывается — watchdog его не повторяет ($2 = norenice)
+  if [ -n "$1" ] && [ "$2" != norenice ] && command -v renice >/dev/null 2>&1; then
     renice -n -20 -p "$p" >/dev/null 2>&1 || renice -20 "$p" >/dev/null 2>&1
   fi
   return 0
@@ -1424,6 +1435,8 @@ update_description() { # running | stopped | paused <ssid>
     *)      d="⛔ Остановлено" ;;
   esac
   d=$(printf '%s' "$d | $DESC_BASE" | tr -d '\n\r')
+  # та же строка уже записана — флеш не трогаем (как в оригинале, b07ae08)
+  [ "$(sed -n 's/^description=//p' "$prop" 2>/dev/null)" = "$d" ] && return 0
   tmp="$STATE_DIR/module.prop.$$"
   # через окружение, а не -v: -v разбирает «\n» и прочие escape-последовательности,
   # и SSID с обратной косой чертой ломал бы module.prop
@@ -1600,8 +1613,11 @@ wl_probe() {
 
 on_wifi() {
   local d n="${NFQWS_SYSNET:-/sys/class/net}"
+  local s
   for d in "$n"/wlan*; do
-    [ "$(cat "$d/operstate" 2>/dev/null)" = up ] && return 0
+    [ -r "$d/operstate" ] || continue
+    s=""; read -r s < "$d/operstate"
+    [ "$s" = up ] && return 0
   done
   return 1
 }

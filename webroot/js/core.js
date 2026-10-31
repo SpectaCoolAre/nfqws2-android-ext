@@ -96,7 +96,10 @@ async function exportBlobFile(blob, filename, mimeType, localFilePath, targetDir
         'u=$(content insert --uri content://media/external/file --bind _data:s:"$rf" --bind mime_type:s:"application/octet-stream" 2>/dev/null | grep -o \'content://[^ ]*\'); ' +
         '[ -z "$u" ] && u=$(content query --uri content://media/external/file --projection _id --where "_data=\'$tf\' OR _data=\'$rf\'" 2>/dev/null | grep -o \'_id=[0-9]*\' | head -n1 | sed \'s/_id=/content:\\/\\/media\\/external\\/file\\//\'); ' +
         '[ -z "$u" ] && u=' + q(safUri) + '; ' +
-        'am start -a android.intent.action.SEND --user 0 -t "*/*" --eu android.intent.extra.STREAM "$u" --es android.intent.extra.SUBJECT ' + q(filename) +
+        // ссылка и в данных intent: am не переносит EXTRA_STREAM в ClipData, и без
+        // этого флаг чтения не даёт получателю доступа (Telegram: unsupported attachment)
+        'am start -a android.intent.action.SEND --user 0 -d "$u" -t ' + q(/\.tar$/.test(filename) ? 'application/x-tar' : /\.zip$/.test(filename) ? 'application/zip' : 'application/octet-stream') +
+        ' --eu android.intent.extra.STREAM "$u" --es android.intent.extra.SUBJECT ' + q(filename) +
         ' --es android.intent.extra.TITLE ' + q(filename) + ' -f 0x10000001 >/dev/null 2>&1');
     } catch(e) {}
     toast(t('Архив сохранён: {0}', targetFile));

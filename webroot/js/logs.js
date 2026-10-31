@@ -8,7 +8,6 @@ const LOG_SOURCES = [['summary', 'Краткая статистика'], ['servi
 /* Журнал DNS — только если в модуле есть dnsproxy; отладка — только при
    включённом подробном журнале */
 const logSources = () => LOG_SOURCES.filter(s => (s[0] !== 'dns' || S.dns_available == 1) && (s[0] !== 'debug' || S.log_level == 1));
-function openSmartLog(){ logSource = 'smart'; store.set('nfq_log_src', 'smart'); navigate('logs'); }
 /* Кнопка журналов в шапке открывает журнал того, что сейчас на экране:
    «Состояние» — краткая статистика, «Списки» — автообучение, «Обход» —
    процесс nfqws2 (стратегии) или журнал умного режима; на остальных экранах —

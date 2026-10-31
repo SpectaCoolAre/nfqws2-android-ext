@@ -224,7 +224,7 @@ function render(){
         '<button class="btn tonal sm" onclick="openUrl(' + esc(JSON.stringify('https://github.com/' + p.repo + (p.track === 'releases' ? '/releases' : (p.path ? '/commits/' + (p.branch || 'HEAD') + '/' + p.path : '/commits/' + (p.branch || 'HEAD'))))) + ')">' + (p.track === 'releases' ? 'Релизы' : 'Коммиты') + '</button></div>';
     }
     return '<div class="card"><div class="row"><div class="name">' + esc(p.name) + '</div>' + statusPill(p, r) + '</div>' +
-      '<div class="repo" onclick="openUrl(' + esc(JSON.stringify('https://github.com/' + p.repo)) + ')">' + esc(p.repo) + (p.path ? ' · ' + esc(p.path) + '/' : '') + '</div>' +
+      '<div class="repo" onclick="openUrl(' + esc(JSON.stringify('https://github.com/' + p.repo)) + ')">' + esc(p.repo) + (p.path ? ' · ' + esc(p.path) : '') + '</div>' +
       '<div class="meta">У нас: ' + used + (p.date ? ' от ' + fmtDate(p.date) : '') + (r && r.latest && r.latest !== p.ref ? ' · последний: ' + esc(r.latest) : '') + '</div>' +
       (p.use ? '<div class="use">' + esc(p.use) + '</div>' : '') + body + '</div>';
   }).join('');

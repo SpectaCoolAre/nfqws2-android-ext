@@ -145,6 +145,21 @@ assert_contains "$(ipt_rules nfqws_app)" "--uid-owner 10201" "the resolved UID i
 assert_contains "$(ipt_rules nfqws_app)" "--set-xmark 0x10000000/0x10000000" "include mode marks matching traffic"
 assert_contains "$(ipt_rules nfqws_post)" "! --mark 0x10000000/0x10000000 -j RETURN" "unmarked traffic is skipped in include mode"
 assert_contains "$(ipt_rules nfqws_pre)" "-j nfqws_qin" "incoming traffic goes through the counter chain"
+pre=$(ipt_rules nfqws_pre)
+assert_contains "$pre" "! --mark 0x10000000/0x10000000 -j RETURN" "replies of apps outside the filter skip the queue with CONNMARK too, not only with connbytes"
+case "$pre" in *"! --mark 0x10000000/0x10000000 -j RETURN"*"-j nfqws_qin"*) r=0 ;; *) r=1 ;; esac
+assert_rc 0 "$r" "before the incoming counter chain"
+# xt_owner takes one UID or a range, never a list: several apps — several rules
+printf 'com.termux\norg.mozilla.firefox\ncom.example.browser\n' > "$CONFDIR/apps.list"
+ipt_reset
+svc firewall_apply
+app=$(ipt_rules nfqws_app)
+assert_not_contains "$app" "," "no comma lists in --uid-owner (the kernel rejects them, and the filter silently did nothing)"
+assert_contains "$app" "--uid-owner 10123 " "one rule per UID"
+assert_contains "$app" "--uid-owner 10188 " "each of them"
+printf 'com.termux\n' > "$CONFDIR/apps.list"
+ipt_reset
+svc firewall_apply
 
 # The counter chain walks PKT_LIMIT_OUT down to zero and then queues.
 qout=$(ipt_rules nfqws_qout)
@@ -184,6 +199,9 @@ ipt_reset
 svc firewall_apply
 assert_file "$MOCK_IPT_STORE/iptables/mangle/nfqws_post" "the IPv4 chain exists"
 assert_file "$MOCK_IPT_STORE/ip6tables/mangle/nfqws_post" "the IPv6 chain exists"
+firewall_ok; assert_rc 0 $? "firewall_ok sees both tables"
+ip6tables -w -t mangle -D POSTROUTING -j nfqws_post 2>/dev/null
+firewall_ok; assert_rc 1 $? "and notices when only the IPv6 rules were reset"
 svc firewall_stop >/dev/null 2>&1
 
 section "firewall_start reports a failure in either half"
@@ -412,6 +430,8 @@ EOF
 chmod 0755 "$MOCKBIN/ip"
 out=$(sh "$MODDIR/service.sh" status 2>&1)
 assert_not_contains "$out" "not found" "service.sh loads without «command not found» (a mangled function line would show here)"
+# с точкой доступа правила при смене сети пересобираются всегда — здесь без неё
+printf 'ENABLE_HOTSPOT=0\n' >> "$CONFFILE"
 svc stop >/dev/null 2>&1
 svc start >/dev/null 2>&1
 wait_for_file "$WN_PIDFILE" 8
@@ -422,6 +442,7 @@ sleep 1
 echo "2: wlan0: <BROADCAST,MULTICAST,UP> state UP" >> "$MOCK_DIR/ipmon"
 i=0; while [ "$i" -lt 8 ] && ! grep -q "netwatch: сеть изменилась" "$SERVICE_LOG" 2>/dev/null; do sleep 0.5; i=$((i + 1)); done
 assert_contains "$(cat "$SERVICE_LOG")" "netwatch: сеть изменилась" "a network event is acted on within seconds"
+assert_contains "$(grep 'netwatch: сеть изменилась' "$SERVICE_LOG" | tail -n 1)" "правила на месте" "rules still in place are not rebuilt for every network change"
 assert_rc 0 "$([ "$i" -le 6 ] && echo 0 || echo 1)" "about a second after the burst ends ($((i * 5 / 10)) s)"
 # Спит в wait: никакого цикла с sleep 1 в фоне
 nw=$(cat "$WN_PIDFILE" 2>/dev/null)

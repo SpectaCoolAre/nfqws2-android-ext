@@ -10,6 +10,8 @@ REPO_DIR=$(cd "$TESTS_DIR/.." && pwd)
 
 sandbox_init
 load_common
+# набор вариантов замера (#@bench-…) проверяется отдельно, в конце
+sed -i '/^#@bench-/d' "$MODDIR/strategies/smart.conf"
 cp -f "$MODDIR/strategies/smart.conf" "$CONFFILE"; echo smart > "$ACTIVE_FILE"
 reload_conf
 
@@ -194,6 +196,17 @@ assert_no_file "$STATE_DIR/smart_bench.0" "including the per-worker files"
 ctl smart-bench status
 assert_contains "$ctl_out" '"stage":"done"' "and the screen no longer shows it as going"
 kill "$other" 2>/dev/null
+
+section "a benchmark set: candidates against the best old variants"
+printf '#@bench-tls 2,4-9\n#@bench-google 3\n' >> "$MODDIR/strategies/smart.conf"
+# как при запуске из WebUI (smart-bench start): каталог замера — с чистого листа
+rm -rf "$BENCH_DIR"; mkdir -p "$BENCH_DIR"; rm -f "$SMART_DIR/bench-mobile-25001.tsv"
+ctl smart-bench run
+res="$SMART_DIR/bench-mobile-25001.tsv"
+assert_eq "0 2 4" "$(awk -F'\t' '$1 == 1 && $2 == "blocked.example" { print $4 }' "$res" | sort -n | tr '\n' ' ' | sed 's/ $//')" "a run tries a site without bypass and on the listed variants only (a range too), those the profile has"
+assert_eq "0 3" "$(awk -F'\t' '$1 == 1 && $2 == "yt.example" { print $4 }' "$res" | sort -n | tr '\n' ' ' | sed 's/ $//')" "google sites — on the google set"
+assert_eq "" "$(awk -F'\t' '$1 == 2 && $4 != 2 && $4 != 4 && $4 != 3' "$res")" "stage 2 repeats only variants of the set"
+sed -i '/^#@bench-/d' "$MODDIR/strategies/smart.conf"
 
 section "the extended pool switch"
 ctl set SMART_POOL 1

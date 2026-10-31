@@ -255,6 +255,9 @@ assert_contains "$ctl_out" '"paused":0' "it tells whether the service is paused 
 
 section "stuck connections are cut so apps reconnect on another variant"
 MOCK_DEV=rmnet_data0
+# ss -K закрывает сокет сразу: приложение, которое ждёт ответа, ничего не шлёт,
+# и REJECT на его следующий пакет не сработал бы
+printf '#!/bin/sh\necho "$*" >> "%s/ss.log"\n' "$MOCK_DIR" > "$MOCKBIN/ss"; chmod 0755 "$MOCKBIN/ss"; : > "$MOCK_DIR/ss.log"
 svc start
 assert_rc 0 "$svc_rc" "the smart strategy starts"
 i=0; while [ "$i" -lt 40 ] && [ ! -f "$SK_PIDFILE" ]; do sleep 0.5; i=$((i + 1)); done
@@ -264,6 +267,7 @@ assert_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/OUTPUT" 2>/dev/null)" "-
 printf '4 104.244.42.1 40001\n6 2a00:1450:4010:c05::64 40002\nx bad; line\n4 1.2.3.4 notaport\n' > "$SMART_KILL_FILE"
 i=0; while [ "$i" -lt 40 ] && ! grep -q 40002 "$MOCK_IPT_STORE/ip6tables/filter/nfqws_smartkill" 2>/dev/null; do sleep 0.5; i=$((i + 1)); done
 assert_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/nfqws_smartkill" 2>/dev/null)" "-p tcp -d 104.244.42.1 --sport 40001 -j REJECT --reject-with tcp-reset" "an IPv4 connection is cut with a reset"
+assert_contains "$(cat "$MOCK_DIR/ss.log")" "-K dst 104.244.42.1 sport = :40001" "and its socket is closed at once with ss -K, even if the app sends nothing"
 assert_contains "$(cat "$MOCK_IPT_STORE/ip6tables/filter/nfqws_smartkill" 2>/dev/null)" "-d 2a00:1450:4010:c05::64 --sport 40002" "an IPv6 one too"
 assert_not_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/nfqws_smartkill" 2>/dev/null)" "notaport" "garbage lines are skipped"
 assert_not_contains "$(cat "$SERVICE_LOG")" "оборвано" "the service log is not flooded with cut connections (they are in the smart mode log)"

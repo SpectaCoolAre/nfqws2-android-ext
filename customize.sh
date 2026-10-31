@@ -107,16 +107,16 @@ if [ -d "$DP" ] && [ ! -f "$CONF/dns/.presets2" ]; then
     rm -f "$f" && ui_print "- DNS: removed old preset profile $id"
   done
   # новые пресеты (Google, Яндекс, Cloudflare) — выключенными, если их ещё нет
-  # (удалённые пользователем Comss, GeoHide, malw не возвращаются)
+  # (удалённые пользователем Comss и GeoHide не возвращаются)
   for id in google yandex cloudflare; do
     f="$MODPATH/defaults/dns-presets/$id.conf"
     [ -f "$f" ] || continue
     [ -f "$DP/$id.conf" ] && continue
     sed 's/^ENABLED=.*/ENABLED=0/' "$f" > "$DP/$id.conf" && chmod 0644 "$DP/$id.conf"
   done
-  # Comss, GeoHide, malw: серверы — актуальные из релиза; включён ли профиль
+  # Comss и GeoHide: серверы — актуальные из релиза; включён ли профиль
   # и его домены — как были у пользователя
-  for id in comss geohide malw; do
+  for id in comss geohide; do
     f="$MODPATH/defaults/dns-presets/$id.conf"
     [ -f "$f" ] && [ -f "$DP/$id.conf" ] || continue
     { grep -E '^(NAME|DESC)=' "$f"; grep '^ENABLED=' "$DP/$id.conf"; grep '^SERVER=' "$f"; grep '^DOMAIN=' "$DP/$id.conf"; true; } > "$DP/$id.conf.new" &&
@@ -134,6 +134,21 @@ if [ -d "$DP" ] && [ ! -f "$CONF/dns/.presets3" ]; then
       mv -f "$DP/$id.conf.new" "$DP/$id.conf" && chmod 0644 "$DP/$id.conf"
   done
   : > "$CONF/dns/.presets3"
+fi
+
+# dns.malw.link почти не отвечал и заброшен — вместо него dns.zapret.moe (от
+# авторов Zapret2 GUI). Копия malw среди профилей уходит, если она выключена и
+# не выбрана DNS по умолчанию; zapret добавляется выключенным, а включён ли он
+# — решит пользователь (выбранный для обхода геоблока malw станет zapret сам)
+if [ -d "$DP" ] && [ ! -f "$CONF/dns/.presets4" ]; then
+  f="$DP/malw.conf"
+  if [ -f "$f" ] && ! grep -q '^ENABLED=1' "$f" && [ "$(cat "$CONF/dns/default" 2>/dev/null)" != malw ]; then
+    rm -f "$f" && ui_print "- DNS: dns.malw.link replaced with dns.zapret.moe"
+  fi
+  if [ -f "$MODPATH/defaults/dns-presets/zapret.conf" ] && [ ! -f "$DP/zapret.conf" ]; then
+    sed 's/^ENABLED=.*/ENABLED=0/' "$MODPATH/defaults/dns-presets/zapret.conf" > "$DP/zapret.conf" && chmod 0644 "$DP/zapret.conf"
+  fi
+  : > "$CONF/dns/.presets4"
 fi
 
 for src in "$MODPATH"/lists/*.list; do
