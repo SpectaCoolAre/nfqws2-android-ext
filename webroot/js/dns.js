@@ -105,11 +105,10 @@ function parseDnsState(out){
     }
     if(!cur) return;
     if(cur === st.geoscan){
+      // сервер ok|fail мс обходит доменов своим-адресом протокол [ошибка]
       const f = l.split('\t');
-      // 7-е поле — протокол (tls, https, «-»), за ним ошибка
-      const proto = /^(tls|https|-)$/.test(f[6] || '') ? f[6] : '';
-      if(f.length >= 6) st.geoscan.push({host: f[0], ok: f[1] === 'ok', ms: +f[2] || 0, proxy: +f[3] || 0, samples: +f[4] || 0,
-        marks: f[5].split(',').map(x => x.split('=')), proto, err: (proto ? f[7] : f[6]) || ''});
+      if(f.length >= 7) st.geoscan.push({host: f[0], ok: f[1] === 'ok', ms: +f[2] || 0, proxy: +f[3] || 0, total: +f[4] || 0,
+        own: +f[5] || 0, proto: f[6], err: f[7] || ''});
       return;
     }
     const i = l.indexOf('=');
@@ -268,6 +267,12 @@ function dnsGroupHead(id, ic, title, sub){
    см. lib/dns.sh dns_geo_scan), остальное — на DNS сети. Свой сервер для
    своих сервисов — профилем */
 const dnsGeoPool = () => (dnsSt.status.geo_pool || '').split(' ').filter(Boolean);
+/* Сколько доменов проверка направила к серверу (geo_for_<сервер>): каждый
+   домен идёт к тем, у кого для него прокси, а где у домена свой адрес — только
+   к ним (см. helper/geoscan.go) */
+const dnsGeoFor = host => +dnsSt.status['geo_for_' + host] || 0;
+const dnsGeoRole = host => dnsGeoPool().includes(host) ? t('в пуле')
+  : dnsGeoFor(host) ? t('доменов: {0}', fmtCount(dnsGeoFor(host))) : '';
 function renderDnsGeo(){
   const st = dnsSt.status || {};
   if(!$('dns-geo')) return;
@@ -276,12 +281,12 @@ function renderDnsGeo(){
     pool.length ? t('DNS: {0}', pool.join(', ')) : t('DNS: Comss — до первой проверки'))];
   if(dnsGroupOpen('geo')){
     rows.push(settingsRow({icon: 'refresh', title: 'Проверить DNS сейчас', on: 'dnsGeoScan()'}));
-    const list = (dnsSt.geoscan || []).slice().sort((a, b) => (b.ok - a.ok) || (b.proxy - a.proxy) || (a.ms - b.ms));
+    const list = (dnsSt.geoscan || []).slice().sort((a, b) => (b.ok - a.ok) || (dnsGeoFor(b.host) - dnsGeoFor(a.host)) || (b.proxy - a.proxy) || (a.ms - b.ms));
     list.forEach(r => {
       const sub = !r.ok ? t('не отвечает')
-        : [t('{0} мс', r.ms), r.proxy + '/' + r.samples].concat(r.proto === 'https' ? ['DoH'] : [], pool.includes(r.host) ? [t('в пуле')] : []).join(' · ');
+        : [t('{0} мс', r.ms), t('обходит {0} из {1}', fmtCount(r.proxy), fmtCount(r.total))].concat(r.proto === 'https' ? ['DoH'] : [], dnsGeoRole(r.host) ? [dnsGeoRole(r.host)] : []).join(' · ');
       rows.push('<div class="list-item two-line clickable state" role="button" tabindex="0" onclick="dnsGeoServerInfo(' + jsArg(r.host) + ')">' +
-        '<span class="li-icon">' + icon(r.ok ? (pool.includes(r.host) ? 'check' : 'dns') : 'error', 's24') + '</span>' +
+        '<span class="li-icon">' + icon(r.ok ? (dnsGeoRole(r.host) ? 'check' : 'dns') : 'error', 's24') + '</span>' +
         '<span class="li-text"><span class="li-primary truncate">' + esc(r.host) + '</span>' +
         '<span class="li-secondary truncate">' + esc(sub) + '</span></span></div>');
     });
@@ -297,10 +302,11 @@ function dnsGeoServerInfo(host){
   const r = (dnsSt.geoscan || []).find(x => x.host === host);
   if(!r) return;
   const at = +dnsSt.status.geo_scan_time ? new Date(dnsSt.status.geo_scan_time * 1000).toLocaleString() : '';
-  const mark = {p: t('обходит'), s: t('не обслуживает — настоящий адрес'), f: t('нет ответа')};
   const lines = r.ok
-    ? [t('Ответ за {0} мс по {1}', r.ms, r.proto === 'https' ? 'DoH' : 'DoT') + (dnsGeoPool().includes(host) ? ' · ' + t('в пуле') : ''), '']
-      .concat(r.marks.map(m => m[0] + ' — ' + (mark[m[1]] || m[1])))
+    ? [t('Ответ за {0} мс по {1}', r.ms, r.proto === 'https' ? 'DoH' : 'DoT') + (dnsGeoPool().includes(host) ? ' · ' + t('в пуле') : ''), '',
+      t('Обходит геоблок для {0} из {1} доменов списка', fmtCount(r.proxy), fmtCount(r.total)),
+      t('Из них своим адресом: {0} — для этих доменов годится любой протокол, в том числе игры', fmtCount(r.own)),
+      t('Направлено к нему доменов: {0}', fmtCount(dnsGeoFor(host)))]
     : [t('Не отвечает'), r.err || ''];
   if(at) lines.push('', t('Проверено {0}', at));
   mdDialog({title: host, text: lines.join('\n'), icon: false, cancel: false, ok: t('Закрыть')});

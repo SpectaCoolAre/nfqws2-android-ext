@@ -597,17 +597,19 @@ rm -f "$DNS_ENABLED_FILE"
 
 section "geo-block bypass: the module picks the bypass DNS itself"
 # Проверка — nfqws2-helper -geoscan (helper/geoscan.go); здесь поддельный
-# помощник печатает её итог: сервер ok|fail мс прокси образцов отметки
+# помощник печатает её итог: сервер ok|fail мс обходит доменов своим-адресом
+# протокол, затем маршруты «=домен<TAB>серверы»
 cat > "$HELPER_BIN" <<'EOF'
 #!/bin/sh
 [ "$1" = -geoscan ] || exit 2
 echo "$@" > "$MOCK_DIR/geoscan.args"
-printf 'slow.example\tok\t300\t7\t7\tchatgpt.com=p\n'
-printf 'fast.example\tok\t40\t7\t7\tchatgpt.com=p\n'
-printf 'ai.example\tok\t20\t3\t7\tchatgpt.com=p,gamea.clashofclans.com=s\n'
-printf 'mid.example\tok\t90\t7\t7\tchatgpt.com=p\thttps\n'
-printf 'next.example\tok\t120\t7\t7\tchatgpt.com=p\n'
-printf 'dead.example\tfail\t0\t0\t7\tchatgpt.com=f\ttimeout\n'
+cat "${4#@}" > "$MOCK_DIR/geoscan.list"
+printf 'slow.example\tok\t300\t7\t7\t0\ttls\n'
+printf 'fast.example\tok\t40\t7\t7\t0\ttls\n'
+printf 'ai.example\tok\t20\t3\t7\t3\ttls\n'
+printf 'mid.example\tok\t90\t7\t7\t0\thttps\n'
+printf 'next.example\tok\t120\t7\t7\t0\ttls\n'
+printf 'dead.example\tfail\t0\t0\t7\t0\t-\ttimeout\n'
 EOF
 chmod 0755 "$HELPER_BIN"
 printf 'chatgpt.com\nclaude.ai\n' > "$DNS_GEO_LIST"
@@ -619,8 +621,10 @@ dns_apply_now() { echo applied >> "$MOCK_DIR/geo.applied"; }
 dns_geo_scan
 assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "-boot 192.168.1.1:53" "reference answers and server addresses come from the network DNS"
 assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "dns.zapret.moe" "all the DoT servers of the list are checked"
-assert_eq "fast.example mid.example next.example" "$(dns_geo_pick | tr '\n' ' ' | sed 's/ $//')" "the pool: the three fastest of those that bypass every sample"
-assert_not_contains "$(dns_geo_pick)" "ai.example" "a faster server that serves only part of the services stays out (its real address would lead a game into the geo-block)"
+assert_eq "chatgpt.com claude.ai" "$(tr '\n' ' ' < "$MOCK_DIR/geoscan.list" | sed 's/ $//')" "on every domain of the list, not on a few samples"
+assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "-asncache $DNS_GEO_SCAN_DIR/asn.cache" "network numbers are cached"
+assert_eq "fast.example mid.example next.example" "$(dns_geo_pick | tr '\n' ' ' | sed 's/ $//')" "the common pool: the three fastest of those that bypass the most domains"
+assert_not_contains "$(dns_geo_pick)" "ai.example" "a faster server that bypasses fewer stays out of it"
 assert_eq "applied" "$(cat "$MOCK_DIR/geo.applied")" "a new pool is applied at once"
 ctl dns-geo-scan
 assert_rc 3 "$ctl_rc" "a manual check right after one is refused (calls to the servers only make things worse)"
@@ -634,7 +638,7 @@ dns_geo_scan_due
 assert_rc 1 $? "after a check nothing is due for hours"
 dns_build
 geo=$(grep '/chatgpt.com/' "$DNS_RUN_DIR/upstreams.txt")
-assert_contains "$geo" "]tls://fast.example" "the list goes to the pool over DoT"
+assert_contains "$geo" "]tls://fast.example" "a domain without a route goes to the pool over DoT"
 assert_eq "3" "$(printf '%s\n' "$geo" | grep -c .)" "to the three of it"
 assert_contains "$geo" "]https://mid.example/dns-query" "a server that got through only over DoH on this network goes there over DoH"
 assert_eq "fast.example, mid.example, next.example" "$(dns_geo_label)" "the log and the screen name the pool"
@@ -643,7 +647,7 @@ assert_no_file "$MOCK_DIR/geo.applied" "the same pool again — nothing to apply
 sed -i '1s/^#time=[0-9]*/#time=1/' "$(dns_geo_scan_file)"
 dns_geo_scan_due
 assert_rc 0 $? "an old check is due again"
-printf '#time=%s boot=x\nfast.example\tfail\t0\t0\t7\tchatgpt.com=f\n' "$(date +%s)" > "$(dns_geo_scan_file)"
+printf '#time=%s boot=x v=2\nfast.example\tfail\t0\t0\t7\t0\t-\n' "$(date +%s)" > "$(dns_geo_scan_file)"
 assert_eq "" "$(dns_geo_pick)" "no server answered (the network was not up yet)"
 assert_contains "$(dns_geo_servers)" "https://dns.comss.one/dns-query" "Comss for now"
 dns_geo_scan_due
@@ -651,8 +655,62 @@ assert_rc 1 $? "and a new check — not at once"
 sed -i '1s/^#time=[0-9]*/#time='"$(( $(date +%s) - 700 ))"'/' "$(dns_geo_scan_file)"
 dns_geo_scan_due
 assert_rc 0 $? "but ten minutes later"
+# После загрузки сеть появляется не сразу: проверка без единого ответа не
+# затирает рабочий итог, а повторяется через минуту, две, четыре…
+dns_geo_scan >/dev/null
+good=$(cat "$(dns_geo_scan_file)")
+mv "$HELPER_BIN" "$HELPER_BIN.ok"
+printf '#!/bin/sh\nprintf "fast.example\\tfail\\t0\\t0\\t2\\t0\\t-\\tnetwork is unreachable\\n"\n' > "$HELPER_BIN"; chmod 0755 "$HELPER_BIN"
+dns_geo_scan >/dev/null
+assert_eq "$good" "$(cat "$(dns_geo_scan_file)")" "a check nobody answered keeps the working result (no errors on the screen)"
+assert_eq "fast.example mid.example next.example" "$(dns_geo_pick | tr '\n' ' ' | sed 's/ $//')" "and the pool"
+assert_contains "$(tail -n 1 "$DNS_LOG")" "ни один сервер не ответил" "the DNS log says why"
+dns_geo_scan_due
+assert_rc 1 $? "no new check at once"
+echo "1 $(( $(date +%s) - 61 ))" > "$(dns_geo_scan_file).fail"
+dns_geo_scan_due
+assert_rc 0 $? "but a minute later — not in ten"
+echo "2 $(( $(date +%s) - 61 ))" > "$(dns_geo_scan_file).fail"
+dns_geo_scan_due
+assert_rc 1 $? "the second failure waits two minutes"
+(dns_net_servers() { :; }; rm -f "$(dns_geo_scan_file).fail"; rm -f "$(dns_geo_scan_file)"; dns_geo_scan_due)
+assert_rc 1 $? "while the network DNS is unknown (network not up yet) there is nothing to check"
+mv -f "$HELPER_BIN.ok" "$HELPER_BIN"
+dns_geo_scan >/dev/null
+assert_no_file "$(dns_geo_scan_file).fail" "a check with answers clears the failure count"
+printf '#time=%s boot=x\nfast.example\tok\t40\t7\t7\tchatgpt.com=p\n' "$(date +%s)" > "$(dns_geo_scan_file)"
+dns_geo_scan_due
+assert_rc 0 $? "a fresh check of an older version (samples only) is redone"
 DNS_GEO=0 dns_geo_scan_due
 assert_rc 1 $? "profiles mode needs no check"
+dns_geo_scan >/dev/null
+# Маршруты по доменам: каждый — к своим серверам (свой адрес прокси —
+# только к ним), никем не обходимый — в DNS сети, без данных — общий пул
+printf 'chatgpt.com\nab.chatgpt.com\nclashofclans.com\nintel.com\nopenai.com\n' > "$DNS_GEO_LIST"
+{ printf '#time=%s boot=x v=2\n' "$(date +%s)"
+  printf 'zapret.example\tok\t20\t2\t4\t0\ttls\n'
+  printf 'comss.example\tok\t60\t3\t4\t1\thttps\n'
+  printf 'dead.example\tfail\t0\t0\t4\t0\t-\ttimeout\n'
+  printf '=chatgpt.com\tzapret.example,comss.example\n'
+  printf '=clashofclans.com\tcomss.example\n'
+  printf '=intel.com\t-\n'
+  printf '=gone.example\tdead.example\n'
+} > "$(dns_geo_scan_file)"
+assert_eq "chatgpt.com	comss.example	https|chatgpt.com	zapret.example	tls|clashofclans.com	comss.example	https|intel.com	-" "$(dns_geo_routes | sort | tr '\n' '|' | sed 's/|$//')" "routes come from the check, with each server's protocol (a dead one is dropped)"
+assert_eq "comss.example" "$(dns_geo_pick)" "the common pool: the one that bypasses the most (route lines are not servers)"
+dns_build
+up=$(cat "$DNS_RUN_DIR/upstreams.txt")
+assert_contains "$up" "[/chatgpt.com/ab.chatgpt.com/]tls://zapret.example" "ChatGPT and its subdomains — to its servers"
+assert_contains "$(grep '/clashofclans.com/' "$DNS_RUN_DIR/upstreams.txt")" "]https://comss.example/dns-query" "the game — only to the one with its own proxy address"
+assert_eq "1" "$(grep -c '/clashofclans.com/' "$DNS_RUN_DIR/upstreams.txt")" "and to no one else"
+assert_not_contains "$up" "/intel.com/" "a domain no server bypasses goes to the network DNS"
+assert_contains "$(grep '/openai.com/' "$DNS_RUN_DIR/upstreams.txt")" "]https://comss.example/dns-query" "a domain without data — to the common pool"
+assert_eq "geo" "$(dns_pid() { echo 1; }; dns_route chatgpt.com)" "a per-domain route still counts as the geo-block bypass"
+st=$(dns_state)
+assert_contains "$st" "geo_for_comss.example=2" "the screen learns how many domains go to a server"
+assert_contains "$st" "geo_direct=1" "and how many to the network DNS"
+assert_not_contains "$(printf '%s\n' "$st" | sed -n '/^#geoscan/,/^#/p')" "=chatgpt.com" "route lines stay out of the server list"
+printf 'chatgpt.com\nclaude.ai\n' > "$DNS_GEO_LIST"
 dns_geo_scan >/dev/null
 unset -f dns_apply_now
 # Профили обхода геоблока в умном режиме: свои правила не ставят, их домены —

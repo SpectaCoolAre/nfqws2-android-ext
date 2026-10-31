@@ -68,9 +68,9 @@ window.__presets = ${JSON.stringify(PRESETS)};
       'private=' + st.priv, 'private_host=' + st.privHost, 'net_dns=192.168.1.1', 'hits=' + (on ? 1234 : 0), 'error=',
       'max_profiles=32', 'max_servers=8', 'max_domains=1000', 'smart=' + (window.__smart === 0 ? 0 : 1),
       'cdn=' + (st.enabled && window.__smart !== 0 ? 'running' : ''),
-      'geo=' + (window.__geo !== 0 ? 'on' : 'off'), 'geo_domains=' + st.geoN, 'geo_updated=' + st.geoAt, 'geo_pool=dns.fast.example', 'geo_overlap_x=2', 'geo_scan_time=1767225600',
-      '#geoscan', 'dns.fast.example\tok\t40\t7\t7\tchatgpt.com=p', 'dns.ai.example\tok\t20\t3\t7\tchatgpt.com=p,gamea.clashofclans.com=s',
-      'dns.dead.example\tfail\t0\t0\t7\tchatgpt.com=f\ttimeout', '#status'];
+      'geo=' + (window.__geo !== 0 ? 'on' : 'off'), 'geo_domains=' + st.geoN, 'geo_updated=' + st.geoAt, 'geo_pool=dns.fast.example', 'geo_for_dns.fast.example=600', 'geo_for_dns.ai.example=12', 'geo_direct=110', 'geo_overlap_x=2', 'geo_scan_time=1767225600',
+      '#geoscan', 'dns.fast.example\tok\t40\t610\t722\t5\ttls', 'dns.ai.example\tok\t20\t40\t722\t12\ttls',
+      'dns.dead.example\tfail\t0\t0\t722\t0\t-\ttimeout', '#status'];
     Object.keys(st.profiles).forEach(id => { out.push('#profile ' + id); out = out.concat(st.profiles[id].split('\\n')); });
     window.__presets.forEach(p => { out.push('#preset ' + p.id); out = out.concat(p.text.trim().split('\\n')); });
     return out.join('\\n');
@@ -214,13 +214,13 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     await page.click('#dns-geo .dns-group'); await idle();
     geoTxt = await page.textContent('#dns-geo');
     await shot('geo');
-    truthy(geoTxt.includes('40 мс · 7/7 · в пуле'), 'unfolded: each checked server in one short line');
-    truthy(geoTxt.includes('20 мс · 3/7') && !geoTxt.includes('clashofclans'), 'no domain details in the list');
+    truthy(geoTxt.includes('40 мс · обходит 610 из 722 · в пуле'), 'unfolded: each checked server in one short line');
+    truthy(geoTxt.includes('20 мс · обходит 40 из 722 · доменов: 12'), 'a server outside the pool says how many domains go to it');
     truthy(geoTxt.includes('не отвечает') && !geoTxt.includes('timeout'), 'a dead one just says it does not answer');
     await page.click('#dns-geo .list-item:has-text("dns.ai.example")');
     await page.waitForSelector('#dialog-wrap.open');
     const info = await page.textContent('#dialog-wrap');
-    truthy(info.includes('gamea.clashofclans.com — не обслуживает — настоящий адрес') && info.includes('chatgpt.com — обходит'), 'a tap on a server shows what it does with each sample');
+    truthy(info.includes('Обходит геоблок для 40 из 722 доменов списка') && info.includes('Из них своим адресом: 12') && info.includes('Направлено к нему доменов: 12'), 'a tap on a server shows what it bypasses and what goes to it');
     await page.click('#d-ok'); await page.waitForTimeout(400);
     await page.click('#dns-geo .clickable:has-text("Проверить DNS сейчас")'); await idle(); await page.waitForTimeout(300);
     truthy(await page.evaluate(() => window.__dns.calls.includes('dns-geo-scan')), 'the check can be run at once');
