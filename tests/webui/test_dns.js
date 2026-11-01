@@ -68,7 +68,7 @@ window.__presets = ${JSON.stringify(PRESETS)};
       'private=' + st.priv, 'private_host=' + st.privHost, 'net_dns=192.168.1.1', 'hits=' + (on ? 1234 : 0), 'error=',
       'max_profiles=32', 'max_servers=8', 'max_domains=1000', 'smart=' + (window.__smart === 0 ? 0 : 1),
       'cdn=' + (st.enabled && window.__smart !== 0 ? 'running' : ''),
-      'geo=' + (window.__geo !== 0 ? 'on' : 'off'), 'geo_domains=' + st.geoN, 'geo_updated=' + st.geoAt, 'geo_pool=dns.fast.example', 'geo_for_dns.fast.example=600', 'geo_for_dns.ai.example=12', 'geo_direct=110', 'geo_overlap_x=2', 'geo_scan_time=1767225600',
+      'geo=' + (window.__geo !== 0 ? 'on' : 'off'), 'geo_domains=' + st.geoN, 'geo_updated=' + st.geoAt, 'geo_pool=dns.fast.example', 'geo_for_dns.fast.example=600', 'geo_for_dns.ai.example=12', 'geo_direct=110', 'geo_try_dns.ai.example=2/3', 'geo_intercept=1', 'geo_cert_dns.ai.example=4', 'geo_overlap_x=2', 'geo_scan_time=1767225600',
       '#geoscan', 'dns.fast.example\tok\t40\t610\t722\t5\ttls', 'dns.ai.example\tok\t20\t40\t722\t12\ttls',
       'dns.dead.example\tfail\t0\t0\t722\t0\t-\ttimeout', '#status'];
     Object.keys(st.profiles).forEach(id => { out.push('#profile ' + id); out = out.concat(st.profiles[id].split('\\n')); });
@@ -208,6 +208,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     truthy((await page.textContent('#dns-general')).includes('Не активно'), 'the state says nothing is applied yet');
     eq(false, (await page.textContent('#dns-general')).includes('DNS по умолчанию'), 'smart mode: no default DNS row — everything else goes to the network DNS');
     truthy((await page.textContent('#dns-warn')).includes('Домены из списка геоблока есть в профилях x (2)'), 'a profile that takes domains of the geo-block list away from the bypass is warned about');
+    truthy((await page.textContent('#dns-warn')).includes('Сеть перехватывает обычные DNS-запросы'), 'interception of plain DNS by the network is warned about');
     let geoTxt = await page.textContent('#dns-geo');
     truthy(geoTxt.includes('DNS: dns.fast.example'), 'the geo-block bypass line names the DNS in use');
     eq(false, geoTxt.includes('dns.dead.example') || geoTxt.includes('Comss') && geoTxt.includes('GeoHide'), 'folded: no server list and no provider choice');
@@ -215,12 +216,12 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     geoTxt = await page.textContent('#dns-geo');
     await shot('geo');
     truthy(geoTxt.includes('40 мс · обходит 610 из 722 · в пуле'), 'unfolded: each checked server in one short line');
-    truthy(geoTxt.includes('20 мс · обходит 40 из 722 · доменов: 12'), 'a server outside the pool says how many domains go to it');
+    truthy(geoTxt.includes('20 мс · обходит 40 из 722 · через раз · доменов: 12'), 'a server outside the pool says how many domains go to it, and that it answers now and then');
     truthy(geoTxt.includes('не отвечает') && !geoTxt.includes('timeout'), 'a dead one just says it does not answer');
     await page.click('#dns-geo .list-item:has-text("dns.ai.example")');
     await page.waitForSelector('#dialog-wrap.open');
     const info = await page.textContent('#dialog-wrap');
-    truthy(info.includes('Обходит геоблок для 40 из 722 доменов списка') && info.includes('Из них своим адресом: 12') && info.includes('Направлено к нему доменов: 12'), 'a tap on a server shows what it bypasses and what goes to it');
+    truthy(info.includes('Обходит геоблок для 40 из 722 доменов списка') && info.includes('Из них своим адресом: 12') && info.includes('Направлено к нему доменов: 12') && info.includes('Отвечает через раз: 2 из 3') && info.includes('для 4 доменов'), 'a tap on a server shows what it bypasses, what goes to it and how reliable it is');
     await page.click('#d-ok'); await page.waitForTimeout(400);
     await page.click('#dns-geo .clickable:has-text("Проверить DNS сейчас")'); await idle(); await page.waitForTimeout(300);
     truthy(await page.evaluate(() => window.__dns.calls.includes('dns-geo-scan')), 'the check can be run at once');

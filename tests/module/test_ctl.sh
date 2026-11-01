@@ -534,6 +534,52 @@ printf '#!/bin/sh\nexit 47\n' > "$MOCKBIN/curl"
 ctl domain-check loop.example
 assert_match "$ctl_out" "R	[123]	ok" "endless redirects still mean the server answered — not a DPI block"
 
+# Не открылся ни разу — чем мешают (nfqws2-helper -sniprobe): по имени или адрес
+printf '#!/bin/sh\nexit 35\n' > "$MOCKBIN/curl"
+mkdir -p "${HELPER_BIN%/*}"
+printf '#!/bin/sh\necho "$@" > "%s/sni.args"\nprintf "name\\ttcp=ok sni=reset other=ok none=ok case=reset http=-\\n"\n' "$MOCK_DIR" > "$HELPER_BIN"
+chmod 0755 "$HELPER_BIN"
+ctl domain-check blocked.example
+assert_contains "$ctl_out" "$(printf 'B\tname\ttcp=ok sni=reset')" "a site that never opened gets the cause probes"
+assert_contains "$(cat "$MOCK_DIR/sni.args")" "-sniprobe blocked.example -ip 203.0.113.7" "on its own address"
+rm -f "$MOCK_DIR/sni.args"
+printf '#!/bin/sh\nexit 0\n' > "$MOCKBIN/curl"
+ctl domain-check fine.example
+assert_not_contains "$ctl_out" "$(printf '\nB\t')" "a site that opens needs no cause"
+assert_no_file "$MOCK_DIR/sni.args" "and the probes are not run"
+rm -f "$HELPER_BIN"
+
+# Видеосервер YouTube этой сети: redirector …/report_mapping → «=> muc12s10»
+# → rr1---sn-h0jelne7.googlevideo.com (подстановка GoodCheck и zapretgui)
+cat > "$MOCKBIN/curl" <<'X'
+#!/bin/sh
+for a; do case "$a" in *report_mapping*) echo "$a" >> "$MOCK_DIR/rm.calls"; printf '5.18.1.2 => muc12s10 : router: "ae1.muc12"\n'; exit 0 ;; esac; done
+exit 0
+X
+chmod 0755 "$MOCKBIN/curl"
+rm -f "$STATE_DIR/ggc_host" "$MOCK_DIR/rm.calls"
+ctl domain-check www.youtube.com
+assert_contains "$ctl_out" "$(printf 'Y\trr1---sn-h0jelne7.googlevideo.com\tok')" "YouTube: the video server of this network is found and checked"
+ctl domain-check m.youtube.com
+assert_eq "1" "$(grep -c . "$MOCK_DIR/rm.calls")" "it is remembered, not asked every time"
+ctl domain-check example.org
+assert_not_contains "$ctl_out" "$(printf '\nY\t')" "not for other sites"
+
+# Место фильтра (nfqws2-helper -ttltrace) — для фейков умного режима этой сети
+mkdir -p "${HELPER_BIN%/*}"
+printf '#!/bin/sh\necho "$@" > "%s/ttl.args"\nprintf "9\\t3\\tфильтр — на 3-м узле\\n"\n' "$MOCK_DIR" > "$HELPER_BIN"
+chmod 0755 "$HELPER_BIN"
+echo mobile-1 > "$SMART_NET_FILE"
+ctl dpi-distance
+assert_contains "$ctl_out" "$(printf '9\t3\t')" "the helper measures hops to the server and to the filter"
+assert_contains "$(cat "$MOCK_DIR/ttl.args")" "-blocked $BLOBS_DIR/quic_my_youtube_initial.bin" "with a QUIC Initial of a name blocked by the filter"
+assert_eq "mobile-1 9 3" "$(cut -d' ' -f1-3 "$STATE_DIR/dpi_ttl")" "per network"
+assert_eq "3" "$(. "$MODDIR/lib/common.sh"; dpi_ttl)" "the fake TTL for this network is the filter's hop"
+assert_contains "$(. "$MODDIR/lib/common.sh"; echo "a --lua-desync=$DPI_TTL_VARIANT:strategy=7 b" | ttl_inject)" "repeats=4:ip_ttl=3:ip6_ttl=3:strategy=7" "the smart variant with a fixed TTL takes it"
+echo wifi-2 > "$SMART_NET_FILE"
+assert_eq "" "$(. "$MODDIR/lib/common.sh"; dpi_ttl)" "not on another network"
+rm -f "$HELPER_BIN" "$STATE_DIR/dpi_ttl" "$SMART_NET_FILE"
+
 # Заглушка провайдера вместо сайта: тело ответа (-o файл) — страница блокировки
 cat > "$MOCKBIN/curl" <<'X'
 #!/bin/sh

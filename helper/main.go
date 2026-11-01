@@ -4,7 +4,9 @@
 //
 //	nfqws2-helper -alarm 5m -run "sh /путь/service.sh push_beat"
 //	nfqws2-helper -probe 127.0.0.1:15353[,127.0.0.1:15356]
-//	nfqws2-helper -geoscan dns.comss.one,… -samples @geoblock.list -boot 213.87.142.94:53 [-asncache файл]
+//	nfqws2-helper -sniprobe youtube.com -ip 142.250.74.14
+//	nfqws2-helper -ttltrace -ip 142.250.74.14 -blocked quic_youtube.bin -open quic_google.bin
+//	nfqws2-helper -geoscan dns.comss.one,… -samples @geoblock.list -boot 213.87.142.94:53 [-asncache файл] [-shared файл]
 package main
 
 import (
@@ -25,6 +27,13 @@ func main() {
 	samples := flag.String("samples", "", "домены для -geoscan через запятую или @файл (строка — домен, # — комментарий)")
 	asnc := flag.String("asncache", "", "файл кэша номеров AS для -geoscan")
 	maxRoute := flag.Int("max", 3, "-geoscan: сколько серверов на домен")
+	sni := flag.String("sniprobe", "", "имя сайта: режут по имени или закрыт адрес (см. sniprobe.go), с -ip")
+	sniIP := flag.String("ip", "", "адрес для -sniprobe и -ttltrace")
+	ttl := flag.Bool("ttltrace", false, "узлов до сервера и до фильтра (см. ttltrace.go), с -ip, -blocked, -open")
+	qBlocked := flag.String("blocked", "", "-ttltrace: QUIC Initial с запрещённым именем")
+	qOpen := flag.String("open", "", "-ttltrace: QUIC Initial с обычным именем")
+	verify := flag.Bool("verify", false, "-geoscan: проверить сертификат по адресу прокси (частая проверка)")
+	shared := flag.String("shared", "", "-geoscan: файл прошлой полной проверки — её общие адреса прокси (частая проверка)")
 	boot := flag.String("boot", "", "DNS сети (адрес:53) для -geoscan: эталон ответов и адреса серверов")
 	flag.Parse()
 	log.SetFlags(log.Ldate | log.Ltime)
@@ -46,6 +55,10 @@ func main() {
 		if bad {
 			os.Exit(1)
 		}
+	case *ttl:
+		runTTLTrace(*sniIP, *qBlocked, *qOpen, *wait)
+	case *sni != "":
+		runSniProbe(*sni, *sniIP, *wait)
 	case *geo != "":
 		if *boot == "" || *samples == "" {
 			log.Print("-geoscan: нужны -samples и -boot")
@@ -61,9 +74,23 @@ func main() {
 			w = 6 * time.Second
 		}
 		asnCache = *asnc
+		if *shared != "" {
+			knownShare = loadShared(*shared)
+		}
+		verifyCerts = *verify
+		whoamiCheck = !*verify // перехват — в полной проверке
 		res := geoScan(splitList(*geo), ss, *boot, w)
 		for _, r := range res {
 			fmt.Println(formatScan(r))
+		}
+		for _, l := range formatShared(res, ss) {
+			fmt.Println(l)
+		}
+		for _, l := range formatInfo(res) {
+			fmt.Println(l)
+		}
+		if lastWhoami != "" {
+			fmt.Println(lastWhoami)
 		}
 		for _, l := range formatRoutes(res, ss, planRoutes(res, len(ss), *maxRoute)) {
 			fmt.Println(l)

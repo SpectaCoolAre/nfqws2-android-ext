@@ -123,6 +123,82 @@ unset MOCK_NFQWS_DRY_RUN_FAIL
 svc status
 assert_rc 0 "$svc_rc" "status still reports success"
 
+# ── sleep ─────────────────────────────────────────────────────────────────────
+section "sleep: traffic is counted in KB (mksh arithmetic is 32-bit)"
+(. "$MODDIR/lib/common.sh"; kb=$(net_kbytes); case "$kb" in ''|*[!0-9]*) exit 1 ;; esac)
+assert_rc 0 $? "net_kbytes gives a whole number of KB"
+(. "$MODDIR/lib/common.sh"; : > "$IDLE_FILE"; dev_idle; r=$?; rm -f "$IDLE_FILE"; exit $r)
+assert_rc 0 $? "dev_idle follows the idle mark"
+
+section "sleep: the owner's habits — night learning on the charger, waking prep"
+(
+  . "$MODDIR/lib/common.sh"
+  rm -f "$USAGE_FILE"
+  for m in 1410 1425 5 20 1435; do usage_add sleep "$m"; done   # засыпает около полуночи
+  for m in 420 430 445 410 425; do usage_add wake "$m"; done    # просыпается около 7:05
+  [ "$(usage_pred sleep)" = 1435 ] || { echo "sleep $(usage_pred sleep)"; exit 1; }
+  [ "$(usage_pred wake)" = 425 ] || { echo "wake $(usage_pred wake)"; exit 1; }
+)
+assert_rc 0 $? "the usual times are medians, counted across midnight"
+(
+  . "$MODDIR/lib/common.sh"
+  rm -f "$USAGE_FILE"
+  i=0; while [ $i -lt 20 ]; do usage_add wake 400; i=$((i + 1)); done
+  [ "$(grep -c '^wake ' "$USAGE_FILE")" = "$USAGE_KEEP" ]
+)
+assert_rc 0 $? "only the last two weeks are kept"
+(
+  . "$MODDIR/lib/common.sh"
+  rm -f "$USAGE_FILE"
+  for m in 1410 1425 5; do usage_add sleep "$m"; done
+  for m in 420 430 445; do usage_add wake "$m"; done
+  mod_now() { echo 120; }; night_now || exit 1          # 02:00 — ночь
+  mod_now() { echo 410; }; night_now && exit 2          # 06:50 — уже полчаса до пробуждения
+  mod_now() { echo 900; }; night_now && exit 3          # 15:00 — день
+  mod_now() { echo 400; }; wake_prep_due || exit 4      # 06:40 — за 30 минут до 07:10
+  date +%Y%m%d > "$PREP_FILE"; wake_prep_due && exit 5  # раз в сутки
+  rm -f "$PREP_FILE"
+  mod_now() { echo 300; }; wake_prep_due && exit 6      # 05:00 — рано
+  exit 0
+)
+assert_rc 0 $? "night is the usual sleep up to half an hour before waking; the prep runs 30–20 min before, once a day"
+(
+  . "$MODDIR/lib/common.sh"
+  rm -f "$USAGE_FILE"
+  mod_now() { echo 180; }; night_now || exit 1          # без данных — 01:00–06:00
+  wake_prep_due && exit 2                               # и без подготовки
+  exit 0
+)
+assert_rc 0 $? "without data the night is 01:00–06:00 and there is no prep"
+(
+  . "$MODDIR/lib/common.sh"
+  on_charger() { return 1; }
+  : > "$IDLE_FILE"; mod_now() { echo 120; }
+  night_learn_ok && exit 1
+  on_charger() { return 0; }
+  night_learn_ok || exit 2
+  rm -f "$IDLE_FILE"; night_learn_ok && exit 3
+  exit 0
+)
+assert_rc 0 $? "night learning needs sleep, the charger and the night — without the charger it would drain the battery"
+
+# ── tiny server segments ──────────────────────────────────────────────────────
+section "tiny server segments: their data reaches nfqws2 past the limiter"
+# Прокси magicdns задаёт MSS 76: ClientHello Gemini — 26 пакетов, больше
+# ограничителя (15), и nfqws2 не мог его собрать — тайм-аут
+assert_not_contains "$(ipt_rules nfqws_pre)" "tcpmss" "without the tcpmss/length matches nothing changes"
+MOCK_IPT_FEATURES="connbytes multiport owner NFQUEUE tcpmss length"
+export MOCK_IPT_FEATURES
+ipt_reset
+svc firewall_apply
+pre=$(ipt_rules nfqws_pre); post=$(ipt_rules nfqws_post)
+assert_contains "$pre" "--tcp-flags syn,ack syn,ack -m tcpmss --mss 1:500 -j CONNMARK --set-xmark 0x00800000/0x00800000" "a SYN-ACK with a tiny MSS marks its connection"
+assert_contains "$post" "-m connmark --mark 0x00800000/0x00800000 -m length --length 101:600 -j NFQUEUE --queue-num 300" "its data packets are queued without counting"
+case "$post" in *"--mark 0x00800000/0x00800000"*"-m connbytes"*) r=0 ;; *) r=1 ;; esac
+assert_rc 0 "$r" "before the limited rule"
+case "$pre" in *"-j CONNMARK --set-xmark 0x00800000"*"--tcp-flags syn,ack syn,ack -j NFQUEUE"*) r=0 ;; *) r=1 ;; esac
+assert_rc 0 "$r" "the mark is set before the SYN-ACK goes to the queue"
+
 # ── connmark_out mode ─────────────────────────────────────────────────────────
 section "connmark_out: a kernel without connbytes gets counter chains"
 

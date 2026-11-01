@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -338,5 +339,117 @@ func TestGeoScanFallsBackToDoH(t *testing.T) {
 	}
 	if l := formatScan(res[0]); !strings.HasSuffix(l, "\t2\t3\t0\thttps") {
 		t.Fatalf("строка: %q", l)
+	}
+}
+
+// Частая проверка по нескольким доменам: адрес прокси, общий по полной
+// проверке, остаётся общим, хотя в ней он у одного домена
+func TestGeoScanHotUsesSharedAddressesOfTheFullCheck(t *testing.T) {
+	real := map[string]string{"chatgpt.com": "93.0.0.1", "claude.ai": "93.0.0.2", "gamea.clashofclans.com": "54.0.0.1"}
+	boot := netDNS(t, func(n string) net.IP { return ip(real[n]) }, true, nil)
+	malw := fakeDoT(t, func(n string) net.IP { return ip("179.254.166.174") })
+	comss := fakeDoT(t, func(n string) net.IP {
+		if n == "gamea.clashofclans.com" {
+			return ip("81.17.20.86")
+		}
+		return ip(real[n])
+	})
+	full := geoScan([]string{malw, comss}, []string{"chatgpt.com", "claude.ai", "gamea.clashofclans.com"}, boot, 6*time.Second)
+	sh := formatShared(full, []string{"chatgpt.com", "claude.ai", "gamea.clashofclans.com"})
+	if len(sh) != 1 || sh[0] != "+"+malw+"\t179.254.166.174\t3" {
+		t.Fatalf("общие адреса: %q", sh)
+	}
+	path := t.TempDir() + "/full.tsv"
+	os.WriteFile(path, []byte(strings.Join(sh, "\n")+"\n"), 0644)
+	knownShare = loadShared(path)
+	t.Cleanup(func() { knownShare = nil })
+	hot := []string{"gamea.clashofclans.com"}
+	res := geoScan([]string{malw, comss}, hot, boot, 6*time.Second)
+	if res[0].share[0] != 3 || res[1].share[0] != 1 {
+		t.Fatalf("malw — общий (3), Comss — свой (1): %d %d", res[0].share[0], res[1].share[0])
+	}
+	if r := formatRoutes(res, hot, planRoutes(res, 1, 3)); len(r) != 1 || r[0] != "=gamea.clashofclans.com\t"+comss {
+		t.Fatalf("игра — к Comss: %q", r)
+	}
+}
+
+// Сервер «через раз» (ответил не на все попытки) — в маршруте после надёжного,
+// даже если быстрее
+func TestPlanRoutesPutsFlakyServersLast(t *testing.T) {
+	mk := func(name string, ms int64, okTry int) scanResult {
+		return scanResult{server: name, ok: true, ms: ms, marks: []byte("p"), share: []int{2}, tries: 3, okTry: okTry}
+	}
+	res := []scanResult{mk("fast-flaky", 10, 2), mk("slow-stable", 90, 3)}
+	if got := formatRoutes(res, []string{"a.example"}, planRoutes(res, 1, 3)); got[0] != "=a.example\tslow-stable,fast-flaky" {
+		t.Fatalf("маршрут: %q", got)
+	}
+	if got := formatInfo(res); got[0] != "!fast-flaky\t2/3\t0" {
+		t.Fatalf("строка о попытках: %q", got)
+	}
+}
+
+// Проверка по факту: прокси, который не отдаёт настоящий сертификат сайта, —
+// не для этого домена, если у другого сервера сертификат настоящий; у
+// домена без HTTPS (никто не прошёл) — ничего не меняется
+func TestVerifyRoutesDropsProxiesWithoutTheRealCertificate(t *testing.T) {
+	good := map[string]bool{"5.5.5.5 gemini.google.com": true}
+	orig := verifyProxy
+	verifyProxy = func(ip net.IP, host string, _ time.Duration) bool { return good[ip.String()+" "+host] }
+	t.Cleanup(func() { verifyProxy = orig })
+	mk := func(name, a1, a2 string) scanResult {
+		return scanResult{server: name, ok: true, marks: []byte("pp"), share: []int{1, 1},
+			ans: [][]net.IP{{ip(a1)}, {ip(a2)}}, tries: 3, okTry: 3}
+	}
+	res := []scanResult{mk("dns-ai", "5.5.5.5", "81.17.20.86"), mk("magicdns", "2.56.175.196", "81.17.20.87")}
+	names := []string{"gemini.google.com", "gamea.clashofclans.com"}
+	verifyRoutes(res, names, time.Second)
+	if string(res[0].marks) != "pp" || string(res[1].marks) != "cp" || res[1].cert != 1 {
+		t.Fatalf("метки: %q %q", res[0].marks, res[1].marks)
+	}
+	if r := formatRoutes(res, names, planRoutes(res, 2, 3)); r[0] != "=gemini.google.com\tdns-ai" {
+		t.Fatalf("Gemini — только к рабочему: %q", r)
+	}
+}
+
+func TestVerifyProxyChecksTheSiteCertificate(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(srv.Close)
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	tlsRoots = pool
+	t.Cleanup(func() { tlsRoots = nil })
+	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	proxyTLSPort = port
+	t.Cleanup(func() { proxyTLSPort = "443" })
+	if !verifyProxy(ip("127.0.0.1"), "example.com", 2*time.Second) {
+		t.Fatal("сертификат на example.com — настоящий")
+	}
+	if verifyProxy(ip("127.0.0.1"), "gemini.google.com", 2*time.Second) {
+		t.Fatal("сертификат на другое имя — не настоящий")
+	}
+}
+
+// Сеть перехватывает обычный DNS: «ответ 8.8.8.8» пришёл от резолвера сети
+// оператора, а не Google
+func TestWhoamiDetectsInterception(t *testing.T) {
+	boot := netDNS(t, func(n string) net.IP {
+		if n == "whoami.akamai.net" {
+			return ip("93.1.1.1") // резолвер оператора
+		}
+		return ip("93.184.216.34")
+	}, true, nil)
+	orig := whoamiTargets
+	whoamiTargets = []whoAns{{name: "google", server: boot, as: "15169"}} // «8.8.8.8» отвечает тот же резолвер
+	whoamiCheck = true
+	t.Cleanup(func() { whoamiTargets = orig; whoamiCheck = false; lastWhoami = "" })
+	dot := fakeDoT(t, func(string) net.IP { return ip("5.5.5.5") })
+	geoScan([]string{dot}, []string{"a.example"}, boot, 6*time.Second)
+	if lastWhoami != "?whoami\tnet=93.1.1.1/15133\tgoogle=93.1.1.1/15133\tintercept=1" {
+		t.Fatalf("итог: %q", lastWhoami)
+	}
+	whoamiTargets = []whoAns{{name: "google", server: boot, as: "15133"}}
+	geoScan([]string{dot}, []string{"a.example"}, boot, 6*time.Second)
+	if !strings.HasSuffix(lastWhoami, "intercept=0") {
+		t.Fatalf("ответ из своей сети — не перехват: %q", lastWhoami)
 	}
 }

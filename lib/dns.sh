@@ -51,8 +51,15 @@ DNS_GEO_CAND="$MODDIR/defaults/dns-geo-servers.list"
 # Проверка DNS обхода геоблока идёт по всему списку (см. helper/geoscan.go):
 # где чей прокси и свой ли у домена адрес, видно только по самому домену
 DNS_GEO_SCAN_DIR="$CONFDIR/dns/geoscan"
-DNS_GEO_SCAN_EVERY=21600     # 6 часов
+DNS_GEO_SCAN_EVERY=14400     # полная проверка — раз в 4 часа
 DNS_GEO_SCAN_VER=2           # формат файла проверки: старый — проверить заново
+# Частая проверка — домены списка, которыми пользуются (dns_geo_hot_list):
+# раз в полчаса, чтобы маршрут сменился, если сервер перестал обходить
+DNS_GEO_HOT_EVERY=1800
+DNS_GEO_HOT_MAX=40
+DNS_GEO_HOT_DAYS=7
+# в ней всегда — основные сервисы, даже если умный режим их ещё не видел
+DNS_GEO_HOT_BASE="chatgpt.com claude.ai gemini.google.com gamea.clashofclans.com accounts.supercell.com spotify.com"
 DNS_GEO_POOL=3
 DNS_GEO_FALLBACK="https://dns.comss.one/dns-query"
 DNS_GEO_SCAN_COOL=300        # ручная проверка — не чаще раза в 5 минут
@@ -109,8 +116,11 @@ dns_geo_servers() {
 # открывается у одного оператора, у другого может быть закрыто. Строки файла —
 # вывод nfqws2-helper -geoscan (сервер ok|fail мс прокси образцов отметки),
 # первая — «#time=… boot=…».
+# Адреса — по порядку: оператор отдаёт те же DNS то в одном порядке, то в
+# другом (МТС: 213.87.142.94,95 и 95,94), и это одна сеть, а не новая —
+# иначе итог проверки «терялся», и до новой были Comss и ошибки
 dns_geo_net_key() {
-  local s; s=$(dns_net_servers); [ -n "$s" ] || s=default
+  local s; s=$(dns_net_servers | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//'); [ -n "$s" ] || s=default
   printf '%s' "$s" | tr -c 'A-Za-z0-9.' '_'
 }
 dns_geo_scan_file() { echo "$DNS_GEO_SCAN_DIR/$(dns_geo_net_key).tsv"; }
@@ -121,7 +131,7 @@ dns_geo_scan_time() { sed -n '1s/^#time=\([0-9]*\).*/\1/p' "$(dns_geo_scan_file)
 # идут по своим маршрутам (dns_geo_routes)
 dns_geo_pool() { # -> «мс сервер протокол» пула, лучшие сверху
   local f; f=$(dns_geo_scan_file); [ -s "$f" ] || return 0
-  awk -F'\t' '!/^[#=]/ && $2 == "ok" && $4 > 0 { c++; h[c] = $1; ms[c] = $3; pr[c] = ($7 == "https" ? "https" : "tls"); p[c] = $4 + 0; if (p[c] > max) max = p[c] }
+  awk -F'\t' '!/^[#=+!?]/ && $2 == "ok" && $4 > 0 { c++; h[c] = $1; ms[c] = $3; pr[c] = ($7 == "https" ? "https" : "tls"); p[c] = $4 + 0; if (p[c] > max) max = p[c] }
     END { for (i = 1; i <= c; i++) if (p[i] == max) print ms[i] "\t" h[i] "\t" pr[i] }' "$f" | sort -n | head -n "$DNS_GEO_POOL"
 }
 dns_geo_pick() { dns_geo_pool | cut -f2; }
@@ -135,19 +145,39 @@ dns_geo_pick_up() {
 # туда); «-» — никто не обходит, домен идёт в DNS сети. Выбор — в
 # nfqws2-helper (planRoutes), здесь — протокол каждого сервера
 dns_geo_routes() { # -> «домен<TAB>сервер<TAB>протокол» или «домен<TAB>-»
-  local f; f=$(dns_geo_scan_file); [ -s "$f" ] || return 0
+  local f h; f=$(dns_geo_scan_file); [ -s "$f" ] || return 0
+  # частая проверка свежее полной — её маршруты для её доменов главнее
+  h=""; [ -s "$f.hot" ] && [ "$f.hot" -nt "$f" ] && h="$f.hot"
   awk -F'\t' '
-    !/^[#=]/ && $2 == "ok" { pr[$1] = ($7 == "https" ? "https" : "tls"); next }
-    /^=/ {
-      d = substr($1, 2)
-      if ($2 == "-") { print d "\t-"; next }
-      n = split($2, h, ",")
-      for (i = 1; i <= n; i++) if (h[i] in pr) print d "\t" h[i] "\t" pr[h[i]]
-    }' "$f"
+    !/^[#=+!?]/ && $2 == "ok" { pr[$1] = ($7 == "https" ? "https" : "tls"); next }
+    /^=/ { d = substr($1, 2); if (!(d in rt)) ord[++n] = d; rt[d] = $2 }
+    END {
+      for (k = 1; k <= n; k++) {
+        d = ord[k]
+        if (rt[d] == "-") { print d "\t-"; continue }
+        m = split(rt[d], hs, ",")
+        for (i = 1; i <= m; i++) if (hs[i] in pr) print d "\t" hs[i] "\t" pr[hs[i]]
+      }
+    }' "$f" $h
+}
+# Домены для частой проверки — те из списка геоблока, которыми пользуются:
+# сайты, к которым за последние DNS_GEO_HOT_DAYS дней ходил телефон (умный
+# режим записывает каждый, smart/<сеть>.tsv), — самими именами, как их
+# открывает приложение (gamea.clashofclans.com, а не clashofclans.com), —
+# и основные сервисы (DNS_GEO_HOT_BASE); свежие сверху, до DNS_GEO_HOT_MAX
+dns_geo_hot_list() {
+  local since d
+  since=$(( $(date +%s) - DNS_GEO_HOT_DAYS * 86400 ))
+  { for d in $DNS_GEO_HOT_BASE; do printf '%s\t9999999999\n' "$d"; done
+    cat "$SMART_DIR"/*.tsv 2>/dev/null | awk -F'\t' -v s="$since" '!/^#/ && $7 + 0 >= s { print $2 "\t" $7 }'
+  } | tr 'A-Z' 'a-z' | awk -F'\t' -v lf="$DNS_GEO_LIST" '
+    BEGIN { while ((getline l < lf) > 0) { sub(/[[:space:]]*#.*/, "", l); gsub(/[[:space:]]/, "", l); if (l != "") g[tolower(l)] = 1 } }
+    { d = $1; while (1) { if (d in g) { if (!($1 in t) || $2 > t[$1]) t[$1] = $2; break }; if ((i = index(d, ".")) == 0) break; d = substr(d, i + 1) } }
+    END { for (h in t) print t[h] "\t" h }' | sort -rn | cut -f2 | head -n "$DNS_GEO_HOT_MAX"
 }
 # Адрес сервера для dnsproxy по «хост протокол» (поля 2 и 3 строки)
 dns_geo_up_awk='{ print ($3 == "https" ? "https://" $2 "/dns-query" : "tls://" $2) }'
-# Все серверы обхода геоблока (общий пул и маршруты по сервисам) — для dns_route
+# Все серверы обхода геоблока (общий пул и маршруты по доменам) — для dns_route
 dns_geo_all_up() {
   { dns_geo_servers | tr ' ' '\n'; dns_geo_routes | awk -F'\t' '$2 != "-"' | awk -F'\t' "$dns_geo_up_awk"; } | awk 'NF && !s[$0]++' | tr '\n' ' ' | sed 's/ $//'
 }
@@ -160,6 +190,8 @@ dns_geo_scan_due() {
   local t now f n ft d
   dns_geo_on && [ -x "$HELPER_BIN" ] || return 1
   [ -n "$(dns_net_servers)" ] || return 1
+  # телефон спит: проверка подождёт пробуждения
+  dev_idle && return 1
   f=$(dns_geo_scan_file); now=$(date +%s)
   if [ -f "$f.fail" ]; then
     read -r n ft < "$f.fail"
@@ -175,11 +207,31 @@ dns_geo_scan_due() {
   grep -q '	ok	' "$f" 2>/dev/null && return 1
   [ $((now - t)) -ge 600 ]
 }
+# Пора частой проверки: полная есть и рабочая, ей и прошлой частой — не
+# меньше DNS_GEO_HOT_EVERY, телефон не спит (без трафика проверять незачем:
+# по пробуждении она догонит)
+dns_geo_hot_due() {
+  local f now t
+  dns_geo_on && [ -x "$HELPER_BIN" ] || return 1
+  dev_idle && return 1
+  [ -n "$(dns_net_servers)" ] || return 1
+  f=$(dns_geo_scan_file); now=$(date +%s)
+  grep -q '	ok	' "$f" 2>/dev/null || return 1
+  t=$(dns_geo_scan_time)
+  [ -s "$f.hot" ] && [ "$f.hot" -nt "$f" ] && t=$(sed -n '1s/^#time=\([0-9]*\).*/\1/p' "$f.hot")
+  [ $((now - ${t:-0})) -ge "$DNS_GEO_HOT_EVERY" ]
+}
+# Какая проверка пора: full — полная, hot — частая, ничего — никакая
+dns_geo_due() {
+  if dns_geo_scan_due; then echo full
+  elif dns_geo_hot_due; then echo hot
+  fi
+}
 # Проверить серверы; пул или маршруты сменились — применить. Сервер — одно
 # соединение и по запросу на домен списка (запросы — пачками), раз в
 # несколько часов; номера AS адресов кэшируются на неделю
-dns_geo_scan() {
-  local f boot cand before after routes n ok lock="$DNS_RUN_DIR/geoscan.lock"
+dns_geo_scan() { # [full|hot]
+  local mode="${1:-full}" f out boot cand before after routes n ok lock="$DNS_RUN_DIR/geoscan.lock"
   [ -x "$HELPER_BIN" ] && [ -f "$DNS_GEO_CAND" ] || return 1
   mkdir -p "$DNS_GEO_SCAN_DIR" "$DNS_RUN_DIR"
   # прошлая проверка оборвалась — её метка старше двух минут
@@ -189,18 +241,42 @@ dns_geo_scan() {
   boot="${boot:-77.88.8.8}:53"
   cand=$(tr -d '\r' < "$DNS_GEO_CAND" | sed 's/[[:space:]]*#.*//; s/[[:space:]]//g' | awk NF | tr '\n' ',' | sed 's/,$//')
   f=$(dns_geo_scan_file); before=$(dns_geo_pick | tr '\n' ' ')$(dns_geo_routes | tr '\n\t' '  ')
-  # домены — весь список и домены профилей обхода геоблока (их домены в
-  # умном режиме идут в тот же обход)
-  { cat "$DNS_GEO_LIST"; dns_profile_domains geo; } 2>/dev/null | tr -d '\r' > "$DNS_RUN_DIR/geoscan.list"
+  # частая — без полной не бывает: общие адреса прокси она берёт из неё
+  [ "$mode" = hot ] && ! grep -q '	ok	' "$f" 2>/dev/null && mode=full
+  # домены: полная — весь список, домены профилей обхода геоблока (их домены
+  # в умном режиме идут в тот же обход) и сайты, которыми пользуются; частая —
+  # только эти сайты
+  if [ "$mode" = hot ]; then dns_geo_hot_list
+  else { cat "$DNS_GEO_LIST"; dns_profile_domains geo; dns_geo_hot_list; }
+  fi 2>/dev/null | tr -d '\r' | tr 'A-Z' 'a-z' | awk 'NF && !s[$0]++' > "$DNS_RUN_DIR/geoscan.list"
+  out="$f.tmp"; [ "$mode" = hot ] && out="$f.hot.tmp"
   { echo "#time=$(date +%s) boot=$boot v=$DNS_GEO_SCAN_VER"
-    "$HELPER_BIN" -geoscan "$cand" -samples "@$DNS_RUN_DIR/geoscan.list" -boot "$boot" -wait 40s \
-      -max "$DNS_GEO_POOL" -asncache "$DNS_GEO_SCAN_DIR/asn.cache" 2>/dev/null
-  } > "$f.tmp"
+    if [ "$mode" = hot ]; then
+      # частая — и по факту: настоящий ли сертификат сайта по адресу прокси
+      "$HELPER_BIN" -geoscan "$cand" -samples "@$DNS_RUN_DIR/geoscan.list" -boot "$boot" -wait 20s \
+        -max "$DNS_GEO_POOL" -asncache "$DNS_GEO_SCAN_DIR/asn.cache" -shared "$f" -verify 2>/dev/null
+    else
+      "$HELPER_BIN" -geoscan "$cand" -samples "@$DNS_RUN_DIR/geoscan.list" -boot "$boot" -wait 40s \
+        -max "$DNS_GEO_POOL" -asncache "$DNS_GEO_SCAN_DIR/asn.cache" 2>/dev/null
+    fi
+  } > "$out"
   rm -f "$DNS_RUN_DIR/geoscan.list"
+  # частая: ответов нет — итог прежний, она повторится в свой срок
+  if [ "$mode" = hot ]; then
+    if grep -q '	ok	' "$out"; then mv -f "$out" "$f.hot"; else rm -f "$out"; fi
+    rmdir "$lock" 2>/dev/null
+    after=$(dns_geo_pick | tr '\n' ' ')
+    n=$(grep -c '^=' "$f.hot" 2>/dev/null)
+    if [ "$before" != "$after$(dns_geo_routes | tr '\n\t' '  ')" ]; then
+      dns_log "частая проверка DNS обхода геоблока (${n:-0} доменов, которыми пользуются): маршруты изменились — применяю"
+      dns_apply_now
+    fi
+    return 0
+  fi
   # ни один сервер не ответил — скорее всего, сеть ещё не готова (загрузка,
   # переключение): прежний рабочий итог остаётся, повтор — скоро
   if grep -q '	ok	' "$f.tmp"; then
-    mv -f "$f.tmp" "$f"; rm -f "$f.fail"
+    mv -f "$f.tmp" "$f"; rm -f "$f.fail" "$f.hot"
   else
     n=0; [ -f "$f.fail" ] && read -r n _ < "$f.fail"
     echo "$(( ${n:-0} + 1 )) $(date +%s)" > "$f.fail"
@@ -217,7 +293,7 @@ dns_geo_scan() {
   # сводка маршрутов: сколько доменов у какого сервера, сколько — в DNS сети
   routes=$(dns_geo_routes | awk -F'\t' '$2 == "-" { net++; next } { n[$2]++ }
     END { for (h in n) printf "%s%s — %d", (k++ ? ", " : ""), h, n[h]; if (net) printf "%sв DNS сети — %d", (k ? ", " : ""), net }')
-  n=$(grep -c -v '^[#=]' "$f" 2>/dev/null); ok=$(grep -c '	ok	' "$f" 2>/dev/null)
+  n=$(grep -c -v '^[#=+!?]' "$f" 2>/dev/null); ok=$(grep -c '	ok	' "$f" 2>/dev/null)
   dns_log "проверка DNS обхода геоблока: ответили ${ok:-0} из ${n:-0}; пул — ${after:-пусто (остаётся Comss)}${routes:+; по доменам: $routes}"
   [ "$before" != "$after$(dns_geo_routes | tr '\n\t' '  ')" ] && dns_apply_now
   return 0
@@ -251,8 +327,8 @@ dns_geo_overlap() {
   done
 }
 # В фоне, отвязанно: проверка идёт до 10 секунд, ждать её никому не нужно
-dns_geo_scan_bg() {
-  ( dns_geo_scan >/dev/null 2>&1 & ) 2>/dev/null
+dns_geo_scan_bg() { # [full|hot]
+  ( dns_geo_scan "${1:-full}" >/dev/null 2>&1 & ) 2>/dev/null
 }
 
 # Обновить список геоблока: свежий geoblock из itdoginfo и домены пресета
@@ -513,8 +589,8 @@ dns_build() {
   # устарела — в фоне, пул применится по её итогу. Без доменов, у которых свой маршрут (профили, CDN, push Google), и
   # без «никогда в обход»; совпадение — по окончанию имени, как у dnsproxy
   if dns_geo_on && [ -s "$DNS_GEO_LIST" ]; then
-    local gp gs
-    dns_geo_scan_due && dns_geo_scan_bg
+    local gp gs gm
+    gm=$(dns_geo_due); [ -n "$gm" ] && dns_geo_scan_bg "$gm"
     gs=$(dns_geo_servers)
     dns_geo_routes | awk -F'\t' '{ u = ($2 == "-" ? "-" : ($3 == "https" ? "https://" $2 "/dns-query" : "tls://" $2)); s[$1] = s[$1] (s[$1] == "" ? "" : " ") u }
       END { for (d in s) print d "\t" s[d] }' > "$DNS_RUN_DIR/geo.routes"
@@ -1112,7 +1188,7 @@ dns_probe_check() {
 
 dns_check() { _dns_locked 0 _dns_check; return 0; }
 _dns_check() {
-  local p="" own
+  local p="" own gm
   if dns_wanted; then
     [ -f "$DNS_RUN_DIR/active" ] || return 0
     if ! dns_pid >/dev/null; then
@@ -1137,7 +1213,7 @@ _dns_check() {
       dns_rules_add || dns_fail "не удалось восстановить перехват"
     elif [ "${DNS_PROBE:-1}" = 1 ]; then
       dns_probe_check
-      dns_geo_scan_due && dns_geo_scan_bg
+      gm=$(dns_geo_due); [ -n "$gm" ] && dns_geo_scan_bg "$gm"
     fi
   elif dns_pid >/dev/null || dns_rules_ok; then
     _dns_stop "watchdog: больше не нужен"
@@ -1194,6 +1270,12 @@ dns_state() {
   echo "geo_label=$(dns_geo_label)"
   echo "geo_scan_time=$(dns_geo_scan_time)"
   echo "geo_pool=$(dns_geo_pick | tr '\n' ' ' | sed 's/ $//')"
+  # надёжность серверов: geo_try_<сервер>=удачных/попыток, geo_cert_<сервер>=
+  # доменов без настоящего сертификата (частая проверка свежее — её данные)
+  f=$(dns_geo_scan_file)
+  # перехват обычного DNS сетью (whoami.akamai.net): geo_intercept=1
+  awk -F'\t' '/^\?whoami/ { for (i = 2; i <= NF; i++) if ($i ~ /^intercept=/) print "geo_" $i }' "$f" 2>/dev/null
+  cat "$f" "$f.hot" 2>/dev/null | awk -F'\t' '/^!/ { h = substr($1, 2); t[h] = $2; c[h] = $3 } END { for (h in t) print "geo_try_" h "=" t[h] "\ngeo_cert_" h "=" c[h] }'
   # маршруты: geo_for_<сервер>=сколько доменов к нему идёт, geo_direct — в DNS сети
   dns_geo_routes | awk -F'\t' '$2 == "-" { net++; next } { n[$2]++ } END { for (h in n) print "geo_for_" h "=" n[h]; print "geo_direct=" net + 0 }'
   echo "geo_domains=$(dns_geo_count)"
@@ -1214,7 +1296,7 @@ dns_state() {
   echo "max_domains=$DNS_MAX_DOMAINS"
   # проверка DNS обхода геоблока в этой сети: строки nfqws2-helper -geoscan
   echo "#geoscan"
-  grep -v '^[#=]' "$(dns_geo_scan_file)" 2>/dev/null
+  grep -v '^[#=+!?]' "$(dns_geo_scan_file)" 2>/dev/null
   for f in "$DNS_PROFILES_DIR"/*.conf; do
     [ -f "$f" ] || continue
     id="${f##*/}"; echo "#profile ${id%.conf}"; cat "$f"

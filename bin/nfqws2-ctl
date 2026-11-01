@@ -1026,6 +1026,38 @@ probe_nobypass() { # <путь к curl> <host[/путь]> <ip>
   iptables -w -t mangle -D $IPT_GROUP_POST $rule 2>/dev/null
   echo "$r"
 }
+# Чем мешают сайту (nfqws2-helper -sniprobe): тот же адрес с чужим именем, без
+# имени, имя другими буквами, HTTP и TCP — мимо nfqws2, как без обхода.
+# -> «причина<TAB>пробы» | skip
+probe_cause() { # <домен> <ip>
+  local d="${1%%/*}" ip="$2" rule r
+  [ -x "$HELPER_BIN" ] || { echo skip; return; }
+  rule="-m owner --uid-owner 0 -d $ip -p tcp -j RETURN"
+  is_running && iptables -w -t mangle -I $IPT_GROUP_POST 1 $rule 2>/dev/null || rule=""
+  r=$("$HELPER_BIN" -sniprobe "$d" -ip "$ip" -wait 4s 2>/dev/null)
+  [ -n "$rule" ] && iptables -w -t mangle -D $IPT_GROUP_POST $rule 2>/dev/null
+  echo "${r:-skip}"
+}
+# Расстояние до фильтра (nfqws2-helper -ttltrace) по серверу YouTube: узлов до
+# него и до фильтра — мимо nfqws2. Итог — в DPI_TTL_FILE для текущей сети.
+# -> «узлов-до-сервера<TAB>узел-фильтра|-<TAB>пояснение» | skip
+cmd_dpi_distance() {
+  local ip net r rule
+  [ -x "$HELPER_BIN" ] || { echo skip; return 0; }
+  date +%s > "$DPI_TTL_FILE.try"
+  ip=$(ping -c 1 -W 2 www.youtube.com 2>/dev/null | sed -n '1s/^PING [^(]*(\([0-9.]*\)).*/\1/p')
+  [ -n "$ip" ] || { echo skip; return 0; }
+  rule="-m owner --uid-owner 0 -d $ip -j RETURN"
+  is_running && iptables -w -t mangle -I $IPT_GROUP_POST 1 $rule 2>/dev/null || rule=""
+  r=$("$HELPER_BIN" -ttltrace -ip "$ip" -blocked "$BLOBS_DIR/quic_my_youtube_initial.bin" \
+    -open "$BLOBS_DIR/quic_initial_www_google_com.bin" -wait 2s 2>/dev/null)
+  [ -n "$rule" ] && iptables -w -t mangle -D $IPT_GROUP_POST $rule 2>/dev/null
+  [ -n "$r" ] || { echo skip; return 0; }
+  net=$(cat "$SMART_NET_FILE" 2>/dev/null)
+  printf '%s\n' "$r" | awk -F'\t' -v n="${net:-any}" -v t="$(date +%s)" '{ print n, $1, $2, t }' > "$DPI_TTL_FILE"
+  rm -f "$DPI_TTL_FILE.try"
+  echo "$r"
+}
 # Скорость скачивания через обход: замедленный сайт открывается, но данные
 # идут еле-еле. -> «<байт> <байт/с>» | skip
 probe_speed() { # <путь к curl> <host[/путь]>
@@ -1069,9 +1101,39 @@ cmd_net_info() {
     "$(is_running && echo running || echo stopped)" "${cur_strat:-—}"
 }
 
+# Видеосервер YouTube этой сети. YouTube выбирает его по оператору и
+# маршруту, в постоянный список его не положить. redirector.googlevideo.com/
+# report_mapping отвечает обычным HTTP строкой «адрес => узел» (muc12s10), и
+# имя узла посимвольной подстановкой переводится в имя видеосервера
+# rr1---sn-h0jelne7.googlevideo.com — так делают GoodCheck, zapret4rocket и
+# zapretgui (MIT, censorliber). Работает и когда youtube.com закрыт. Запомнено
+# на 12 часов для каждой сети (state/ggc_host: «сеть имя»)
+GGC_FILE="$STATE_DIR/ggc_host"
+ggc_host() { # [путь к curl] -> имя видеосервера | пусто
+  local bin="$1" net out n h u
+  net=$(cat "$SMART_NET_FILE" 2>/dev/null); net=${net:-any}
+  if [ -s "$GGC_FILE" ] && [ -z "$(find "$GGC_FILE" -mmin +720 2>/dev/null)" ]; then
+    read -r n h < "$GGC_FILE"
+    [ "$n" = "$net" ] && [ -n "$h" ] && { echo "$h"; return 0; }
+  fi
+  [ -n "$bin" ] || return 0
+  for u in 'http://redirector.googlevideo.com/report_mapping?di=no' 'https://redirector.gvt1.com/report_mapping?di=no'; do
+    out=$("$bin" -s -m 4 --max-filesize 4096 "$u" 2>/dev/null)
+    n=$(printf '%s' "$out" | tr 'A-Z' 'a-z' | sed -n 's/.*=> *\([a-z0-9-]*\).*/\1/p' | head -n 1)
+    [ -n "$n" ] && break
+  done
+  case "$n" in ''|*[!uzpkfa50vqlgb61wrmhc72xsnid83ytoje94-]*) return 0 ;; esac
+  h="rr1---sn-$(printf '%s' "$n" | tr 'uzpkfa50vqlgb61wrmhc72xsnid83ytoje94-' '0123456789abcdefghijklmnopqrstuvwxyz-').googlevideo.com"
+  echo "$net $h" > "$GGC_FILE"
+  echo "$h"
+}
+is_youtube() { case "$1" in youtube.com|*.youtube.com|youtu.be|googlevideo.com|*.googlevideo.com|ytimg.com|*.ytimg.com) return 0 ;; esac; return 1; }
+
 cmd_probe_all_inner() {
   local kind="$1" bin="$2" i=0 h
   grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$LISTS_DIR/probe_hosts.list" 2>/dev/null | tr -d '\r' > "$STATE_DIR/probe.hosts"
+  # видеосервер YouTube этой сети — им ходит само видео
+  [ "$kind" = curl ] && h=$(ggc_host "$bin") && [ -n "$h" ] && echo "$h" >> "$STATE_DIR/probe.hosts"
   while IFS= read -r h; do printf 'H\t%s\t%s\n' "$i" "$h"; i=$((i + 1)); done < "$STATE_DIR/probe.hosts"
   i=0
   while IFS= read -r h; do
@@ -1318,7 +1380,8 @@ cmd_share() { # <file|text> <путь>
 # списка покрывает и поддомены), какие из них подключены к текущему запуску
 # nfqws2, попадает ли его IP в ipset-списки и открывается ли он через обход.
 # Строки (TAB): MODE <list|auto|all|custom> | LIST <файл> <роль> <запись>
-# | IP <адрес> | R <попытка> <ok мс|fail причина> | K <ok|stall|skip> | done
+# | IP <адрес> | R <попытка> <ok мс|fail причина> | B <причина> <пробы>
+# | K <ok|stall|skip> | done
 # Роли: host, exclude, auto — из аргументов запуска; ipset, ipset-exclude —
 # по IP; idle — список есть, но текущий запуск его не использует.
 domain_norm() {
@@ -1388,8 +1451,14 @@ cmd_domain_check() {
   setup_probe_app_rule
   trap 'cleanup_probe_app_rule' EXIT
   trap 'exit 143' INT TERM
-  for k in 1 2 3; do ( printf 'R\t%s\t%s\n' "$k" "$(probe_attempt "$kind" "$bin" "$d")" ) & done
+  rm -f "$STATE_DIR/domain.r."*
+  for k in 1 2 3; do ( r=$(probe_attempt "$kind" "$bin" "$d"); printf 'R\t%s\t%s\n' "$k" "$r"; echo "$r" > "$STATE_DIR/domain.r.$k" ) & done
   wait
+  # не открылся ни разу — чем мешают: по имени сайта или закрыт адрес
+  if [ -n "$ip" ] && ! cat "$STATE_DIR/domain.r."* 2>/dev/null | grep -q '^ok'; then
+    printf 'B\t%s\n' "$(probe_cause "$d" "$ip")"
+  fi
+  rm -f "$STATE_DIR/domain.r."*
   # Почему не работает: повторный запрос по тому же соединению и скорость —
   # разом (каждая строка печатается целиком), потом та же попытка без обхода:
   # её правило пускает мимо nfqws2 весь трафик root к этому адресу. WebSocket
@@ -1399,6 +1468,15 @@ cmd_domain_check() {
     ( printf 'S\t%s\n' "$(probe_speed "$bin" "$d")" ) &
     wait
     [ -n "$ip" ] && printf 'N\t%s\n' "$(probe_nobypass "$bin" "$d" "$ip")"
+  fi
+  # YouTube: открывается ли его видеосервер этой сети — сайт может
+  # открываться, а видео нет
+  if [ "$kind" = curl ] && is_youtube "${d%%/*}"; then
+    k=$(ggc_host "$bin")
+    [ -n "$k" ] && printf 'Y\t%s\t%s\n' "$k" "$(probe_attempt "$kind" "$bin" "$k")"
+    # и где стоит фильтр: узлов до него и до сервера
+    k=$(cmd_dpi_distance)
+    [ "$k" != skip ] && printf 'T\t%s\n' "$k"
   fi
   if dns_enabled; then
     printf 'D\t%s\t%s\n' "$(dns_route "${d%%/*}")" "$(dns_private_mode)"
@@ -2072,8 +2150,9 @@ cmd_smart_learn_once() {
   [ "$(cat "$SMART_NET_FILE" 2>/dev/null)" = offline ] && return 0
   tool=$(probe_tool); kind="${tool%% *}"; bin="${tool#* }"
   [ "$kind" = none ] && return 0
+  # и видеосервер YouTube этой сети (если уже известен): учится вариант для него
   h=$({ grep -hv -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$MODDIR/defaults/smart-learn.list" \
-        "$LISTS_DIR/probe_hosts.list" "$LISTS_DIR/user.list" "$LISTS_DIR/auto.list" 2>/dev/null; } |
+        "$LISTS_DIR/probe_hosts.list" "$LISTS_DIR/user.list" "$LISTS_DIR/auto.list" 2>/dev/null; ggc_host; } |
       tr -d '\r' | awk '$1 !~ /[*^$]/ && $1 ~ /\./ && !seen[$1]++ { print $1 }' |
       awk -v seed="$$$(date +%s)" 'BEGIN { srand(seed % 2147483647) } { a[NR] = $1 } END { if (NR) print a[int(rand() * NR) + 1] }')
   [ -n "$h" ] || return 0
@@ -2367,6 +2446,7 @@ EOF
     echo OK ;;
   net-info) cmd_net_info ;;
   probe-dpi) cmd_probe_dpi "${2:-all}" ;;
+  dpi-distance) cmd_dpi_distance ;;
   domain-check) cmd_domain_check "$2" ;;
   share) cmd_share "$2" "$3" ;;
   # Список изменений из архива модуля — для «Что нового» в WebUI

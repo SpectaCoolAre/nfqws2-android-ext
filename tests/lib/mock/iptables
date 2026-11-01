@@ -70,7 +70,7 @@ has_rule() { # <file> <rule>
 # connmark/CONNMARK are deliberately never gated: connmark_out mode needs them,
 # so a kernel without them is not a state the module supports anyway.
 gate() {
-  for tok in connbytes multiport owner NFQUEUE; do
+  for tok in connbytes multiport owner NFQUEUE tcpmss length; do
     case "$1" in
       *"$tok"*)
         case " $FEATURES " in

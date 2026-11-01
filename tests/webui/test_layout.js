@@ -911,6 +911,15 @@ const VIEWPORTS = [
     truthy(res.includes('Вероятная причина') && res.includes('Обход мешает'), 'fails through the bypass but opens without it: the bypass is to blame');
     res = await dcRun('MODE\tall\nR\t1\tfail drop\nR\t2\tfail drop\nR\t3\tfail drop\nN\tfail drop\ndone');
     truthy(res.includes('ни через обход, ни без него'), 'fails both ways: the variant does not get past the block, or the site is down');
+    res = await dcRun('MODE\tall\nIP\t1.2.3.4\nR\t1\tfail tls_rst\nR\t2\tfail tls_rst\nR\t3\tfail tls_rst\nB\tname-case\ttcp=ok sni=reset other=ok none=ok case=ok http=451\nN\tfail tls_rst\ndone');
+    truthy(res.includes('Режут по имени сайта') && res.includes('Чем мешают: режут по имени'), 'blocked by the name: another name passes to the same server');
+    truthy(res.includes('другими буквами проходит') && res.includes('код 451'), 'with the letter-case and the HTTP block page notes');
+    res = await dcRun('MODE\tall\nIP\t1.2.3.4\nR\t1\tfail drop\nR\t2\tfail drop\nR\t3\tfail drop\nB\taddr\ttcp=timeout sni=timeout other=timeout none=timeout case=timeout http=-\nN\tfail drop\ndone');
+    truthy(res.includes('Закрыт сам адрес сайта'), 'the address itself is closed: name-based bypass will not help');
+    res = await dcRun('MODE\tall\nR\t1\tok 200\nR\t2\tok 210\nR\t3\tok 190\nY\trr1---sn-h0jelne7.googlevideo.com\tfail tls_rst\nT\t9\t3\tфильтр — на 3-м узле\ndone');
+    truthy(res.includes('На 3-м узле от телефона, сервер YouTube — на 9-м'), 'where the filter stands');
+    truthy(res.includes('видеосервер в вашей сети (rr1---sn-h0jelne7.googlevideo.com) — нет'), 'YouTube opens but its video server of this network does not: no video');
+    truthy(res.includes('Видеосервер YouTube') && res.includes('TLS RST'), 'the video server row says why');
     res = await dcRun('MODE\tall\nR\t1\tok 200\nR\t2\tok 210\nR\t3\tok 190\nK\tok\nN\tfail tls_rst\nS\t900000 4096\nD\tdefault\topportunistic\ndone');
     truthy(res.includes('очень медленно (4 КБ/с)'), 'opens but crawls: looks like throttling');
     truthy(res.includes('4 КБ/с — медленно'), 'with the measured speed');

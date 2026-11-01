@@ -329,6 +329,8 @@ smartkill() {
   smartkill_chain add
   while :; do
     sleep 3
+    # спячка: обрывать почти нечего и учиться незачем — реже, без обучения
+    dev_idle && sleep 12
     conf_refresh
     is_running && smart_active || break
     read -r up _ < /proc/uptime; up=${up%.*}
@@ -341,7 +343,13 @@ smartkill() {
       every=$SMART_TURBO_EVERY
       [ "$learn_at" -gt $((up + every)) ] && learn_at=$((up + every))
     fi
-    if [ "${SMART_LEARN:-1}" = 1 ] && [ "$up" -ge "$learn_at" ]; then
+    # ночью во сне на зарядке — учится и во сне (night_learn_ok)
+    if dev_idle && [ "${SMART_LEARN:-1}" = 1 ] && night_learn_ok; then
+      [ -f "$NIGHT_FILE" ] || { : > "$NIGHT_FILE"; log_msg "ночное обучение: телефон спит на зарядке — умный режим учится, чтобы утром всё работало"; }
+    elif [ -f "$NIGHT_FILE" ]; then
+      rm -f "$NIGHT_FILE"
+    fi
+    if [ "${SMART_LEARN:-1}" = 1 ] && [ "$up" -ge "$learn_at" ] && { ! dev_idle || [ -f "$NIGHT_FILE" ]; }; then
       learn_at=$((up + every))
       if [ -z "$lp_pid" ] || ! kill -0 "$lp_pid" 2>/dev/null; then
         sh "$MODDIR/bin/nfqws2-ctl" smart-learn-once </dev/null >/dev/null 2>&1 &
@@ -383,11 +391,14 @@ wlwatch() {
   echo $$ > "$WL_PIDFILE"
   protect_process
   trap 'wlwatch_exit; exit 0' TERM INT HUP
-  local up next=0 pend=0 net last="" res
+  local up next=0 pend=0 net last="" res slept=0
   while :; do
     sleep 5
     conf_refresh
     wl_wanted || break
+    # спячка: проверять белые списки незачем — по пробуждении сразу
+    if dev_idle; then slept=1; sleep 25; continue; fi
+    [ "$slept" = 1 ] && { slept=0; next=0; }
     read -r up _ < /proc/uptime; up=${up%.*}
     net=""; [ -f "$SMART_NET_FILE" ] && read -r net < "$SMART_NET_FILE"
     [ "$net" != "$last" ] && { last="$net"; next=0; pend=0; }
@@ -550,21 +561,57 @@ netwatch() {
 watchdog() {
   echo $$ > "$WD_PIDFILE"
   # убитый извне — без PID-файла, иначе следующий запуск верил бы мёртвому PID (оригинал, 00c1a16)
-  trap 'rm -f "$WD_PIDFILE" "$STATE_DIR/conf_seen.$$"; exit 0' INT TERM
+  trap 'rm -f "$WD_PIDFILE" "$STATE_DIR/conf_seen.$$" "$IDLE_FILE"; exit 0' INT TERM
   protect_process
-  local fails=0 tick=0 dpid
+  local fails=0 tick=0 dpid per=20 kb lkb="" act=0 up rare slept=0 sm=0
+  rm -f "$IDLE_FILE" "$NIGHT_FILE"
   while :; do
-    sleep 20
+    sleep "$per"
     conf_refresh
     watchers_wanted || break
     tick=$((tick + 1))
+    # спячка (см. IDLE_FILE): трафик за тик меньше IDLE_KBPS КБ/с в среднем —
+    # тишина; IDLE_AFTER секунд тишины — тик раз в минуту, редкие проверки —
+    # раз в 5; первый же заметный трафик — обратно
+    read -r up _ < /proc/uptime; up=${up%.*}
+    kb=$(net_kbytes)
+    [ "$act" = 0 ] && act=$up
+    if [ -f "$NIGHT_FILE" ]; then
+      # ночное обучение: трафик — сам модуль; проснулся тот, кто включил экран
+      screen_on && act=$up
+    elif [ -n "$lkb" ] && [ -n "$kb" ] && [ $((kb - lkb)) -gt $((IDLE_KBPS * per)) ]; then
+      act=$up
+    fi
+    lkb=$kb
+    if [ "$per" = 20 ] && [ $((up - act)) -ge "$IDLE_AFTER" ]; then
+      per=60; : > "$IDLE_FILE"
+      # заснул тогда, когда кончился трафик
+      slept=$act; sm=$(( ($(mod_now) - (up - act) / 60 + 1440) % 1440 ))
+      log_msg "спячка: $((IDLE_AFTER / 60)) мин почти без трафика — фоновые проверки реже, обучение и проверки DNS — по пробуждении"
+    elif [ "$per" = 60 ] && [ "$act" = "$up" ]; then
+      per=20; rm -f "$IDLE_FILE" "$NIGHT_FILE"; tick=0
+      # долгий сон — в привычки: когда засыпает и просыпается
+      if [ $((up - slept)) -ge "$USAGE_LONG" ]; then usage_add sleep "$sm"; usage_add wake "$(mod_now)"; fi
+      log_msg "пробуждение: снова трафик — фоновые проверки как обычно"
+    fi
+    # за полчаса до обычного пробуждения — свежие маршруты DNS обхода геоблока
+    if [ "$per" = 60 ] && wake_prep_due; then
+      date +%Y%m%d > "$PREP_FILE"
+      log_msg "подготовка к пробуждению: частая проверка DNS обхода геоблока"
+      dns_enabled && dns_geo_on && ( dns_geo_scan hot >/dev/null 2>&1 & )
+    fi
+    # редкие проверки: раз в минуту, в спячке — раз в 5 минут
+    if [ "$per" = 60 ]; then rare=$((tick % 5 == 0)); else rare=$((tick % 3 == 0)); fi
     # once a minute: cmd wifi is the expensive part
-    { [ "$HOME_WIFI" = "1" ] || [ "$VPN_PAUSE" = "1" ]; } && [ $((tick % 3)) -eq 0 ] && home_check
+    { [ "$HOME_WIFI" = "1" ] || [ "$VPN_PAUSE" = "1" ]; } && [ "$rare" = 1 ] && home_check
     # сеть для умного режима — и там, где ip monitor не работает
-    [ $((tick % 3)) -eq 0 ] && is_running && smart_net_update
+    [ "$rare" = 1 ] && is_running && smart_net_update
+    # место фильтра в этой сети (раз в неделю, не во сне): для фейков умного режима
+    [ "$rare" = 1 ] && [ "$per" = 20 ] && is_running && smart_active && dpi_ttl_due &&
+      ( sh "$MODDIR/bin/nfqws2-ctl" dpi-distance </dev/null >/dev/null 2>&1 & )
     # DNS — до проверки WATCHDOG: упавший dnsproxy с правилами перехвата
     # оставил бы телефон совсем без DNS
-    dns_enabled && DNS_PROBE=$((tick % 3 == 0)) dns_check
+    dns_enabled && DNS_PROBE=$rare dns_check
     [ "$WATCHDOG" = "1" ] || continue
     [ -f "$DESIRED_FILE" ] || continue
 
@@ -590,14 +637,14 @@ watchdog() {
     [ -n "$dpid" ] && protect_process "$dpid" norenice
     protect_process
 
-    # fast iptables recovery after a network switch
-    if ! firewall_ok; then
+    # fast iptables recovery after a network switch (в спячке — реже)
+    if { [ "$per" = 20 ] || [ "$rare" = 1 ]; } && ! firewall_ok; then
       log_msg "watchdog: правила iptables сброшены системой — восстановление"
       firewall_start
     fi
     [ $((tick % 25)) -eq 0 ] && rotate_logs
   done
-  rm -f "$WD_PIDFILE" "$STATE_DIR/conf_seen.$$"
+  rm -f "$WD_PIDFILE" "$STATE_DIR/conf_seen.$$" "$IDLE_FILE"
 }
 
 # home Wi-Fi: networks from home_wifi.list pause the service; leaving resumes.

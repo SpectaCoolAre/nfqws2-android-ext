@@ -655,6 +655,9 @@ assert_rc 1 $? "and a new check — not at once"
 sed -i '1s/^#time=[0-9]*/#time='"$(( $(date +%s) - 700 ))"'/' "$(dns_geo_scan_file)"
 dns_geo_scan_due
 assert_rc 0 $? "but ten minutes later"
+a=$(dns_net_servers() { printf '192.168.1.2,192.168.1.1'; }; dns_geo_scan_file)
+b=$(dns_net_servers() { printf '192.168.1.1,192.168.1.2'; }; dns_geo_scan_file)
+assert_eq "$a" "$b" "the same network DNS in another order is the same network (its check is not lost)"
 # После загрузки сеть появляется не сразу: проверка без единого ответа не
 # затирает рабочий итог, а повторяется через минуту, две, четыре…
 dns_geo_scan >/dev/null
@@ -695,6 +698,7 @@ printf 'chatgpt.com\nab.chatgpt.com\nclashofclans.com\nintel.com\nopenai.com\n' 
   printf '=clashofclans.com\tcomss.example\n'
   printf '=intel.com\t-\n'
   printf '=gone.example\tdead.example\n'
+  printf '?whoami\tnet=93.1.1.1/8359\tgoogle=93.1.1.1/8359\tcloudflare=-\tintercept=1\n'
 } > "$(dns_geo_scan_file)"
 assert_eq "chatgpt.com	comss.example	https|chatgpt.com	zapret.example	tls|clashofclans.com	comss.example	https|intel.com	-" "$(dns_geo_routes | sort | tr '\n' '|' | sed 's/|$//')" "routes come from the check, with each server's protocol (a dead one is dropped)"
 assert_eq "comss.example" "$(dns_geo_pick)" "the common pool: the one that bypasses the most (route lines are not servers)"
@@ -709,7 +713,60 @@ assert_eq "geo" "$(dns_pid() { echo 1; }; dns_route chatgpt.com)" "a per-domain 
 st=$(dns_state)
 assert_contains "$st" "geo_for_comss.example=2" "the screen learns how many domains go to a server"
 assert_contains "$st" "geo_direct=1" "and how many to the network DNS"
+assert_contains "$st" "geo_intercept=1" "and that the network intercepts plain DNS"
 assert_not_contains "$(printf '%s\n' "$st" | sed -n '/^#geoscan/,/^#/p')" "=chatgpt.com" "route lines stay out of the server list"
+# Частая проверка: домены списка, которыми пользуются, — раз в полчаса;
+# полная — раз в 4 часа; в спячке — ни та ни другая
+mkdir -p "$SMART_DIR"
+now=$(date +%s)
+{ printf '#v4 slot\thost\tcur\tok\terr\tcool\tseen\tflags\n'
+  printf 'tls_as\tgamea.clashofclans.com\t1\t\t\t\t%s\t\n' "$now"
+  printf 'tls\tapi.openai.com\t1\t\t\t\t%s\t\n' "$((now - 60))"
+  printf 'tls\told.openai.com\t1\t\t\t\t%s\t\n' "$((now - 30 * 86400))"
+  printf 'tls\texample.org\t1\t\t\t\t%s\t\n' "$now"
+} > "$SMART_DIR/mobile-1.tsv"
+hot=$(dns_geo_hot_list | tr '\n' ' ')
+assert_contains "$hot" "gamea.clashofclans.com" "a site the phone used, by its own name (the game server, not the list entry)"
+assert_contains "$hot" "api.openai.com" "under any list domain"
+assert_contains "$hot" "chatgpt.com" "the main services are always there"
+assert_not_contains "$hot" "old.openai.com" "not one unused for a month"
+assert_not_contains "$hot" "example.org" "not a site outside the geo-block list"
+assert_not_contains "$hot" "claude.ai" "nor a main service outside this list"
+assert_eq "" "$(dns_geo_due)" "right after the check nothing is due"
+sed -i '1s/^#time=[0-9]*/#time='"$((now - 1900))"'/' "$(dns_geo_scan_file)"
+assert_eq "hot" "$(dns_geo_due)" "half an hour later — the frequent check, not the full one"
+: > "$IDLE_FILE"
+assert_eq "" "$(dns_geo_due)" "the phone sleeps (no traffic) — no check at all"
+rm -f "$IDLE_FILE"
+mv "$HELPER_BIN" "$HELPER_BIN.full"
+cat > "$HELPER_BIN" <<'EOF'
+#!/bin/sh
+echo "$@" > "$MOCK_DIR/geoscan.args"
+cat "${4#@}" > "$MOCK_DIR/geoscan.list"
+printf 'zapret.example\tok\t20\t1\t4\t1\ttls\n'
+printf '=gamea.clashofclans.com\tzapret.example\n'
+printf '!zapret.example\t2/3\t1\n'
+EOF
+chmod 0755 "$HELPER_BIN"
+rm -f "$MOCK_DIR/geo.applied"
+dns_geo_scan hot
+assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "-shared $(dns_geo_scan_file)" "it knows the shared proxy addresses of the full check"
+assert_eq "$hot" "$(tr '\n' ' ' < "$MOCK_DIR/geoscan.list")" "only the used domains are checked"
+assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "-verify" "and by the fact: the site's certificate through the proxy"
+st=$(dns_state)
+assert_contains "$st" "geo_try_zapret.example=2/3" "the screen learns a server answers now and then"
+assert_contains "$st" "geo_cert_zapret.example=1" "and where its proxy gave no real certificate"
+assert_not_contains "$(printf '%s\n' "$st" | sed -n '/^#geoscan/,/^#/p')" "!zapret" "info lines stay out of the server list"
+r=$(dns_geo_routes | sort | tr '\n' '|')
+assert_contains "$r" "gamea.clashofclans.com	zapret.example	tls|" "its routes are added"
+assert_contains "$r" "chatgpt.com	zapret.example	tls|" "the full check's routes stay"
+assert_eq "applied" "$(cat "$MOCK_DIR/geo.applied")" "a changed route is applied"
+assert_eq "" "$(dns_geo_due)" "and the next frequent check is in half an hour"
+mv -f "$HELPER_BIN.full" "$HELPER_BIN"
+dns_geo_scan >/dev/null
+assert_no_file "$(dns_geo_scan_file).hot" "a full check replaces the frequent one"
+assert_contains "$(cat "$MOCK_DIR/geoscan.list")" "gamea.clashofclans.com" "and checks the used names too"
+rm -rf "$SMART_DIR"
 printf 'chatgpt.com\nclaude.ai\n' > "$DNS_GEO_LIST"
 dns_geo_scan >/dev/null
 unset -f dns_apply_now

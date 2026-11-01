@@ -271,6 +271,10 @@ const dnsGeoPool = () => (dnsSt.status.geo_pool || '').split(' ').filter(Boolean
    домен идёт к тем, у кого для него прокси, а где у домена свой адрес — только
    к ним (см. helper/geoscan.go) */
 const dnsGeoFor = host => +dnsSt.status['geo_for_' + host] || 0;
+/* Ответил не на все попытки подключения (geo_try_<сервер>=удачных/попыток) —
+   «через раз»: в маршрутах он после надёжных */
+const dnsGeoTry = host => (dnsSt.status['geo_try_' + host] || '').split('/').map(Number);
+const dnsGeoFlaky = host => { const [ok, n] = dnsGeoTry(host); return n > 0 && ok > 0 && ok < n; };
 const dnsGeoRole = host => dnsGeoPool().includes(host) ? t('в пуле')
   : dnsGeoFor(host) ? t('доменов: {0}', fmtCount(dnsGeoFor(host))) : '';
 function renderDnsGeo(){
@@ -284,7 +288,8 @@ function renderDnsGeo(){
     const list = (dnsSt.geoscan || []).slice().sort((a, b) => (b.ok - a.ok) || (dnsGeoFor(b.host) - dnsGeoFor(a.host)) || (b.proxy - a.proxy) || (a.ms - b.ms));
     list.forEach(r => {
       const sub = !r.ok ? t('не отвечает')
-        : [t('{0} мс', r.ms), t('обходит {0} из {1}', fmtCount(r.proxy), fmtCount(r.total))].concat(r.proto === 'https' ? ['DoH'] : [], dnsGeoRole(r.host) ? [dnsGeoRole(r.host)] : []).join(' · ');
+        : [t('{0} мс', r.ms), t('обходит {0} из {1}', fmtCount(r.proxy), fmtCount(r.total))].concat(r.proto === 'https' ? ['DoH'] : [],
+          dnsGeoFlaky(r.host) ? [t('через раз')] : [], dnsGeoRole(r.host) ? [dnsGeoRole(r.host)] : []).join(' · ');
       rows.push('<div class="list-item two-line clickable state" role="button" tabindex="0" onclick="dnsGeoServerInfo(' + jsArg(r.host) + ')">' +
         '<span class="li-icon">' + icon(r.ok ? (dnsGeoRole(r.host) ? 'check' : 'dns') : 'error', 's24') + '</span>' +
         '<span class="li-text"><span class="li-primary truncate">' + esc(r.host) + '</span>' +
@@ -307,6 +312,8 @@ function dnsGeoServerInfo(host){
       t('Обходит геоблок для {0} из {1} доменов списка', fmtCount(r.proxy), fmtCount(r.total)),
       t('Из них своим адресом: {0} — для этих доменов годится любой протокол, в том числе игры', fmtCount(r.own)),
       t('Направлено к нему доменов: {0}', fmtCount(dnsGeoFor(host)))]
+      .concat(dnsGeoFlaky(host) ? [t('Отвечает через раз: {0} из {1} подключений — в маршрутах после надёжных', ...dnsGeoTry(host))] : [],
+        +dnsSt.status['geo_cert_' + host] ? [t('Не отдал настоящий сертификат сайта для {0} доменов — для них не используется', dnsSt.status['geo_cert_' + host])] : [])
     : [t('Не отвечает'), r.err || ''];
   if(at) lines.push('', t('Проверено {0}', at));
   mdDialog({title: host, text: lines.join('\n'), icon: false, cancel: false, ok: t('Закрыть')});
@@ -367,6 +374,9 @@ function dnsWarnings(){
     });
     if(ov.length) w.push(banner('warn', 'warn', t('Домены из списка геоблока есть в профилях {0} — для них работает профиль, а не обход геоблока.', ov.join(', '))));
   }
+  // whoami.akamai.net: на «8.8.8.8» или «1.1.1.1» ответил резолвер оператора
+  if(s.geo_intercept === '1')
+    w.push(banner('warn', 'warn', t('Сеть перехватывает обычные DNS-запросы к публичным серверам (8.8.8.8, 1.1.1.1) — на них отвечает оператор. В профилях такие адреса без шифрования ничего не меняют: указывайте их как tls:// или https://.')));
   // Только когда это кого-то касается: в активных профилях есть IPv6-сервер
   if(s.ipv6 === 'none' && s.rules === 'on' && dnsActiveV6())
     w.push(banner('warn', 'warn', t('Запросы к IPv6-серверам DNS идут мимо: в ядре нет ip6tables nat, а у сети нет IPv4-серверов.')));

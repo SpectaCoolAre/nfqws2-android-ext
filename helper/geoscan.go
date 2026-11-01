@@ -28,9 +28,15 @@
 //
 //	сервер  ok|fail  мс  обходит  доменов  своим-адресом  tls|https|-  [ошибка]
 //
-// и строка на домен: «=домен<TAB>сервер,сервер» — куда его отправлять,
-// «=домен<TAB>-» — никто не обходит, в DNS сети. Нет строки — данных о домене
-// нет (серверы не ответили), он идёт в общий пул.
+// строки об общих адресах прокси «+сервер<TAB>адрес<TAB>сайтов» (их читает
+// частая проверка, -shared) и строка на домен: «=домен<TAB>сервер,сервер» —
+// куда его отправлять, «=домен<TAB>-» — никто не обходит, в DNS сети. Нет
+// строки — данных о домене нет (серверы не ответили), он идёт в общий пул.
+//
+// Частая проверка — та же, по нескольким десяткам доменов, которыми
+// пользуются (см. lib/dns.sh dns_geo_hot_list): общий ли адрес прокси, она
+// берёт и из прошлой полной проверки (-shared), иначе общий на сотни сайтов
+// прокси в ней выглядел бы своим у домена.
 package main
 
 import (
@@ -45,6 +51,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -385,6 +392,9 @@ type scanResult struct {
 	share  []int      // сколько сайтов делят адрес прокси (см. shareCounts)
 	proto  string     // tls — DoT, https — DoH (DoT не прошёл), "-" — ни один
 	err    string
+	tries  int // попыток подключения (см. scanTries) и удачных из них
+	okTry  int
+	cert   int // доменов, где прокси не дал настоящего сертификата (см. verifyRoutes)
 }
 
 // tlsRoots — корневые сертификаты; nil — собрать из системы (тесты подставляют свой)
@@ -649,6 +659,181 @@ func scanServer(server string, names []string, boot string, wait time.Duration) 
 	return r
 }
 
+// scanTries — сколько раз подключаться к серверу: блокировка иногда
+// включается не с первого соединения, и сервер, ответивший на часть
+// попыток, — «через раз» (в маршрутах — после надёжных). Первая попытка —
+// сама проверка, остальные — отдельными соединениями с одним запросом, разом
+const scanTries = 3
+
+func scanServerTries(server string, names []string, boot string, wait time.Duration) scanResult {
+	if len(names) == 0 {
+		return scanServer(server, names, boot, wait)
+	}
+	extra := make(chan bool, scanTries-1)
+	for k := 1; k < scanTries; k++ {
+		go func() { extra <- scanServer(server, names[:1], boot, wait/2).ok }()
+	}
+	r := scanServer(server, names, boot, wait)
+	r.tries = scanTries
+	if r.ok {
+		r.okTry++
+	}
+	for k := 1; k < scanTries; k++ {
+		if <-extra {
+			r.okTry++
+		}
+	}
+	return r
+}
+
+// flaky — ответил не на все попытки
+func (r *scanResult) flaky() bool { return r.okTry > 0 && r.okTry < r.tries }
+
+// verifyProxy — настоящий ли сертификат сайта отдаёт адрес прокси по его
+// имени: прокси DNS обхода пропускает TLS сайта как есть, и рабочий отдаёт
+// сертификат самого сайта; неработающий рвёт соединение или подставляет
+// чужой (идея — zapretgui, MIT, censorliber: «честен ли DNS» по сертификату).
+// Тесты подменяют
+var verifyProxy = func(ip net.IP, host string, wait time.Duration) bool {
+	d := tls.Dialer{NetDialer: &net.Dialer{Timeout: wait}, Config: &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12, RootCAs: rootPool()}}
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	c, err := d.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), proxyTLSPort))
+	if err != nil {
+		return false
+	}
+	c.Close()
+	return true
+}
+
+// proxyTLSPort — порт сайта для verifyProxy (тесты подменяют)
+var proxyTLSPort = "443"
+
+// verifyRoutes — проверка по факту для частой проверки: для каждого домена и
+// сервера с прокси — сертификат по адресу прокси (verifyProxy). Хоть у
+// одного сервера настоящий — серверы, у кого нет, для домена не годятся
+// (отметка c). Ни у кого — домен, видимо, не HTTPS (игра) или недоступен
+// весь: тогда проверка ничего не решает
+func verifyRoutes(res []scanResult, names []string, wait time.Duration) {
+	type key struct{ ip, host string }
+	good := make(map[key]bool)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 24)
+	first := func(a []net.IP) net.IP {
+		for _, ip := range a {
+			if !junkIP(ip) && ip.To4() != nil {
+				return ip
+			}
+		}
+		return nil
+	}
+	seen := make(map[key]bool)
+	for k := range res {
+		for i, m := range res[k].marks {
+			ip := first(res[k].ans[i])
+			if m != 'p' || ip == nil {
+				continue
+			}
+			kk := key{ip.String(), names[i]}
+			if seen[kk] {
+				continue
+			}
+			seen[kk] = true
+			wg.Add(1)
+			go func(kk key, ip net.IP) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				ok := verifyProxy(ip, kk.host, wait)
+				mu.Lock()
+				good[kk] = ok
+				mu.Unlock()
+			}(kk, ip)
+		}
+	}
+	wg.Wait()
+	for i := range names {
+		any := false
+		for k := range res {
+			if ip := first(res[k].ans[i]); res[k].marks[i] == 'p' && ip != nil && good[key{ip.String(), names[i]}] {
+				any = true
+			}
+		}
+		if !any {
+			continue
+		}
+		for k := range res {
+			if ip := first(res[k].ans[i]); res[k].marks[i] == 'p' && ip != nil && !good[key{ip.String(), names[i]}] {
+				res[k].marks[i] = 'c'
+				res[k].cert++
+			}
+		}
+	}
+}
+
+// Кто на самом деле отвечает на обычный DNS: имя whoami.akamai.net
+// возвращает адрес резолвера, который пришёл за ответом (идея — zapretgui,
+// MIT, censorliber). Запрос «к 8.8.8.8», на который пришёл резолвер не из
+// сети Google (AS15169), — перехвачен по дороге: сеть подменяет ответы
+// публичных DNS своими. Так было у МТС: dig @8.8.8.8 отдавал её ответы
+type whoAns struct {
+	name, server, as string // as — чей должен быть ответивший резолвер ("" — DNS сети)
+	ip               net.IP
+}
+
+var whoamiName = "whoami.akamai.net"
+
+// whoamiTargets — публичные DNS и их сети (тесты подменяют)
+var whoamiTargets = []whoAns{{name: "google", server: "8.8.8.8:53", as: "15169"}, {name: "cloudflare", server: "1.1.1.1:53", as: "13335"}}
+
+func whoamiAll(boot string, wait time.Duration) []whoAns {
+	all := append([]whoAns{{name: "net", server: boot}}, whoamiTargets...)
+	var wg sync.WaitGroup
+	for i := range all {
+		wg.Add(1)
+		go func(w *whoAns) {
+			defer wg.Done()
+			if ips, err := udpResolve(w.server, whoamiName, wait); err == nil && len(ips) > 0 {
+				w.ip = ips[0]
+			}
+		}(&all[i])
+	}
+	wg.Wait()
+	return all
+}
+
+// formatWhoami — «?whoami<TAB>net=адрес/AS<TAB>google=…<TAB>intercept=0|1»
+func formatWhoami(who []whoAns, asn map[string][]string) string {
+	parts := []string{"?whoami"}
+	icpt := 0
+	for _, w := range who {
+		v := "-"
+		if w.ip != nil {
+			as := strings.Join(asn[asnKey(w.ip)], " ")
+			v = w.ip.String() + "/" + as
+			if w.as != "" && as != "" {
+				own := false
+				for _, a := range asn[asnKey(w.ip)] {
+					own = own || a == w.as
+				}
+				if !own {
+					icpt = 1
+				}
+			}
+		}
+		parts = append(parts, w.name+"="+v)
+	}
+	return strings.Join(append(parts, fmt.Sprintf("intercept=%d", icpt)), "\t")
+}
+
+// whoamiCheck — включает проверку перехвата (полная проверка); итог — lastWhoami
+var whoamiCheck bool
+var lastWhoami string
+
+// verifyCerts — включает verifyRoutes (частая проверка, -verify)
+var verifyCerts bool
+
 // siteOf — сайт домена (последние две метки, у co.uk и подобных — три):
 // поддомены одного сайта у прокси считаются одним сайтом
 func siteOf(name string) string {
@@ -666,9 +851,9 @@ func siteOf(name string) string {
 	return strings.Join(l[len(l)-n:], ".")
 }
 
-// shareCounts — для каждого домена: сколько разных сайтов получили от этого
-// сервера тот же адрес прокси (наибольшее по адресам ответа). 1 — свой адрес
-func shareCounts(r *scanResult, names []string) {
+// ipSites — сколько разных сайтов получили от сервера каждый адрес прокси
+// (вместе с известным по прошлой полной проверке, см. knownShare)
+func ipSites(r *scanResult, names []string) map[string]int {
 	sites := make(map[string]map[string]bool)
 	for i, a := range r.ans {
 		if r.marks[i] != 'p' && r.marks[i] != 'u' {
@@ -685,17 +870,84 @@ func shareCounts(r *scanResult, names []string) {
 			sites[k][siteOf(names[i])] = true
 		}
 	}
+	out := make(map[string]int, len(sites))
+	for k, v := range sites {
+		out[k] = len(v)
+	}
+	for k, n := range knownShare[r.server] {
+		if n > out[k] {
+			out[k] = n
+		}
+	}
+	return out
+}
+
+// knownShare — общие адреса прокси по прошлой полной проверке (сервер →
+// адрес → сайтов): частая проверка идёт по нескольким десяткам доменов, и
+// общий на сотни сайтов прокси в ней выглядел бы своим у домена
+var knownShare map[string]map[string]int
+
+// shareCounts — для каждого домена: сколько разных сайтов получили от этого
+// сервера тот же адрес прокси (наибольшее по адресам ответа). 1 — свой адрес
+func shareCounts(r *scanResult, names []string) {
+	sites := ipSites(r, names)
 	for i, a := range r.ans {
 		r.share[i] = 0
 		if r.marks[i] != 'p' && r.marks[i] != 'u' {
 			continue
 		}
 		for _, ip := range a {
-			if n := len(sites[ip.String()]); n > r.share[i] {
+			if n := sites[ip.String()]; n > r.share[i] {
 				r.share[i] = n
 			}
 		}
 	}
+}
+
+// formatShared — строки «+сервер<TAB>адрес<TAB>сайтов» об общих адресах
+// прокси (на два сайта и больше): их читает следующая частая проверка
+func formatShared(res []scanResult, names []string) []string {
+	var out []string
+	for k := range res {
+		r := &res[k]
+		sites := ipSites(r, names)
+		keys := make([]string, 0, len(sites))
+		for ip, n := range sites {
+			if n > 1 {
+				keys = append(keys, ip)
+			}
+		}
+		sort.Strings(keys)
+		for _, ip := range keys {
+			out = append(out, fmt.Sprintf("+%s\t%s\t%d", r.server, ip, sites[ip]))
+		}
+	}
+	return out
+}
+
+// loadShared — общие адреса из файла прошлой проверки (строки «+…»)
+func loadShared(path string) map[string]map[string]int {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]map[string]int)
+	for _, l := range strings.Split(string(b), "\n") {
+		if !strings.HasPrefix(l, "+") {
+			continue
+		}
+		f := strings.Split(l[1:], "\t")
+		if len(f) != 3 {
+			continue
+		}
+		var n int
+		fmt.Sscan(f[2], &n)
+		if out[f[0]] == nil {
+			out[f[0]] = make(map[string]int)
+		}
+		out[f[0]][f[1]] = n
+	}
+	return out
 }
 
 // geoScan — все серверы разом; эталон — ответы DNS сети на те же домены
@@ -723,7 +975,7 @@ func geoScan(servers, names []string, boot string, wait time.Duration) []scanRes
 		wg.Add(1)
 		go func(i int, s string) {
 			defer wg.Done()
-			res[i] = scanServer(s, names, boot, scanWait)
+			res[i] = scanServerTries(s, names, boot, scanWait)
 		}(i, s)
 	}
 	wg.Wait()
@@ -743,7 +995,20 @@ func geoScan(servers, names []string, boot string, wait time.Duration) []scanRes
 			}
 		}
 	}
+	// кто на самом деле отвечает (whoami.akamai.net): запрос — до номеров AS
+	var who []whoAns
+	if whoamiCheck {
+		who = whoamiAll(boot, refWait)
+		for _, w := range who {
+			if w.ip != nil {
+				ips = append(ips, w.ip)
+			}
+		}
+	}
 	asn := asnLookup(boot, ips, asnWait)
+	if whoamiCheck {
+		lastWhoami = formatWhoami(who, asn)
+	}
 	for k := range res {
 		r := &res[k]
 		for i, a := range r.ans {
@@ -762,6 +1027,9 @@ func geoScan(servers, names []string, boot string, wait time.Duration) []scanRes
 			}
 		}
 		shareCounts(r, names)
+	}
+	if verifyCerts {
+		verifyRoutes(res, names, 4*time.Second)
 	}
 	return res
 }
@@ -803,6 +1071,10 @@ func planRoutes(res []scanResult, n, max int) []route {
 			sa, sb := res[a].share[i], res[b].share[i]
 			if (sa == 1) != (sb == 1) {
 				return sa == 1
+			}
+			// «через раз» — после надёжных
+			if fa, fb := res[a].flaky(), res[b].flaky(); fa != fb {
+				return fb
 			}
 			if sa != sb {
 				return sa < sb
@@ -847,6 +1119,17 @@ func formatScan(r scanResult) string {
 		line += "\t" + strings.ReplaceAll(r.err, "\t", " ")
 	}
 	return line
+}
+
+// formatInfo — строки «!сервер<TAB>удачных/попыток<TAB>без сертификата»
+func formatInfo(res []scanResult) []string {
+	var out []string
+	for _, r := range res {
+		if r.tries > 0 {
+			out = append(out, fmt.Sprintf("!%s\t%d/%d\t%d", r.server, r.okTry, r.tries, r.cert))
+		}
+	}
+	return out
 }
 
 func formatRoutes(res []scanResult, names []string, rt []route) []string {

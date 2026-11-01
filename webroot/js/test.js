@@ -568,7 +568,7 @@ async function runDomainCheck(){
   dcRunning = true;
   $('dc-go').disabled = true;
   $('dc-q').blur();
-  const st = {mode: '', lists: [], ip: '', tries: [], keep: '', nb: '', speed: null, dns: null};
+  const st = {mode: '', lists: [], ip: '', tries: [], keep: '', nb: '', speed: null, dns: null, cause: null, yt: null, ttl: null};
   const paint = done => setHTML('dc-res', dcRender(q, st, done), false);
   paint(false);
   const r = await ctlx(['domain-check', q], 90000, line => {
@@ -579,8 +579,16 @@ async function runDomainCheck(){
     else if(p[0] === 'R'){ const [ok, v] = (p[2] || '').split(' '); st.tries.push({ok: ok === 'ok', v}); }
     else if(p[0] === 'K') st.keep = p[1];
     else if(p[0] === 'N') st.nb = p[1] || '';
+    // чем мешают: B причина «tcp=… sni=… other=… none=… case=… http=…»
+    else if(p[0] === 'B'){
+      if(p[1] && p[1] !== 'skip') st.cause = {kind: p[1], probes: Object.fromEntries((p[2] || '').split(' ').filter(Boolean).map(x => x.split('=')))};
+    }
     else if(p[0] === 'S'){ const [b, s] = (p[1] || '').split(' '); st.speed = b === 'skip' ? null : {bytes: +b || 0, bps: +s || 0}; }
     else if(p[0] === 'D') st.dns = {route: p[1] || '', pmode: p[2] || ''};
+    // видеосервер YouTube этой сети: Y имя «ok мс|fail причина»
+    else if(p[0] === 'Y'){ const [ok, v] = (p[2] || '').split(' '); st.yt = {host: p[1] || '', ok: ok === 'ok', v}; }
+    // место фильтра: T узлов-до-сервера узел-фильтра|- пояснение
+    else if(p[0] === 'T') st.ttl = {hops: +p[1] || 0, filter: p[2] === '-' ? 0 : +p[2] || 0, note: p[3] || ''};
     else return;
     paint(false);
   });
@@ -607,10 +615,15 @@ function dcDiagnosis(st){
   if(!ok){
     if(st.tries.every(x => x.v === 'dns_fail')) return ['danger', 'error', t('Адрес сайта не находится — дело в DNS, а не в обходе')];
     if(nbOk) return ['danger', 'error', t('Обход мешает этому сайту: без обхода он открывается. Добавьте домен в exclude.list')];
+    const c = st.cause && st.cause.kind;
+    if(c === 'addr') return ['danger', 'error', t('Закрыт сам адрес сайта: соединение не устанавливается ни с каким именем. Обход по имени (nfqws2) тут не поможет — нужен другой адрес (DNS с обходом) или VPN')];
+    if(c === 'tls') return ['danger', 'error', t('С этим адресом рвут любое шифрованное соединение, с любым именем — похоже на блокировку адреса. Обход по имени может не помочь')];
+    if(c === 'name' || c === 'name-case') return ['danger', 'error', t('Режут по имени сайта: с чужим именем тот же сервер отвечает. Это то, что обходит nfqws2 — текущий вариант не справился, умный режим переберёт другие; со стратегией — попробуйте другую')];
     if(nbFail) return ['danger', 'error', t('Не открывается ни через обход, ни без него: текущий вариант эту блокировку не обходит, или сайт недоступен. Умный режим переберёт варианты сам; со стратегией — попробуйте другую')];
     return ['danger', 'error', t('Через обход не открывается')];
   }
   if(st.keep === 'stall') return ['danger', 'error', t('Соединение замораживается после первого обмена: первый запрос проходит, следующие — нет')];
+  if(st.yt && !st.yt.ok) return ['danger', 'error', t('Сайт YouTube открывается, а его видеосервер в вашей сети ({0}) — нет: видео не пойдёт. Умный режим подберёт вариант для googlevideo.com', st.yt.host)];
   if(st.speed && st.speed.bytes >= DC_SPEED_MIN && st.speed.bps < DC_SLOW)
     return ['warn', 'warn', t('Сайт открывается, но очень медленно ({0} КБ/с) — похоже на замедление. Умный режим считает такие соединения ошибкой варианта и подберёт другой', Math.round(st.speed.bps / 1024))];
   if(nbOk && ok === n) return ['', 'info', t('Сайт не заблокирован: открывается и без обхода')];
@@ -651,6 +664,18 @@ function dcRender(q, st, done){
   else if(st.keep === 'stall') rows.push(dcRow('refresh', t('Повторный запрос'),
     t('Зависает: первый запрос отвечает, следующий по тому же соединению — нет. Соединение замораживается после первого обмена — приложения покажут ошибку со второго запроса'), 'bad'));
   else if(n === 3 && ok.length && !done) rows.push(dcRow('refresh', t('Повторный запрос'), t('Проверяю…')));
+  if(st.cause){
+    const pr = st.cause.probes, yes = k => pr[k] === 'ok';
+    const lines = [
+      t('Соединение с адресом: {0}', yes('tcp') ? t('есть') : t('нет ({0})', pr.tcp)),
+      t('С именем сайта: {0}', yes('sni') ? t('проходит') : t('обрывается ({0})', pr.sni)),
+      t('С чужим именем или без имени: {0}', yes('other') || yes('none') ? t('проходит') : t('обрывается')),
+    ];
+    if(st.cause.kind === 'name-case') lines.push(t('Имя другими буквами проходит: фильтр ищет имя буква в букву'));
+    if(pr.http === '451') lines.push(t('HTTP: оператор отдаёт код 451 — страницу блокировки'));
+    const what = {addr: t('закрыт адрес'), tls: t('рвут TLS к адресу'), name: t('режут по имени'), 'name-case': t('режут по имени'), none: t('не по имени и не по адресу')}[st.cause.kind] || st.cause.kind;
+    rows.push(dcRow('shield', t('Чем мешают: {0}', what), lines.join('\n'), st.cause.kind === 'none' ? '' : 'bad'));
+  }
   if(st.nb.startsWith('ok')) rows.push(dcRow('shield', t('Без обхода'), t('Открывается и без обхода')));
   else if(st.nb.startsWith('fail')) rows.push(dcRow('shield', t('Без обхода'), t('Не открывается: {0}', t(PROBE_REASON[st.nb.split(' ')[1]] || PROBE_REASON.other))));
   if(st.speed){
@@ -660,6 +685,11 @@ function dcRender(q, st, done){
     else
       rows.push(dcRow('download', t('Скорость через обход'), t('Ответ слишком маленький для замера ({0} КБ). Чтобы измерить, укажите адрес файла: домен/путь', Math.round(st.speed.bytes / 1024))));
   }
+  if(st.yt) rows.push(dcRow('play', t('Видеосервер YouTube'), st.yt.host + '\n' + (st.yt.ok ? t('Открывается, ~{0} мс', st.yt.v) : t('Не открывается: {0}', t(PROBE_REASON[st.yt.v] || PROBE_REASON.other))), st.yt.ok ? 'ok' : 'bad'));
+  if(st.ttl && st.ttl.hops)
+    rows.push(dcRow('globe', t('Где стоит фильтр'), st.ttl.filter
+      ? t('На {0}-м узле от телефона, сервер YouTube — на {1}-м. Фейки умного режима со сроком жизни берут это число', st.ttl.filter, st.ttl.hops)
+      : t('Сервер YouTube — на {0}-м узле, место фильтра не найдено: {1}', st.ttl.hops, st.ttl.note)));
   if(st.dns){
     const r = st.dns.route;
     rows.push(dcRow('dns', t('DNS модуля'), r.startsWith('rule ') ? t('через профиль: {0}', r.slice(5)) : t(DC_DNS_ROUTE[r] || DC_DNS_ROUTE.default)));

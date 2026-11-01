@@ -41,6 +41,15 @@ SMART_POOL_FILE="$STATE_DIR/smart_pool"        # ext — умный режим �
 SMART_BENCH_FILE="$STATE_DIR/smart_bench"      # идёт отладочный замер: число его исполнителей
 BENCH_DIR="$STATE_DIR/bench"                   # рабочий каталог замера
 SMART_TURBO_EVERY=15
+# «Спячка»: через сеть IDLE_AFTER секунд почти ничего не идёт (в среднем
+# меньше IDLE_KBPS КБ/с — так выглядят уведомления и пульс мессенджеров, а не
+# работа с телефоном). Тогда фоновые проверки реже (watchdog — раз в минуту,
+# DNS и правила — раз в 5 минут), а обучение умного режима, проверки DNS
+# обхода геоблока и белых списков ждут пробуждения. Следит watchdog по
+# счётчикам /proc/net/dev, отметка — файл (пишется только при смене)
+IDLE_FILE="$STATE_DIR/idle"
+IDLE_AFTER=600
+IDLE_KBPS=5
 SK_PIDFILE="$STATE_DIR/smartkill.pid"          # обрыв застрявших соединений умного режима
 PF_PIDFILE="$STATE_DIR/pushfix.pid"            # «Вылечить уведомления»: будильник пульса Google
 HELPER_BIN="$MODDIR/bin/nfqws2-helper"         # будильник и проверка DNS (helper/, Go)
@@ -72,6 +81,15 @@ CNT_OUT_MASK=0x0f000000
 CNT_OUT_STEP=16777216
 CNT_IN_MASK=0x000f0000   # bits 16-19, apart from out counter (24-27) and MARK_* (28-30)
 CNT_IN_STEP=65536        # 1<<16
+# Соединение, где сервер в SYN-ACK задал крошечный сегмент (MSS до 500 —
+# так делают прокси DNS обхода геоблока против DPI, magicdns — 76 байт):
+# ClientHello приходит десятками пакетов, больше, чем пропускает
+# ограничитель (15), nfqws2 копит их для сборки и не дожидается остальных —
+# придержанные пакеты не уходят, и сайт отвечает тайм-аутом (Gemini). Пакеты
+# с данными такого соединения идут в очередь мимо счётчика, чистые ACK — как
+# обычно. Бит 23 — свободный между счётчиками (16-19, 24-27)
+MARK_SMALLMSS="0x00800000/0x00800000"
+SMALLMSS_MAX=500
 
 # dirs usually exist; builtin test avoids forking mkdir (sourced on every nfqws2-ctl call)
 if [ ! -d "$LISTS_DIR" ] || [ ! -d "$STATE_DIR" ] || [ ! -d "$LOG_DIR" ] || [ ! -d "$USER_STRATEGIES_DIR" ]; then
@@ -500,7 +518,7 @@ _startup_args() {
   [ -n "$ipset" ] && args="$args $tcp $ipset --ipset-ip=0.0.0.0 --new"
   args="$args $tcp $extra"
 
-  printf '%s' "$args" | tr -s ' ' | stat_inject
+  printf '%s' "$args" | tr -s ' ' | stat_inject | ttl_inject
 }
 
 # Режим «Стратегии»: статистика соединений (lua smartstat). Первым экземпляром
@@ -763,6 +781,16 @@ has_multiport() {
   return 0
 }
 
+# Совпадения tcpmss и length — для соединений с крошечным сегментом (MARK_SMALLMSS)
+has_smallmss() {
+  local C="$1"
+  [ "$(_ipt_cap_cache_get "$C" smallmss)" = 1 ] && return 0
+  has_ipt_feature "$C" -p tcp --tcp-flags SYN,ACK SYN,ACK -m tcpmss --mss 1:$SMALLMSS_MAX -j RETURN || return 1
+  has_ipt_feature "$C" -p tcp -m length --length 101:600 -j RETURN || return 1
+  _ipt_cap_cache_put "$C" smallmss 1
+  return 0
+}
+
 _fw_counter_chain() {
   local CMD="$1" CH="$2" MASK="$3" STEP="$4" LIM="$5" k
   case "$LIM" in ''|*[!0-9]*) LIM=15 ;; esac
@@ -885,6 +913,12 @@ _fw_iface_rules() {
   $CMD -w -t mangle -A $IPT_GROUP_POST $OUT -m mark --mark $MARK_PROCESSED -j RETURN
   $CMD -w -t mangle -A $IPT_GROUP_PRE $IN -m mark --mark $MARK_PROCESSED -j RETURN
 
+  # крошечный сегмент от сервера (см. MARK_SMALLMSS): данные — в очередь без
+  # счёта; длина пакета больше заголовков (ACK — до 100 байт)
+  if [ "$HAS_SMALLMSS" = 1 ] && [ -n "$TP" ]; then
+    _fw_add_rule "$CMD" $IPT_GROUP_POST "$OUT" tcp dports "$TP" "-m connmark --mark $MARK_SMALLMSS -m length --length 101:$((SMALLMSS_MAX + 100))" "$JNFQ"
+  fi
+
   # outgoing (POSTROUTING)
   [ -n "$UP" ] && _fw_add_rule "$CMD" $IPT_GROUP_POST "$OUT" udp dports "$UP" "" "$TARGET_OUT"
   [ -n "$TP" ] && _fw_add_rule "$CMD" $IPT_GROUP_POST "$OUT" tcp dports "$TP" "" "$TARGET_OUT"
@@ -902,6 +936,8 @@ _fw_iface_rules() {
 
   # incoming (PREROUTING)
   if [ -n "$TP" ]; then
+    [ "$HAS_SMALLMSS" = 1 ] && _fw_add_rule "$CMD" $IPT_GROUP_PRE "$IN" tcp sports "$TP" \
+      "--tcp-flags syn,ack syn,ack -m tcpmss --mss 1:$SMALLMSS_MAX" "-j CONNMARK --set-xmark $MARK_SMALLMSS"
     _fw_add_rule "$CMD" $IPT_GROUP_PRE "$IN" tcp sports "$TP" "--tcp-flags syn,ack syn,ack" "$JNFQ"
     _fw_add_rule "$CMD" $IPT_GROUP_PRE "$IN" tcp sports "$TP" "--tcp-flags fin fin" "$JNFQ"
     _fw_add_rule "$CMD" $IPT_GROUP_PRE "$IN" tcp sports "$TP" "--tcp-flags rst rst" "$JNFQ"
@@ -935,6 +971,8 @@ _firewall_start() {
 
   HAS_MULTIPORT=0
   has_multiport "$CMD" && HAS_MULTIPORT=1
+  HAS_SMALLMSS=0
+  has_smallmss "$CMD" && HAS_SMALLMSS=1
 
   $CMD -w -t mangle -N $IPT_GROUP_POST 2>/dev/null
   $CMD -w -t mangle -F $IPT_GROUP_POST
@@ -1712,3 +1750,113 @@ smart_home_ssid() {
 . "$MODDIR/lib/dns.sh"
 # Редактор hosts без перезагрузки (логика bindhosts)
 . "$MODDIR/lib/hosts.sh"
+
+dev_idle() { [ -f "$IDLE_FILE" ]; }
+
+# Привычки владельца: когда телефон обычно засыпает надолго и просыпается
+# (как это для своих задач копит Android). Пишет watchdog после сна дольше
+# USAGE_LONG секунд: «sleep минута-суток» и «wake минута-суток», последние
+# USAGE_KEEP каждого вида. По ним:
+#   - ночное обучение: телефон спит, на зарядке, сейчас обычное время сна —
+#     умный режим учится, как днём (без зарядки — нет: 6–8 часов сна съели бы
+#     батарею), чтобы утром всё уже работало;
+#   - подготовка к пробуждению: за полчаса до обычного пробуждения — частая
+#     проверка DNS обхода геоблока, чтобы утром маршруты были свежими.
+# Без данных (меньше USAGE_MIN снов) ночь — 01:00–06:00, подготовки нет
+USAGE_FILE="$STATE_DIR/usage"
+USAGE_LONG=10800
+USAGE_KEEP=14
+USAGE_MIN=3
+NIGHT_FILE="$STATE_DIR/night_learn"   # есть — идёт ночное обучение
+PREP_FILE="$STATE_DIR/wake_prep"      # день последней подготовки (ГГГГММДД)
+# минута суток сейчас (08 и 09 — не восьмеричные)
+mod_now() { local h m; h=$(date +%H); m=$(date +%M); echo $(( ${h#0} * 60 + ${m#0} )); }
+usage_add() { # <sleep|wake> <минута суток>
+  mkdir -p "$STATE_DIR"
+  { cat "$USAGE_FILE" 2>/dev/null; echo "$1 $2"; } | awk -v k="$USAGE_KEEP" '
+    { n[$1]++; l[$1, n[$1]] = $2 } END { for (t in n) for (i = (n[t] > k ? n[t] - k + 1 : 1); i <= n[t]; i++) print t, l[t, i] }' > "$USAGE_FILE.tmp" &&
+    mv -f "$USAGE_FILE.tmp" "$USAGE_FILE"
+}
+# Обычное время: медиана, отсчитанная от полудня (сон около полуночи не
+# рвётся на 23:50 и 00:10). -> минута суток | пусто, если данных мало
+usage_pred() { # <sleep|wake>
+  awk -v k="$1" -v min="$USAGE_MIN" '$1 == k { v[++n] = ($2 + 720) % 1440 }
+    END { if (n < min) exit
+      for (i = 1; i <= n; i++) for (j = i + 1; j <= n; j++) if (v[j] < v[i]) { t = v[i]; v[i] = v[j]; v[j] = t }
+      m = (n % 2) ? v[(n + 1) / 2] : int((v[n / 2] + v[n / 2 + 1]) / 2)
+      print (m + 720) % 1440 }' "$USAGE_FILE" 2>/dev/null
+}
+# на зарядке (или полностью заряжен у зарядки)
+on_charger() {
+  local f
+  for f in /sys/class/power_supply/battery/status /sys/class/power_supply/*/status; do
+    [ -r "$f" ] || continue
+    case "$(cat "$f" 2>/dev/null)" in Charging|Full) return 0 ;; esac
+  done
+  return 1
+}
+# экран включён — человек взял телефон (во время ночного обучения трафик —
+# сам модуль, и пробуждение видно только так)
+screen_on() { dumpsys power 2>/dev/null | grep -q 'mWakefulness=Awake'; }
+# сейчас обычное время сна: от засыпания до получаса перед пробуждением
+night_now() {
+  local s w n
+  s=$(usage_pred sleep); w=$(usage_pred wake)
+  if [ -z "$s" ] || [ -z "$w" ]; then s=60; w=360; fi
+  w=$(( (w - 30 + 1440) % 1440 )); n=$(mod_now)
+  # отсчёт от полудня, как в usage_pred
+  s=$(( (s + 720) % 1440 )); w=$(( (w + 720) % 1440 )); n=$(( (n + 720) % 1440 ))
+  [ "$n" -ge "$s" ] && [ "$n" -lt "$w" ]
+}
+night_learn_ok() { dev_idle && on_charger && night_now; }
+# пора подготовки к пробуждению: за 30–20 минут до обычного, раз в сутки
+wake_prep_due() {
+  local w n d
+  w=$(usage_pred wake); [ -n "$w" ] || return 1
+  d=$(date +%Y%m%d); [ "$(cat "$PREP_FILE" 2>/dev/null)" = "$d" ] && return 1
+  n=$(mod_now)
+  n=$(( (w - n + 1440) % 1440 ))
+  [ "$n" -le 30 ] && [ "$n" -gt 20 ]
+}
+
+# Расстояние до фильтра (nfqws2-helper -ttltrace, замер — nfqws2-ctl
+# dpi-distance): «сеть узлов-до-сервера узел-фильтра время». Вариант умного
+# режима с фейком ip_ttl=2 берёт срок жизни по месту фильтра этой сети: такой
+# фейк фильтр видит, а сервер — нет (2 — наугад: у одних фильтр ближе, у
+# других дальше). Замер — раз в неделю для каждой сети
+DPI_TTL_FILE="$STATE_DIR/dpi_ttl"
+DPI_TTL_EVERY=604800
+DPI_TTL_VARIANT="hostfakesplit:host=www.google.com:midhost=midsld-2:repeats=4:ip_ttl=2:ip6_ttl=2"
+dpi_ttl() { # -> срок жизни фейка для текущей сети | пусто
+  local net n h f t
+  [ -s "$DPI_TTL_FILE" ] || return 0
+  net=$(cat "$SMART_NET_FILE" 2>/dev/null)
+  read -r n h f t < "$DPI_TTL_FILE"
+  if [ -z "$net" ] || [ "$n" != "$net" ]; then return 0; fi
+  case "$h$f" in *[!0-9]*|'') return 0 ;; esac
+  # фейк должен дойти до фильтра и не дойти до сервера
+  [ "$f" -ge 1 ] && [ "$h" -gt $((f + 1)) ] && echo "$f"
+}
+dpi_ttl_due() {
+  local net n t try
+  net=$(cat "$SMART_NET_FILE" 2>/dev/null)
+  case "$net" in ''|offline) return 1 ;; esac
+  [ -x "$HELPER_BIN" ] || return 1
+  # попытка не чаще раза в час (сеть могла не отвечать)
+  try=$(cat "$DPI_TTL_FILE.try" 2>/dev/null)
+  [ -n "$try" ] && [ $(( $(date +%s) - try )) -lt 3600 ] && return 1
+  [ -s "$DPI_TTL_FILE" ] || return 0
+  read -r n _ _ t < "$DPI_TTL_FILE"
+  [ "$n" != "$net" ] || [ $(( $(date +%s) - ${t:-0} )) -ge "$DPI_TTL_EVERY" ]
+}
+ttl_inject() {
+  local t; t=$(dpi_ttl)
+  [ -n "$t" ] || { cat; return; }
+  sed "s/$DPI_TTL_VARIANT/$(printf '%s' "$DPI_TTL_VARIANT" | sed "s/ip_ttl=2:ip6_ttl=2/ip_ttl=$t:ip6_ttl=$t/")/"
+}
+# Принято и отдано всеми интерфейсами, кроме lo и служебных, — в КБ (в КБ —
+# потому что арифметика mksh 32-битная, а счётчики байт её переполняют)
+net_kbytes() {
+  awk 'NR > 2 { sub(/^ */, ""); i = index($0, ":"); n = substr($0, 1, i - 1); if (n == "lo" || n ~ /^(dummy|ifb)/) next
+    split(substr($0, i + 1), f, " "); s += f[1] + f[9] } END { printf "%d\n", s / 1024 }' /proc/net/dev 2>/dev/null
+}
