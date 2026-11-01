@@ -530,6 +530,76 @@ assert_eq "" "$(pgrep -f "tail -n 0 -f $MOCK_DIR/ipmon" 2>/dev/null)" "a stopped
 assert_no_file "$STATE_DIR/netwatch.fifo" "and removes its FIFO"
 rm -f "$MOCKBIN/ip" "$WN_PIDFILE" "$WD_PIDFILE"
 
+# ── network scenarios: loss and return of the connection ────────────────────
+# Живой netwatch на подменённом ip: маршрут наружу — из файла (пусто — сети
+# нет). Перепроверки после события сокращены (NW_RECHECK), иначе — 3, 10, 30 с
+section "network scenarios: the connection drops and comes back"
+: > "$MOCK_DIR/ipmon"; echo rmnet_data1 > "$MOCK_DIR/route"
+cat > "$MOCKBIN/ip" <<EOF
+#!/bin/sh
+case "\$1 \$2" in
+  "monitor "*) exec tail -n 0 -f "$MOCK_DIR/ipmon" ;;
+  "route get") d=\$(cat "$MOCK_DIR/route" 2>/dev/null); [ -n "\$d" ] || { echo "RTNETLINK answers: Network is unreachable" >&2; exit 2; }
+    echo "1.1.1.1 via 10.0.0.1 dev \$d src 10.0.0.2 uid 0" ;;
+esac
+exit 0
+EOF
+chmod 0755 "$MOCKBIN/ip"
+MOCK_OPERATOR=25001; MOCK_OPERATOR_NAME=MTS; NW_RECHECK="1 2 4"; export MOCK_OPERATOR MOCK_OPERATOR_NAME NW_RECHECK
+rm -f "$STATE_DIR/smart_net" "$STATE_DIR/smart_net_last" "$CONFDIR/smart/nets.tsv"
+svc stop >/dev/null 2>&1; svc start >/dev/null 2>&1
+wait_for_file "$WN_PIDFILE" 8
+net_is() { # <ожидаемая сеть> <секунд>
+  local i=0; while [ "$i" -lt $(( $2 * 4 )) ]; do [ "$(cat "$STATE_DIR/smart_net" 2>/dev/null)" = "$1" ] && return 0; sleep 0.25; i=$((i + 1)); done; return 1
+}
+ev() { echo "2: rmnet_data1: <UP> state $1" >> "$MOCK_DIR/ipmon"; }
+net_is mobile-25001 6
+assert_rc 0 $? "online at start: the mobile network is known"
+# 1. Связь пропала (мобильная выключена, Wi‑Fi нет)
+: > "$MOCK_DIR/route"; ev DOWN
+net_is offline 6
+assert_rc 0 $? "the connection drops: no network"
+assert_eq "mobile-25001" "$(cat "$STATE_DIR/smart_net_last")" "the last real network is remembered"
+assert_not_contains "$(cat "$CONFDIR/smart/nets.tsv" 2>/dev/null)" "offline" "«no connection» is never a network of its own"
+# 2. Связь вернулась, но событие пришло раньше маршрута, и второго нет
+: > "$IDLE_FILE"
+ev UP; sleep 2; echo rmnet_data1 > "$MOCK_DIR/route"
+net_is mobile-25001 8
+assert_rc 0 $? "the route shows up after the only event: the recheck sees the network back"
+assert_contains "$(cat "$SERVICE_LOG")" "netwatch: связь вернулась (перепроверка)" "and says so"
+assert_no_file "$IDLE_FILE" "a returned connection wakes the module from its sleep at once"
+# 3. Мигание: пропала — вернулась — пропала — вернулась, быстрее перепроверок
+for st in DOWN UP DOWN UP; do
+  if [ "$st" = DOWN ]; then : > "$MOCK_DIR/route"; else echo rmnet_data1 > "$MOCK_DIR/route"; fi
+  ev "$st"; sleep 0.3
+done
+net_is mobile-25001 8
+assert_rc 0 $? "a flapping connection ends on the network it ended on"
+# 4. Мобильная → Wi‑Fi → нет связи → Wi‑Fi
+NFQWS_SYSNET="$SANDBOX/sysnet2"; export NFQWS_SYSNET
+mkdir -p "$NFQWS_SYSNET/wlan0"; echo up > "$NFQWS_SYSNET/wlan0/operstate"
+echo wlan0 > "$MOCK_DIR/route"; ev UP
+net_is wifi 8
+assert_rc 0 $? "switching to Wi‑Fi switches the network"
+: > "$MOCK_DIR/route"; echo down > "$NFQWS_SYSNET/wlan0/operstate"; ev DOWN
+net_is offline 6
+assert_rc 0 $? "Wi‑Fi gone with no mobile: no network"
+echo up > "$NFQWS_SYSNET/wlan0/operstate"; ev UP; sleep 0.5; echo wlan0 > "$MOCK_DIR/route"
+net_is wifi 8
+assert_rc 0 $? "Wi‑Fi back after its event: the recheck finds it"
+assert_eq "wifi" "$(cat "$STATE_DIR/smart_net_last")" "and it becomes the last real network"
+# 5. Экран умного режима без связи — последняя сеть, а не пустой профиль
+: > "$MOCK_DIR/route"; ev DOWN; net_is offline 6
+ctl_out=$(sh "$MODDIR/bin/nfqws2-ctl" smart-status 2>&1)
+assert_contains "$ctl_out" '"offline":1' "the screen knows there is no connection"
+assert_contains "$ctl_out" '"view":"wifi"' "and shows the last real network, not an empty «no connection» profile"
+assert_contains "$ctl_out" '"id":"wifi","label":"Wi‑Fi","home":0' "that network is listed"
+assert_match "$ctl_out" '"id":"wifi"[^}]*"current":1' "as the current one"
+unset NFQWS_SYSNET NW_RECHECK
+kill "$(cat "$WN_PIDFILE" 2>/dev/null)" "$(cat "$WD_PIDFILE" 2>/dev/null)" 2>/dev/null
+svc stop >/dev/null 2>&1
+rm -f "$MOCKBIN/ip" "$WN_PIDFILE" "$WD_PIDFILE" "$MOCK_DIR/route"
+
 # ── pause while a VPN is on ──────────────────────────────────────────────────
 section "VPN pause"
 NFQWS_SYSNET="$SANDBOX/sysnet"; export NFQWS_SYSNET

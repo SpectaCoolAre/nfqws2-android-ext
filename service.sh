@@ -468,6 +468,41 @@ net_signature() {
   printf '%s|%s|%s' "$dev" "$(vpn_active && echo vpn)" "$(on_wifi && echo wifi)"
 }
 
+# Разбор смены сети: DNS, сеть умного режима, правила, пауза. Зовётся из
+# netwatch — по событию и по перепроверке (см. там)
+netwatch_apply() { # <причина для журнала>
+  local sig
+  # DNS — первым: пока он перезапускается, правила перехвата на месте, и
+  # запросы не уходят к DNS оператора. Сеть или VPN сменились — dnsproxy
+  # перезапускается целиком (или останавливается на время VPN), иначе —
+  # только сверка конфига (DNS сети)
+  sig=$(net_signature)
+  if dns_enabled; then
+    if [ "$sig" != "$netsig" ]; then dns_start "смена сети" force
+    else dns_start "смена сети"; fi
+  fi
+  # связь вернулась (маршрута наружу не было — появился): телефон точно не
+  # спит — «спячка» снимается сразу, не дожидаясь трафика
+  case "$netsig" in '|'*) case "$sig" in '|'*) ;; *)
+    rm -f "$IDLE_FILE"
+    log_msg "netwatch: связь вернулась ($1)" ;; esac ;; esac
+  netsig="$sig"
+  # умный режим переключается на выученное для новой сети сам, без перезапуска
+  smart_net_update
+  # Без ISP_INTERFACE и точки доступа правила от интерфейса не зависят:
+  # пересобирать их нужно, только если система их сбросила (раньше —
+  # при каждой смене сети, десятки раз в день)
+  if [ -f "$DESIRED_FILE" ] && is_running; then
+    if [ -n "$ISP_INTERFACE" ] || [ "$ENABLE_HOTSPOT" = "1" ] || ! firewall_ok; then
+      log_msg "netwatch: сеть изменилась ($1) — пересобираю правила"
+      firewall_start
+    else
+      log_msg "netwatch: сеть изменилась ($1) — правила на месте"
+    fi
+  fi
+  home_check
+}
+
 netwatch() {
   echo $$ > "$WN_PIDFILE"
   protect_process
@@ -480,16 +515,16 @@ netwatch() {
   # конфиг, выйти, если наблюдатели больше не нужны, поднять упавший ip
   # monitor. Раньше файл событий проверялся каждую секунду — два запуска
   # внешних программ в секунду, 170 тысяч в сутки, и процессор не засыпал.
-  local wake=0 mon="" reader="" sp="" netsig sig recheck=0 backoff=2 started up me=$$
+  local wake=0 mon="" reader="" sp="" netsig rq="" base=0 d backoff=2 started up me=$$
   local fifo="$STATE_DIR/netwatch.fifo"
   netsig=$(net_signature)
   trap 'wake=1' USR1
   # ip monitor и читатель — свои PID (через FIFO, не конвейер в подоболочке):
   # убитый извне netwatch забирает их с собой, сирот не остаётся
   trap 'kill -TERM "$mon" "$reader" "$sp" 2>/dev/null; rm -f "$WN_PIDFILE" "$fifo" "$STATE_DIR/conf_seen.$$"; exit 0' TERM INT HUP
-  # Первая перепроверка — через 30 с после старта: при загрузке сеть ещё
-  # устанавливается, и её смена до запуска ip monitor не дала бы события
-  read -r up _ < /proc/uptime; recheck=$(( ${up%.*} + 30 ))
+  # Перепроверки и после старта: при загрузке сеть ещё устанавливается, и её
+  # смена до запуска ip monitor не дала бы события
+  read -r up _ < /proc/uptime; base=${up%.*}; rq="${NW_RECHECK:-3 10 30}"
   while :; do
     if [ -z "$mon" ] || ! kill -0 "$mon" 2>/dev/null; then
       # ip monitor упал или не поддерживается: не перезапускать в цикле
@@ -510,7 +545,13 @@ netwatch() {
     if [ "$wake" = 0 ]; then
       # Сон до события или до минуты. Сигнал, пришедший между проверкой и
       # wait, ловится сразу после запуска sleep — trap выполняется между командами
-      sleep 60 & sp=$!
+      # до перепроверки — короче
+      d=60
+      if [ -n "$rq" ]; then
+        read -r up _ < /proc/uptime; set -- $rq
+        d=$(( base + $1 - ${up%.*} )); [ "$d" -lt 1 ] && d=1
+      fi
+      sleep "$d" & sp=$!
       [ "$wake" = 1 ] || wait "$sp"
       kill "$sp" 2>/dev/null; sp=""
     fi
@@ -519,39 +560,26 @@ netwatch() {
     if [ "$wake" = 1 ]; then
       # пачка событий одной смены сети: ждём секунду тишины
       while [ "$wake" = 1 ]; do wake=0; sleep 1; done
-      # DNS — первым: пока он перезапускается, правила перехвата на месте, и
-      # запросы не уходят к DNS оператора. Сеть или VPN сменились — dnsproxy
-      # перезапускается целиком (или останавливается на время VPN), иначе —
-      # только сверка конфига (DNS сети)
-      sig=$(net_signature)
-      if dns_enabled; then
-        if [ "$sig" != "$netsig" ]; then dns_start "смена сети" force
-        else dns_start "смена сети"; fi
-      fi
-      netsig="$sig"
-      # умный режим переключается на выученное для новой сети сам, без перезапуска
-      smart_net_update
-      # Без ISP_INTERFACE и точки доступа правила от интерфейса не зависят:
-      # пересобирать их нужно, только если система их сбросила (раньше —
-      # при каждой смене сети, десятки раз в день)
-      if [ -f "$DESIRED_FILE" ] && is_running; then
-        if [ -n "$ISP_INTERFACE" ] || [ "$ENABLE_HOTSPOT" = "1" ] || ! firewall_ok; then
-          log_msg "netwatch: сеть изменилась (ip monitor) — пересобираю правила"
-          firewall_start
-        else
-          log_msg "netwatch: сеть изменилась (ip monitor) — правила на месте"
-        fi
-      fi
-      home_check
-      read -r up _ < /proc/uptime; recheck=$(( ${up%.*} + 30 ))
+      netwatch_apply "ip monitor"
+      # Перепроверки через 3, 10 и 30 с: событие приходит, когда сеть ещё
+      # поднимается (маршрута наружу нет, Wi‑Fi в переходном состоянии), а
+      # следующего может не быть — связь вернулась, а модуль считал бы, что её
+      # нет (DNS без перезапуска, умный режим на «нет связи»)
+      read -r up _ < /proc/uptime; base=${up%.*}; rq="${NW_RECHECK:-3 10 30}"
       continue
     fi
-    # Контрольная перепроверка через 30 с после смены сети: в момент события
-    # Wi‑Fi бывает ещё в переходном состоянии, и решение о паузе могло
-    # остаться неверным. Сон до минуты её не задерживает дольше 60 с
-    if [ "$recheck" -gt 0 ]; then
+    if [ -n "$rq" ]; then
       read -r up _ < /proc/uptime
-      if [ "${up%.*}" -ge "$recheck" ]; then recheck=0; home_check; fi
+      set -- $rq
+      if [ $(( ${up%.*} - base )) -ge "$1" ]; then
+        shift; rq="$*"
+        if [ "$(net_signature)" != "$netsig" ]; then netwatch_apply "перепроверка"
+        else
+          # сеть та же — сверить сеть умного режима; в последний раз — и паузу
+          smart_net_update
+          [ -z "$rq" ] && home_check
+        fi
+      fi
     fi
   done
   kill -TERM "$mon" "$reader" 2>/dev/null
@@ -588,7 +616,9 @@ watchdog() {
       # заснул тогда, когда кончился трафик
       slept=$act; sm=$(( ($(mod_now) - (up - act) / 60 + 1440) % 1440 ))
       log_msg "спячка: $((IDLE_AFTER / 60)) мин почти без трафика — фоновые проверки реже, обучение и проверки DNS — по пробуждении"
-    elif [ "$per" = 60 ] && [ "$act" = "$up" ]; then
+    elif [ "$per" = 60 ] && { [ "$act" = "$up" ] || [ ! -f "$IDLE_FILE" ]; }; then
+      # проснулся: трафик или netwatch снял спячку (вернулась связь)
+      act=$up
       per=20; rm -f "$IDLE_FILE" "$NIGHT_FILE"; tick=0
       # долгий сон — в привычки: когда засыпает и просыпается
       if [ $((up - slept)) -ge "$USAGE_LONG" ]; then usage_add sleep "$sm"; usage_add wake "$(mod_now)"; fi

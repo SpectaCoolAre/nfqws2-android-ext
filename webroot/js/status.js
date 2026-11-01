@@ -103,7 +103,7 @@ async function smartRowProgress(){
   strategyRowSmart = t('Обучен на {0}%', smartProgress(m).p);
   $('strategy-current').textContent = strategyRowSmart;
 }
-function strategyRowClick(){ navigate('config'); }
+function strategyRowClick(){ openTop('config'); }
 
 /* Живые данные модуля — плитки под режимом, раз в 5 секунд, пока экран открыт:
    DNS, сеть, удачные соединения режима, списки, память и пакеты nfqws2 */
@@ -127,7 +127,7 @@ function renderLive(){
     const on = j.dns_enabled == 1, paused = on && (j.dns_paused === 'vpn' || j.dns_paused === 'home');
     // режим работы DNS — как режим обхода: умный или по профилям
     const smart = j.dns_geo != 0 || j.dns_smart == 1;
-    tiles.push({icon: 'dns', title: smart ? t('DNS · умный режим') : t('DNS · профили'), value: !on ? t('Выключен') : paused ? t('Пауза') : t('Включён'),
+    tiles.push({icon: 'dns', title: smart ? 'DNS · smart' : t('DNS · профили'), value: !on ? t('Выключен') : paused ? t('Пауза') : t('Включён'),
       sub: on && !paused && L.dns_hits >= 0 ? t('перехвачено запросов: {0}', fmtShort(L.dns_hits)) : paused ? (j.dns_paused === 'vpn' ? t('пока включён VPN') : t('в домашнем Wi‑Fi')) : t('свои DNS для доменов'),
       on: "openFrom('dns')"});
   }
@@ -137,12 +137,16 @@ function renderLive(){
     sub: net === 'home' ? t('{0} · домашняя', L.net_label) : L.net_label || (net === 'offline' ? t('обход ждёт сеть') : ''), on: ''});
   const c = L.conn || {}, p = pct(+c.ok || 0, +c.err || 0);
   tiles.push({icon: 'check', title: 'Соединения', value: p == null ? '—' : p + '%',
-    sub: p == null ? t('статистика появится по ходу работы') : t('удачных {0} · ошибок {1}', fmtShort(c.ok), fmtShort(c.err)), on: "navigate('config')"});
+    sub: p == null ? t('статистика появится по ходу работы') : t('удачных {0} · ошибок {1}', fmtShort(c.ok), fmtShort(c.err)), on: "openTop('config')"});
   const cnt = j.counts || {};
   tiles.push({icon: 'list', title: 'Списки', value: j.mode || '—',
-    sub: t('user: {0} · auto: {1}', cnt.user != null ? cnt.user : '—', cnt.auto != null ? cnt.auto : '—'), on: "navigate('lists')"});
-  tiles.push({icon: 'medical', title: 'Память', value: j.running && L.rss ? (L.rss / 1024).toFixed(1).replace('.', LANG === 'en' ? '.' : ',') + ' ' + t('МБ') : '—',
-    sub: j.running && L.hwm ? t('пик {0} МБ', (L.hwm / 1024).toFixed(1).replace('.', LANG === 'en' ? '.' : ',')) : t('служба не работает'), on: ''});
+    sub: t('user: {0} · auto: {1}', cnt.user != null ? cnt.user : '—', cnt.auto != null ? cnt.auto : '—'), on: "openTop('lists')"});
+  // память модуля целиком: nfqws2 и dnsproxy (основной и для CDN), разбивка — в подписи
+  const mb = k => (k / 1024).toFixed(1).replace('.', LANG === 'en' ? '.' : ',');
+  const rss = j.running ? +L.rss || 0 : 0, drss = +L.dns_rss || 0;
+  tiles.push({icon: 'medical', title: 'Память', value: rss + drss ? mb(rss + drss) + ' ' + t('МБ') : '—',
+    sub: rss && drss ? t('nfqws2 {0} · DNS {1}', mb(rss), mb(drss)) : drss ? t('только DNS · служба не работает')
+      : rss && L.hwm ? t('nfqws2 · пик {0} МБ', mb(L.hwm)) : t('служба не работает'), on: ''});
   tiles.push({icon: 'status', title: 'Пакеты', value: j.running ? fmtShort(L.packets) : '—',
     sub: L.drops > 0 ? t('сброшено ядром: {0}', fmtShort(L.drops)) : t('прошло через nfqws2'), on: '', tone: L.drops > 0 ? 'warn' : ''});
   setHTML('live-tiles', tiles.map(smartTile).join(''), false);

@@ -34,6 +34,7 @@ HOME_PAUSED_FILE="$STATE_DIR/home_paused"      # paused by home network; holds S
 HOME_AT_FILE="$STATE_DIR/home_at"              # телефон в домашнем Wi‑Fi; SSID (для паузы DNS)
 SMART_DIR="$CONFDIR/smart"                     # умный режим: выученное по сетям (<сеть>.tsv)
 SMART_NET_FILE="$STATE_DIR/smart_net"          # id текущей сети для умного режима или offline
+SMART_NET_LAST="$STATE_DIR/smart_net_last"     # последняя настоящая сеть (без offline)
 SMART_LEARN_FILE="$STATE_DIR/smart_learn"      # фоновое обучение: сколько открыто, последний сайт
 SMART_LEARN_EVERY=120                          # сек между сайтами фонового обучения
 SMART_TURBO_FILE="$STATE_DIR/smart_turbo"      # до какого времени обучение ускорено (игра)
@@ -1721,7 +1722,10 @@ smart_net_update() {
   # остаётся последняя сеть, где он работал
   case "$id" in wifi-*) if smart_home_ssid "$label"; then return 0; fi ;; esac
   [ "$id" = "$(cat "$SMART_NET_FILE" 2>/dev/null)" ] || printf '%s\n' "$id" > "$SMART_NET_FILE"
+  # нет связи — это не сеть: профиля у неё нет, выученное остаётся за
+  # последней настоящей (SMART_NET_LAST — её показывает экран умного режима)
   [ "$id" = offline ] && return 0
+  [ "$id" = "$(cat "$SMART_NET_LAST" 2>/dev/null)" ] || printf '%s\n' "$id" > "$SMART_NET_LAST"
   # подпись сети для WebUI — один раз
   grep -q "^$id	" "$SMART_DIR/nets.tsv" 2>/dev/null || printf '%s\t%s\n' "$id" "$label" >> "$SMART_DIR/nets.tsv"
   return 0

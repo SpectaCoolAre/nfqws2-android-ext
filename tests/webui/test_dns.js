@@ -167,8 +167,9 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
 
     sect(`${mode}: work mode`);
     eq('smart', await page.evaluate(() => $('dns-mode-seg').querySelector('.seg.selected').dataset.mode), 'smart mode is the default');
-    truthy(await page.isVisible('#dns-geo') && (await page.textContent('#dns-geo')).includes('Обход геоблока'), 'it shows the geo-block bypass');
-    truthy((await page.textContent('#dns-smart')).includes('Включится вместе с DNS модуля'), 'and speed, which starts with DNS');
+    truthy((await page.textContent('#dns-nav')).includes('Обход геоблока'), 'it leads to the geo-block bypass');
+    truthy((await page.textContent('#dns-nav')).includes('Включится вместе с DNS модуля'), 'and shows speed, which starts with DNS');
+    eq(0, await page.$$eval('[data-page="dns"] [aria-expanded]', r => r.length), 'no folding groups: sections are screens of their own');
     await page.click('#dns-mode-seg .seg[data-mode="profiles"]');
     await page.waitForSelector('#dialog-wrap.open');
     truthy((await page.textContent('#dialog-wrap')).includes('Перейти на профили?'), 'switching asks first');
@@ -180,7 +181,8 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     await page.click("#d-ok"); await page.waitForTimeout(800);
     truthy(await page.evaluate(() => window.__cmds.some(c => c.indexOf("'dns-mode' 'profiles'") >= 0)), 'confirmed: one command switches the mode');
     eq('profiles', await page.evaluate(() => $('dns-mode-seg').querySelector('.seg.selected').dataset.mode), 'profiles mode is selected');
-    eq(false, await page.isVisible('#dns-geo'), 'the smart sections are hidden');
+    eq(false, (await page.textContent('#dns-nav')).includes('Обход геоблока'), 'the smart sections are hidden');
+    truthy((await page.textContent('#dns-nav')).includes('Профили'), 'profiles stay');
     await page.click('#dns-mode-seg .seg[data-mode="smart"]');
     await page.waitForSelector('#dialog-wrap.open');
     truthy((await page.textContent('#dialog-wrap')).includes('Включить умный режим DNS?'), 'back to smart asks too');
@@ -198,23 +200,19 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
 
     sect(`${mode}: switching on`);
     // Пресеты в профили кладёт модуль при первом запуске (test_dns.sh); у заглушки их нет
-    eq(0, await page.$$eval('#dns-profiles .list-item[data-id], #dns-profiles .empty', r => r.length), 'the profiles group is folded at first: one line instead of the whole list');
-    truthy((await page.textContent('#dns-profiles .dns-group')).includes('Профилей пока нет'), 'its line sums it up');
+    truthy((await page.textContent('#dns-nav .list-item:has-text("Профили")')).includes('Профилей пока нет'), 'the profiles line sums them up');
     await page.click('#dns-main'); await idle();
     eq(true, await page.evaluate(() => window.__dns.enabled), 'the main switch turns the feature on');
     eq(false, await page.evaluate(() => $('dns-body').classList.contains('is-disabled')), 'and enables the body');
-    await page.click('#dns-profiles .dns-group'); await idle();
-    eq('true', await page.getAttribute('#dns-profiles .dns-group', 'aria-expanded'), 'a tap unfolds it');
-    truthy(await page.isVisible('#dns-profiles .empty'), 'an empty state is shown without profiles');
     truthy((await page.textContent('#dns-general')).includes('Не активно'), 'the state says nothing is applied yet');
     eq(false, (await page.textContent('#dns-general')).includes('DNS по умолчанию'), 'smart mode: no default DNS row — everything else goes to the network DNS');
     truthy((await page.textContent('#dns-warn')).includes('Домены из списка геоблока есть в профилях x (2)'), 'a profile that takes domains of the geo-block list away from the bypass is warned about');
     eq(false, (await page.textContent('#dns-warn')).includes('перехватывает'), 'interception of plain DNS is not mentioned while no profile has plain addresses — nothing to fix');
+    truthy((await page.textContent('#dns-nav .list-item:has-text("Обход геоблока")')).includes('DNS: dns.fast.example'), 'the geo-block bypass line names the DNS in use');
+    await page.click('#dns-nav .list-item:has-text("Обход геоблока")'); await idle();
+    eq('dnsgeo', await page.evaluate(() => currentPage), 'a tap opens the geo-block bypass screen');
+    eq('Обход геоблока', await page.textContent('#app-title'), 'with its own title');
     let geoTxt = await page.textContent('#dns-geo');
-    truthy(geoTxt.includes('DNS: dns.fast.example'), 'the geo-block bypass line names the DNS in use');
-    eq(false, geoTxt.includes('dns.dead.example') || geoTxt.includes('Comss') && geoTxt.includes('GeoHide'), 'folded: no server list and no provider choice');
-    await page.click('#dns-geo .dns-group'); await idle();
-    geoTxt = await page.textContent('#dns-geo');
     await shot('geo');
     truthy(geoTxt.includes('40 мс · обходит 610 из 722 · в пуле'), 'unfolded: each checked server in one short line');
     truthy(geoTxt.includes('20 мс · обходит 40 из 722 · через раз · доменов: 12'), 'a server outside the pool says how many domains go to it, and that it answers now and then');
@@ -242,6 +240,14 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     await page.click('#dns-geo .clickable:has-text("Обновить список")'); await idle(); await page.waitForTimeout(400);
     truthy(await page.evaluate(() => window.__dns.calls.includes('dns-geo-update')), 'the update button downloads a fresh list');
     truthy((await page.textContent('#dns-geo')).includes('доменов: 731'), 'and the new size is shown');
+    await page.evaluate(() => goBack()); await idle();
+    eq('dns', await page.evaluate(() => currentPage), 'back leads to the DNS screen');
+
+    sect(`${mode}: the profiles screen`);
+    await page.click('#dns-nav .list-item:has-text("Профили")'); await idle();
+    eq('dnsprofiles', await page.evaluate(() => currentPage), 'a tap opens the profiles screen');
+    eq('Профили DNS', await page.textContent('#app-title'), 'with its own title');
+    truthy(await page.isVisible('#dns-profiles .empty'), 'an empty state is shown without profiles');
 
     sect(`${mode}: a preset`);
     await page.click('#dns-add'); await menuPick('Из пресетов');
@@ -313,7 +319,9 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
 
     sect(`${mode}: back and delete`);
     await page.evaluate(() => goBack()); await idle();
-    eq('dns', await page.evaluate(() => currentPage), 'back returns to the DNS screen');
+    eq('dnsprofiles', await page.evaluate(() => currentPage), 'back returns to the profiles');
+    await page.evaluate(() => goBack()); await idle();
+    eq('dns', await page.evaluate(() => currentPage), 'and then to the DNS screen');
     await page.click('#dns-mode-seg .seg[data-mode="profiles"]');
     await page.waitForSelector('#dialog-wrap.open'); await page.click("#d-ok"); await page.waitForTimeout(800);
     truthy((await page.textContent('#dns-general')).includes('DNS по умолчанию') && (await page.textContent('#dns-general')).includes('Игры'), 'profiles mode: the default DNS row names the profile');
@@ -322,10 +330,11 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     truthy(state.includes('остальное — через «Игры»'), 'and names the profile everything else goes to');
     truthy(!state.includes('192.168.1.1'), 'the network DNS is not shown while it is not used');
     await shot('main');
+    await page.click('#dns-nav .list-item:has-text("Профили")'); await idle();
     await page.click('#dns-profiles .list-item:has-text("Игры")'); await idle();
     await page.click('button:has-text("Удалить профиль")');
     await answer();
-    eq('dns', await page.evaluate(() => currentPage), 'deleting returns to the list');
+    eq('dnsprofiles', await page.evaluate(() => currentPage), 'deleting returns to the list');
     eq('net', await page.evaluate(() => window.__dns.def), 'the default falls back to the network DNS');
 
     sect(`${mode}: selecting several profiles`);
@@ -335,7 +344,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     const longPress = async sel => { const b = await page.$eval(sel, e => { e.scrollIntoView({ block: "center" }); const r = e.getBoundingClientRect(); return [r.x + r.width / 3, r.y + r.height / 2]; });
       await page.mouse.move(b[0], b[1]); await page.mouse.down(); await page.waitForTimeout(650); await page.mouse.up(); await idle(); };
     await longPress('#dns-profiles .list-item:has-text("Alpha")');
-    eq('dns', await page.evaluate(() => currentPage), 'a long press does not open the profile');
+    eq('dnsprofiles', await page.evaluate(() => currentPage), 'a long press does not open the profile');
     eq(total, await page.$$eval('#dns-profiles .list-item .checkbox', r => r.length), 'it turns every switch into a checkbox');
     eq(0, await page.$$eval('#dns-profiles .switch', r => r.length), 'no switches are left');
     eq(['Alpha'], await page.$$eval('#dns-profiles .list-item.selected .li-primary', r => r.map(e => e.textContent)), 'the pressed profile is selected');
@@ -346,7 +355,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     eq(2, await page.$$eval('#dns-profiles .list-item.selected', r => r.length), 'a tap adds a profile to the selection');
     await page.click('#bar-actions .icon-btn:nth-child(2)'); await idle();
     eq(0, await page.$$eval('#dns-profiles .checkbox', r => r.length), 'cancel brings the switches back');
-    eq('DNS профили', await page.textContent('#app-title'), 'and the title');
+    eq('Профили DNS', await page.textContent('#app-title'), 'and the title');
     await longPress('#dns-profiles .list-item:has-text("Alpha")');
     await page.click('#bar-actions .icon-btn:nth-child(1)'); await idle();
     eq(total, await page.$$eval('#dns-profiles .list-item.selected', r => r.length), 'select all selects every profile');
@@ -364,16 +373,16 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     eq(0, await page.$$eval('#dns-profiles .checkbox', r => r.length), 'and the list is back to normal');
     await longPress('#dns-profiles .list-item:has-text("Alpha")');
     await page.evaluate(() => handleBack(true)); await idle();
-    eq('dns', await page.evaluate(() => currentPage), 'back leaves the selection, not the screen');
+    eq('dnsprofiles', await page.evaluate(() => currentPage), 'back leaves the selection, not the screen');
     // Палец на профиле, а системный жест «назад» уводит с экрана без pointerup
     const at = await page.$eval('#dns-profiles .list-item[data-id]', e => { e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return [r.x + 30, r.y + 20]; });
     await page.mouse.move(at[0], at[1]); await page.mouse.down();
     await page.evaluate(() => goBack()); await page.waitForTimeout(700);
     await page.mouse.up(); await idle();
-    eq('settings', await page.evaluate(() => currentPage), 'a back gesture during a press leaves the screen');
-    truthy(!(await page.textContent('#app-title')).includes('Выбрано') && !(await page.$('#bar-actions .icon-btn')),
-      'and the selection bar does not appear on the settings screen');
-    await page.evaluate(() => navigate('dns')); await idle();
+    eq('dns', await page.evaluate(() => currentPage), 'a back gesture during a press leaves the screen');
+    truthy(!(await page.textContent('#app-title')).includes('Выбрано') && !(await page.$('#bar-actions .icon-btn:not([aria-label="Журнал DNS"])')),
+      'and the selection bar does not appear on the DNS screen');
+    await page.evaluate(() => navigate('dnsprofiles')); await idle();
     eq(0, await page.$$eval('#dns-profiles .checkbox', r => r.length), 'and restores the switches');
 
     sect(`${mode}: IPv6 note only when a working profile has an IPv6 server`);
@@ -408,26 +417,30 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
       const snapDns = await page.evaluate(() => snapGet('dns'));
       truthy(!!snapDns, 'the DNS screen left a snapshot behind');
       await p2.evaluate(v => snapSet('dns', v), snapDns);
-      await p2.evaluate(() => store.set('dns_grp_profiles', '1')); // раскрытая группа — так же явно
-      await p2.evaluate(() => { window.__dnsSlow = 1; navigate('dns'); });
+      await p2.evaluate(() => { window.__dnsSlow = 1; navigate('dnsprofiles'); });
       await p2.waitForTimeout(500);
       const early = await p2.evaluate(() => ({ count: document.querySelectorAll('#dns-profiles .list-item[data-id]').length,
-        on: $('dns-toggle').checked, locked: document.querySelector('.page[data-page="dns"]').inert }));
+        on: $('dns-toggle').checked, locked: document.querySelector('.page[data-page="dnsprofiles"]').inert }));
       truthy(early.count > 0, 'before the answer the last seen profiles are already on screen: ' + early.count);
       truthy(early.locked, 'the snapshot takes no taps until fresh data arrive');
       await p2.waitForTimeout(1600);
-      truthy(await p2.evaluate(() => !document.querySelector('.page[data-page="dns"]').inert), 'fresh data unlock the screen');
+      truthy(await p2.evaluate(() => !document.querySelector('.page[data-page="dnsprofiles"]').inert), 'fresh data unlock the screen');
       await p2.close();
     }
 
     sect(`${mode}: scroll position`);
+    // на экране профилей должно быть что листать
+    await page.evaluate(() => { for (let i = 0; i < 14; i++) window.__dns.profiles['z' + i] = 'NAME=Zeta ' + i + '\nENABLED=0'; });
+    await page.evaluate(() => dnsInit()); await idle();
     await page.evaluate(() => scrollToY(scroller.scrollHeight)); await idle();
     const y0 = await page.evaluate(() => scrollPos());
-    truthy(y0 > 0, 'the DNS screen is scrolled down');
+    truthy(y0 > 0, 'the profiles screen is scrolled down');
     await page.evaluate(() => openDnsProfile(dnsSt.profiles[0].id)); await page.waitForTimeout(900);
     eq(0, await page.evaluate(() => scrollPos()), 'a profile opens from the top');
     await page.evaluate(() => goBack()); await page.waitForTimeout(900);
     eq(y0, await page.evaluate(() => scrollPos()), 'back returns to the same place in the list');
+    await page.evaluate(() => goBack()); await page.waitForTimeout(900);
+    eq('dns', await page.evaluate(() => currentPage), 'back to the DNS screen');
     await page.evaluate(() => goBack()); await page.waitForTimeout(900);
     eq('settings', await page.evaluate(() => currentPage), 'back to settings');
     await page.evaluate(() => navigate('dns')); await page.waitForTimeout(900);
@@ -458,7 +471,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
 
     sect(`${mode}: English`);
     await page.evaluate(() => setLanguage('en')); await idle();
-    const txt = await page.textContent('[data-page="dns"]');
+    const txt = await page.$$eval('[data-page="dns"], [data-page="dnsgeo"], [data-page="dnsprofiles"]', l => l.map(e => e.textContent).join('\n'));
     truthy(!/[А-Яа-яЁё]/.test(txt), 'no Russian text left on the screen in English' + ((txt.match(/[^.\n]*[А-Яа-яЁё][^.\n]*/g) || []).slice(0, 3).join(' | ') ? ': ' + (txt.match(/[А-Яа-яЁё][^\n]{0,40}/g) || []).slice(0, 3).join(' | ') : ''));
     await page.evaluate(() => setLanguage('ru')); await idle();
 

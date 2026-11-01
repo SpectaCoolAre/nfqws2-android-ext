@@ -33,7 +33,9 @@ case "$u" in
     esac
     echo "0.030000"; exit 0 ;;
 esac
-cp -f "$BENCH_STATE/smart_bench" "$BENCH_STATE/bench.mark" 2>/dev/null
+# через временный файл: cp создаёт файл раньше, чем пишет, и тест под
+# нагрузкой видел его пустым
+cp -f "$BENCH_STATE/smart_bench" "$BENCH_STATE/bench.mark.$$" 2>/dev/null && mv -f "$BENCH_STATE/bench.mark.$$" "$BENCH_STATE/bench.mark"
 [ -n "$BENCH_HANG" ] && sleep 30
 h=${u#https://}; h=${h%%/*}; key=${h#www.}; key=${key#cdn.}
 # ответ как у curl -w: код, connect, appconnect, первый байт, всего, байт, адрес, переадресация
@@ -159,7 +161,7 @@ section "a killed run lets the orchestrator go too"
 rm -f "$STATE_DIR/bench.mark"
 BENCH_HANG=1 sh "$MODDIR/bin/nfqws2-ctl" smart-bench run >/dev/null 2>&1 &
 kpid=$!
-i=0; while [ ! -f "$STATE_DIR/bench.mark" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+i=0; while [ ! -s "$STATE_DIR/bench.mark" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
 assert_contains "$(cat "$STATE_DIR/bench.mark" 2>/dev/null)" "6 " "the run is under way (workers and its pid)"
 kill -TERM "$kpid"; wait "$kpid" 2>/dev/null
 assert_no_file "$SMART_BENCH_FILE" "killed: the files are removed"

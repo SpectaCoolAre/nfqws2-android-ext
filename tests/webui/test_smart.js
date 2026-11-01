@@ -61,7 +61,7 @@ window.ksu = { exec: function(cmd, o, cb){
   else if (cmd.indexOf("'set-strategy'") >= 0) { window.__strat = /'set-strategy' '([^']+)'/.exec(cmd)[1]; out = 'OK'; }
   else if (cmd.indexOf("'bypass-info'") >= 0) out = JSON.stringify({ strategy: window.__strat, last: 'alt2', modified: 1, imports: ['my-isp'],
     stat: { ok: 1840, err: 96, since: 1761000000 }, meta: { author: 'Flowseal', repo: 'rndnaame/nfqws-menu', date: '2026-09-30', edited: '2026-10-20' } });
-  else if (cmd.indexOf("'live-status'") >= 0) out = JSON.stringify({ rss: 9420, hwm: 11800, packets: 1284000, drops: 0, net: window.__strat === 'smart' ? 'mobile-25001' : 'wifi-1',
+  else if (cmd.indexOf("'live-status'") >= 0) out = JSON.stringify({ rss: 9420, hwm: 11800, dns_rss: window.__dnsRss || 0, packets: 1284000, drops: 0, net: window.__strat === 'smart' ? 'mobile-25001' : 'wifi-1',
     net_label: window.__strat === 'smart' ? 'MTS' : 'Home', dns_hits: 3120, conn: window.__strat === 'smart' ? { ok: 900, err: 80 } : { ok: 1840, err: 96 } });
   else if (cmd.indexOf("'smart-status' 'wifi-1'") >= 0) out = ${JSON.stringify(SMART_WIFI)};
   else if (cmd.indexOf("'smart-status'") >= 0) out = ${JSON.stringify(SMART_MOB)};
@@ -108,6 +108,26 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   truthy(live.includes('MTS') && live.includes('92%') && /9,2 МБ/.test(live), 'the network, the connections and the memory of nfqws2 (' + live.slice(0, 120) + '…)');
   if (SHOT) await page.screenshot({ path: SHOT.replace(/\.png$/, '-home.png'), fullPage: true });
   eq('#i-auto', await page.getAttribute('#nav-bypass-ic', 'href'), 'the «Bypass» tab wears the smart icon');
+  // память — модуля целиком: nfqws2 и dnsproxy, разбивка в подписи
+  await page.evaluate(() => { window.__dnsRss = 14438; return loadLive(); }); await page.waitForTimeout(200);
+  const mem = await page.$eval('#live-tiles .smart-tile:has(svg use[href="#i-medical"])', e => e.textContent);
+  truthy(mem.includes('23,3 МБ') && mem.includes('nfqws2 9,2 · DNS 14,1'), 'the memory tile adds up nfqws2 and dnsproxy and breaks it down (' + mem + ')');
+  await page.evaluate(() => { const s = S.running; S.running = false; renderLive(); window.__memOff = $('live-tiles').textContent; S.running = s; renderLive(); });
+  truthy(await page.evaluate(() => window.__memOff.includes('14,1 МБ') && window.__memOff.includes('только DNS')), 'with the service stopped only DNS is counted');
+  await page.evaluate(() => { window.__dnsRss = 0; return loadLive(); }); await page.waitForTimeout(200);
+  // плитки открывают вкладку сверху, как повторное нажатие на неё
+  await page.evaluate(() => navigate('lists')); await page.waitForTimeout(700);
+  await page.evaluate(() => { document.body.style.minHeight = '4000px'; scrollToY(600); }); await page.waitForTimeout(100);
+  const ly = await page.evaluate(() => scrollPos());
+  await page.evaluate(() => navigate('control')); await page.waitForTimeout(700);
+  await page.click('#live-tiles .smart-tile:has(svg use[href="#i-list"])'); await page.waitForTimeout(800);
+  eq('lists', await page.evaluate(() => currentPage), 'the lists tile opens the lists');
+  eq(0, await page.evaluate(() => scrollPos()), 'from the top, though they were scrolled to ' + ly);
+  await page.evaluate(() => scrollToY(600)); await page.waitForTimeout(100);
+  await page.evaluate(() => navigate('control')); await page.waitForTimeout(700);
+  await page.evaluate(() => navigate('lists')); await page.waitForTimeout(800);
+  truthy(await page.evaluate(() => scrollPos()) > 0, 'the tab itself still comes back where it was');
+  await page.evaluate(() => { document.body.style.minHeight = ''; navigate('control'); }); await page.waitForTimeout(700);
   await page.click('#strategy-row');
   await page.waitForTimeout(700);
   eq('config', await page.evaluate(() => currentPage), 'the row opens the «Bypass» tab');

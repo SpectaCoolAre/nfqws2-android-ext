@@ -857,6 +857,50 @@ const VIEWPORTS = [
     await ctx.close();
   }
 
+  // ── lists: five main lists on the tab, the rest on «All lists» ───────────
+  {
+    sect('lists: the main five and «All lists»');
+    const ctx = await browser.newContext({ viewport: { width: 360, height: 800 }, isMobile: true, hasTouch: true });
+    await ctx.addInitScript(STUB);
+    await ctx.addInitScript(`(function(){
+      var base = window.ksu.exec;
+      window.ksu.exec = function(cmd, opts, cb){
+        if (cmd.indexOf('list-all') < 0) return base.apply(this, arguments);
+        var id = typeof cb === 'string' ? cb : opts;
+        var out = ['auto\t3', 'user\t10', 'exclude\t2', 'ipset\t0', 'ipset_exclude\t0', 'geoblock\t722', 'google\t40',
+          'ipset_as\t9000', 'probe_hosts\t12', 'tcp16\t30', 'mine\t5'].join('\\n');
+        setTimeout(function(){ if (window[id]) window[id](0, out, ''); }, 0);
+        return 'job';
+      };
+    })();`);
+    const page = await ctx.newPage();
+    const pageErrors = [];
+    page.on('pageerror', e => pageErrors.push(e.message));
+    await page.goto(INDEX, { waitUntil: 'load' });
+    await page.waitForTimeout(500);
+    await page.evaluate(() => navigate('lists')); await page.waitForTimeout(800);
+    const files = await page.$$eval('#list-files .li-primary', l => l.map(e => e.textContent));
+    eq('auto.list,user.list,exclude.list,ipset.list,ipset_exclude.list,Все списки', files.join(','), 'the tab keeps the five main lists and a way to all the others');
+    await page.click('#list-files .list-item:has-text("Все списки")'); await page.waitForTimeout(900);
+    eq('alllists', await page.evaluate(() => currentPage), '«All lists» opens its own screen');
+    const all = await page.textContent('#all-lists');
+    truthy(all.includes('geoblock.list') && all.includes('google.list') && all.includes('mine.list'), 'with the service lists and the user\'s own');
+    truthy(!all.includes('user.list'), 'without the main five');
+    truthy(all.includes('IP-адреса и подсети') && all.includes('ipset_as.list') && all.includes('Для проверки доступности') && all.includes('tcp16.list'), 'grouped: domains, IP, reachability check');
+    truthy(/9\s?000/.test(all.replace(/\u00a0|\u202f/g, ' ')), 'with the number of entries');
+    await page.fill('#all-lists-q', 'хостинг'); await page.waitForTimeout(200);
+    const found = await page.$$eval('#all-lists .li-primary', l => l.map(e => e.textContent));
+    eq('ipset_as.list', found.join(','), 'the search finds a list by its description too');
+    await page.fill('#all-lists-q', ''); await page.waitForTimeout(200);
+    await page.click('#all-lists .list-item:has-text("mine.list")'); await page.waitForTimeout(700);
+    truthy(await page.evaluate(() => $('panel-title-text').textContent === 'mine.list'), 'a list opens in the editor');
+    await page.evaluate(() => closeSlideEditor(true)); await page.waitForTimeout(500);
+    await page.evaluate(() => goBack()); await page.waitForTimeout(700);
+    eq('lists', await page.evaluate(() => currentPage), 'back leads to «Lists»');
+    eq('', pageErrors.join(' | '), 'no script errors');
+    await ctx.close();
+  }
+
   // ── reachability: one domain ─────────────────────────────────────────────
   {
     sect('reachability: one domain');

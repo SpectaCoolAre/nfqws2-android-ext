@@ -94,7 +94,9 @@ function eq(expected, actual, msg) {
 }
 function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
 
-const PAGES = ['control', 'lists', 'logs', 'config', 'settings', 'work', 'wifi', 'dns', 'hosts', 'test', 'diag', 'apps'];
+const PAGES = ['control', 'lists', 'alllists', 'logs', 'logset', 'config', 'settings', 'work', 'wifi', 'dns', 'dnsgeo', 'dnsprofiles', 'hosts', 'test', 'diag', 'apps'];
+// экраны из одного списка или одного журнала: колонок нет
+const ONE_COLUMN = ['logs', 'logset', 'dnsgeo', 'dnsprofiles'];
 const VIEWPORTS = [
   { w: 915, h: 412, label: 'phone 915×412' },
   { w: 780, h: 360, label: 'small phone 780×360' },
@@ -159,6 +161,8 @@ const VIEWPORTS = [
           truthy(g.cols[0].r <= g.cols[1].l, 'side by side');
           if (g.cols[0].lead) eq('sticky', g.cols[0].pos, 'the main column stays in place');
         }
+      } else if (ONE_COLUMN.includes(p)) {
+        eq(null, g.gridCols, 'one column');
       } else {
         eq('2', g.gridCols, 'groups are laid out in two columns');
       }

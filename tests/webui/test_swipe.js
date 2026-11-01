@@ -84,12 +84,21 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     .filter(e => getComputedStyle(e).display !== 'none').map(e => e.dataset.page).sort().join(','));
 
   sect('tap in the navigation bar');
+  // Сдвиг идёт анимацией в композиторе (300 мс); под нагрузкой он успевал
+  // закончиться раньше, чем тест посмотрит. Поэтому анимации сдвига ставятся
+  // на паузу на трети пути, замер — и дальше
+  await page.evaluate(() => { const o = slidePages; window.__slide = [];
+    slidePages = (from, to, opt) => { o(from, to, opt);
+      window.__slide = [...from.getAnimations(), ...to.getAnimations()];
+      __slide.forEach(a => { a.pause(); a.currentTime = a.effect.getTiming().duration / 3; });
+      slidePages = o; }; });
   await page.click('.nav-dest[data-page="config"]');
-  await page.waitForTimeout(100);
+  await page.waitForFunction(() => window.__slide.length > 0, null, { timeout: 3000 }).catch(() => {});
   eq('config,control', await shown(), 'state → config slides the two pages, lists and settings stay hidden');
   eq(NAV0, await navGeo(), 'mid-slide the navigation bar and the document width do not move');
   const xs = await page.evaluate(() => ['control', 'config'].map(p => document.querySelector(`.page[data-page="${p}"]`).getBoundingClientRect().left));
   truthy(xs[0] < 0 && xs[1] > 16, 'the old page leaves to the left, the new one comes from the right: ' + xs.map(Math.round));
+  await page.evaluate(() => window.__slide.forEach(a => a.play()));
   await page.waitForTimeout(500);
   eq('config', await shown(), 'after the slide only config is on screen');
   await page.click('.nav-dest[data-page="control"]');
@@ -118,8 +127,22 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   await touch(line(200, 300, 250, 300, 10, ), { step: 40 });
   eq('lists', await cur(), 'a short slow drag springs back');
   eq('lists', await shown(), 'and hides the neighbour');
-  await touch(line(100, 300, 170, 302, 3));
-  eq('control', await cur(), 'a quick short fling right goes to the previous tab');
+  // Бросок узнаётся по скорости пальца (метки времени событий), а CDP под
+  // нагрузкой доставляет движения с задержкой — скорость выходит ниже порога,
+  // и это уже не бросок. Скорость, которую увидела страница, записывается;
+  // если доставка была слишком медленной, жест повторяется (до 3 раз)
+  await page.evaluate(() => { const o = swipeRelease; window.__rv = [];
+    swipeRelease = (e, c) => { const tr = swipe.trail || [], a = tr[0], b = tr[tr.length - 1];
+      if (swipe.st === 2 && a && b && b[0] > a[0]) __rv.push((b[1] - a[1]) / (b[0] - a[0])); return o(e, c); }; });
+  let rv = [];
+  for (let k = 0; k < 3; k++) {
+    await page.evaluate(() => { __rv.length = 0; });
+    await touch(line(100, 300, 170, 302, 3), { step: 0 });
+    rv = await page.evaluate(() => __rv.slice());
+    if (await cur() === 'control' || !(rv.length && rv[0] <= .4)) break;
+    process.stdout.write(`   (the moves arrived too slowly: ${rv[0].toFixed(2)} px/ms — again)\n`);
+  }
+  eq('control', await cur(), 'a quick short fling right goes to the previous tab' + (rv.length ? ` (${rv[0].toFixed(2)} px/ms)` : ''));
   // Нажатие в панели сразу после быстрого свайпа. Браузер вёл свой жест с
   // инерцией (touch-action его только фильтровал), и следующее касание шло на
   // её остановку: pointerdown/pointerup были, click — нет, вкладка не менялась
@@ -218,9 +241,20 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     }), [edge, speed]);
     return page.evaluate(() => __abs.join());
   }
-  eq('bottom', await flingInto('bottom'), 'a fling that runs into the bottom bounces the page');
+  // Скорость прокрутки страница считает между событиями scroll и обнуляет при
+  // паузе больше 100 мс: под нагрузкой кадры бывают реже, и тогда это уже не
+  // бросок. Ожидаемый отскок — до трёх попыток
+  async function flingRetry(edge) {
+    let r = '';
+    for (let k = 0; k < 3 && !r; k++) {
+      if (k) { process.stdout.write('   (no bounce: frames came too rarely — again)\n'); await page.waitForTimeout(600); }
+      r = await flingInto(edge);
+    }
+    return r;
+  }
+  eq('bottom', await flingRetry('bottom'), 'a fling that runs into the bottom bounces the page');
   await page.waitForTimeout(600);   // два отскока подряд не чаще раза в 0,5 с
-  eq('top', await flingInto('top'), 'and one into the top bounces it too');
+  eq('top', await flingRetry('top'), 'and one into the top bounces it too');
   await page.waitForTimeout(600);
   eq('', await flingInto('bottom', .1), 'a slow arrival at the edge does not bounce');
   eq(navF, await navGeo(), 'the navigation bar does not move');

@@ -152,7 +152,7 @@ set_strategy() {
 # запросы и удачные/ошибочные соединения режима (стратегии — state/strat_stat,
 # умный режим — выученное в текущей сети). Дёшево: читается раз в несколько секунд
 cmd_live_status() {
-  local pid rss=0 hwm=0 pk=0 dr=0 net label="" hits=-1 ok=0 err=0 key f cur
+  local pid rss=0 hwm=0 pk=0 dr=0 net label="" hits=-1 ok=0 err=0 key f cur dns_rss=0 dp m
   if is_running; then
     pid=$(cat "$PIDFILE" 2>/dev/null)
     rss=$(awk '/^VmRSS:/ { print $2 }' "/proc/$pid/status" 2>/dev/null)
@@ -160,6 +160,14 @@ cmd_live_status() {
     set -- $(awk -v q="$NFQUEUE_NUM" '$1 == q { print $8, $6 + $7 }' /proc/net/netfilter/nfnetlink_queue 2>/dev/null)
     pk=${1:-0}; dr=${2:-0}
   fi
+  # память dnsproxy (основной и для CDN): работает и без службы обхода
+  for f in "$STATE_DIR/dnsproxy.pid" "$STATE_DIR/dnsproxy-cdn.pid"; do
+    dp=$(cat "$f" 2>/dev/null)
+    case "$dp" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$dp" 2>/dev/null || continue
+    m=$(awk '/^VmRSS:/ { print $2 }' "/proc/$dp/status" 2>/dev/null)
+    dns_rss=$((dns_rss + ${m:-0}))
+  done
   net=$(cat "$SMART_NET_FILE" 2>/dev/null)
   [ -n "$net" ] && label=$(awk -F'\t' -v k="$net" '$1 == k { print $2; exit }' "$SMART_DIR/nets.tsv" 2>/dev/null)
   # пауза в домашнем Wi‑Fi: профиля у этой сети нет, а показать надо её
@@ -178,8 +186,8 @@ cmd_live_status() {
     key=$(printf '%s' "$cur" | sed 's/[^A-Za-z0-9._-]/_/g')
     [ -f "$STATE_DIR/strat_stat" ] && set -- $(awk -F'\t' -v k="$key" '$1 == k { print $2, $3; exit }' "$STATE_DIR/strat_stat") && { ok=${1:-0}; err=${2:-0}; }
   fi
-  printf '{"rss":%d,"hwm":%d,"packets":%d,"drops":%d,"net":"%s","net_label":"%s","dns_hits":%d,"conn":{"ok":%d,"err":%d}}\n' \
-    "${rss:-0}" "${hwm:-0}" "${pk:-0}" "${dr:-0}" "$(json_str "$net")" "$(json_str "$label")" "$hits" "${ok:-0}" "${err:-0}"
+  printf '{"rss":%d,"hwm":%d,"dns_rss":%d,"packets":%d,"drops":%d,"net":"%s","net_label":"%s","dns_hits":%d,"conn":{"ok":%d,"err":%d}}\n' \
+    "${rss:-0}" "${hwm:-0}" "$dns_rss" "${pk:-0}" "${dr:-0}" "$(json_str "$net")" "$(json_str "$label")" "$hits" "${ok:-0}" "${err:-0}"
 }
 # Стратегия режима «Стратегии»: последняя выбранная не умная, иначе та, что
 # ставит первая установка
@@ -695,25 +703,66 @@ cmd_export_logs() {
   [ "$mode" = path ] || b64e < "$out_file" | tr -d '\n'
   echo
 }
-# «Поделиться» файлом из общей памяти: file:// в ACTION_SEND с Android 7
-# запрещён — отдаём content:// из MediaStore. Ссылка — ещё и в данных
-# intent: am, в отличие от приложения, не переносит EXTRA_STREAM в ClipData,
-# и флаг чтения (0x1) без этого не выдаёт доступ — Telegram отвечал
-# «unsupported attachment». Тип — настоящий, не */*
-share_mime() { case "$1" in *.tar) echo application/x-tar ;; *.zip) echo application/zip ;; *.txt|*.log|*.conf|*.tsv) echo text/plain ;; *) echo application/octet-stream ;; esac; }
-share_stream() { # <файл> <имя>
-  local f="$1" rf u out mime
-  case "$f" in /sdcard/*) rf="/storage/emulated/0/${f#/sdcard/}" ;; *) rf="$f" ;; esac
+# «Поделиться» файлом: ссылкой content://, которую получатель может прочитать.
+# file:// в ACTION_SEND с Android 7 запрещён, а файлы модуля в /data/adb
+# обычным приложениям и вовсе недоступны: Telegram получал только имя (тему
+# письма), ChatGPT и Quick Share — ошибку; работал лишь root-проводник. Поэтому
+# файл сначала копируется в общую память ($BACKUP_DIR/.share), затем
+# MediaStore сканирует его сразу (content call scan_file — ссылка в ответе;
+# широковещательный MEDIA_SCANNER_SCAN_FILE асинхронный и с Android 10 устарел),
+# запасные пути — поиск по пути, вставка, ссылка DocumentsProvider. Ссылка —
+# ещё и в данных intent: am, в отличие от приложения, не переносит
+# EXTRA_STREAM в ClipData, и флаг чтения (0x1) без этого доступа не выдаёт.
+# Тип — настоящий (text/plain для текста: ChatGPT не берёт octet-stream).
+# Какой ссылкой поделились — в журнал службы: на устройстве это не проверить
+# иначе, чем по журналу.
+share_mime() { case "$1" in *.tar) echo application/x-tar ;; *.zip) echo application/zip ;; *.txt|*.log|*.conf|*.tsv|*.list) echo text/plain ;; *) echo application/octet-stream ;; esac; }
+share_uri() { # <путь в /storage/emulated/0> <тип> -> content://… и способ через TAB
+  local rf="$1" u rel
+  u=$(content call --uri content://media --method scan_file --arg "$rf" 2>/dev/null | grep -o 'content://[^ ,}]*' | head -n 1)
+  [ -n "$u" ] && { printf '%s\tscan\n' "$u"; return 0; }
   am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d "file://$rf" >/dev/null 2>&1
-  u=$(content insert --uri content://media/external/file --bind _data:s:"$rf" --bind mime_type:s:application/octet-stream 2>/dev/null | grep -o 'content://[^ ]*')
-  [ -n "$u" ] || u=$(content query --uri content://media/external/file --projection _id --where "_data='$f' OR _data='$rf'" 2>/dev/null |
+  u=$(content query --uri content://media/external/file --projection _id --where "_data='$rf'" 2>/dev/null |
     grep -o '_id=[0-9]*' | head -n 1 | sed 's#_id=#content://media/external/file/#')
-  [ -n "$u" ] || u="file://$rf"
+  [ -n "$u" ] && { printf '%s\tquery\n' "$u"; return 0; }
+  u=$(content insert --uri content://media/external/file --bind _data:s:"$rf" --bind mime_type:s:"$2" 2>/dev/null | grep -o 'content://[^ ]*')
+  [ -n "$u" ] && { printf '%s\tinsert\n' "$u"; return 0; }
+  rel=${rf#/storage/emulated/0/}
+  case "$rel" in "$rf"|*[!A-Za-z0-9._/-]*) ;; *)
+    printf 'content://com.android.externalstorage.documents/document/primary%%3A%s\tdocuments\n' "$(printf '%s' "$rel" | sed 's#/#%2F#g')"
+    return 0 ;;
+  esac
+  printf 'file://%s\tfile\n' "$rf"
+}
+share_stream() { # <файл> <имя>
+  local f="$1" rf u how out mime dir
+  case "$f" in
+    /sdcard/*) rf="/storage/emulated/0/${f#/sdcard/}" ;;
+    /storage/emulated/0/*) rf="$f" ;;
+    *)
+      # не в общей памяти — копия в $BACKUP_DIR/.share (папка чистится при следующем share)
+      dir="$BACKUP_DIR/.share"
+      case "$f" in "$dir"/*) ;; *) rm -rf "$dir"; mkdir -p "$dir" 2>/dev/null
+        cp -f "$f" "$dir/$2" 2>/dev/null || { echo "Не удалось скопировать файл в $dir" >&2; return 1; }
+        f="$dir/$2" ;; esac
+      chmod 0666 "$f" 2>/dev/null
+      case "$f" in /sdcard/*) rf="/storage/emulated/0/${f#/sdcard/}" ;; *) rf="$f" ;; esac ;;
+  esac
   mime=$(share_mime "$2")
+  out=$(share_uri "$rf" "$mime"); u=${out%%	*}; how=${out#*	}
   out=$(am start -a android.intent.action.SEND --user 0 -d "$u" -t "$mime" --eu android.intent.extra.STREAM "$u" \
     --es android.intent.extra.SUBJECT "$2" --es android.intent.extra.TITLE "$2" -f 0x10000001 2>&1)
-  case "$out" in *Error*|*Exception*) echo "Не удалось открыть «Поделиться»: $out" >&2; return 1 ;; esac
+  log_msg "поделиться: $2 — $u ($how)"
+  case "$out" in *Error*|*Exception*) log_msg "поделиться: am: $out"; echo "Не удалось открыть «Поделиться»: $out" >&2; return 1 ;; esac
   return 0
+}
+# share-saved <путь>: поделиться файлом, который WebUI уже сохранил в общую
+# память (обучение, резервная копия, журналы) — только оттуда
+cmd_share_saved() {
+  case "$1" in */../*|*/..) echo "Этим файлом делиться нельзя" >&2; return 1 ;; esac
+  case "$1" in /sdcard/*|/storage/emulated/0/*) ;; *) echo "Этим файлом делиться нельзя" >&2; return 1 ;; esac
+  [ -f "$1" ] || { echo "Нет файла $1" >&2; return 1; }
+  share_stream "$1" "${1##*/}" && echo OK
 }
 
 cmd_list_apps() {
@@ -1341,8 +1390,8 @@ cmd_probe_dpi() {
 }
 
 # ---------------------------------------------------------------- поделиться файлом
-# Файлом — ссылкой file:// на настоящий путь: root-проводник (MT Manager и
-# др.) откроет его на месте; текстом — содержимое в EXTRA_TEXT, для чатов.
+# Файлом — копией в общей памяти по ссылке content:// (share_stream: читают и
+# Telegram, и Quick Share); текстом — содержимое в EXTRA_TEXT, для чатов.
 # Только файлы модуля: конфиг и файлы hosts.
 share_file_ok() {
   case "$1" in
@@ -1368,8 +1417,8 @@ cmd_share() { # <file|text> <путь>
     out=$(am start -a android.intent.action.SEND -t text/plain --es android.intent.extra.SUBJECT "${2##*/}" \
       --es android.intent.extra.TEXT "$(cat "$2")" 2>&1)
   else
-    out=$(am start -a android.intent.action.SEND -t text/plain --es android.intent.extra.SUBJECT "${2##*/}" \
-      --eu android.intent.extra.STREAM "file://$2" --grant-read-uri-permission 2>&1)
+    share_stream "$2" "${2##*/}" || return 1
+    echo OK; return 0
   fi
   case "$out" in *Error*|*Exception*) echo "Не удалось открыть «Поделиться»: $out" >&2; return 1 ;; esac
   echo OK
@@ -1508,6 +1557,9 @@ cmd_smart_status() { # [сеть — чью статистику показат�
   net=$(cat "$SMART_NET_FILE" 2>/dev/null)
   [ "$net" = offline ] && off=1
   view="$net"
+  # нет связи — показываем последнюю настоящую сеть: «нет связи» — не профиль
+  local last=""
+  [ "$off" = 1 ] && { last=$(cat "$SMART_NET_LAST" 2>/dev/null); view="$last"; }
   smart_valid_net "$1" && view="$1"
   # paused — служба на паузе (дом, VPN, белые списки): обучение ждёт её
   printf '{"active":%s,"running":%s,"paused":%s,"net":"%s","view":"%s","offline":%s,"learn":%s,' \
@@ -1532,7 +1584,7 @@ cmd_smart_status() { # [сеть — чью статистику показат�
           function sum(s,   a, k, i, p, r) { r = 0; k = split(s, a, ","); for (i = 1; i <= k; i++) { split(a[i], p, ":"); r += p[2] } return r }
           !/^#/ { o = sum($4); e = sum($5); if (o >= 0.5) n++; ok += o; err += e }
           END { printf "\"sites\":%d,\"ok\":%d,\"err\":%d", n, ok + 0.5, err + 0.5 }')" \
-        "$([ "$id" = "$net" ] && echo 1 || echo 0)"
+        "$(if [ "$id" = "$net" ] || { [ "$off" = 1 ] && [ "$id" = "$last" ]; }; then echo 1; else echo 0; fi)"
     done < "$SMART_DIR/nets.tsv"
   fi
   printf '],'
@@ -1955,7 +2007,9 @@ cmd_smart_bench_run() {
   : > "$STATE_DIR/smart_bench.seen"
   echo "$BENCH_W $$" > "$SMART_BENCH_FILE"
   trap 'bench_clear; cleanup_probe_app_rule' EXIT
-  trap 'kill $(cat "$BENCH_DIR/pids" 2>/dev/null) 2>/dev/null; exit 143' INT TERM HUP
+  # дождаться исполнителей: иначе живой ещё исполнитель успевал записать свой
+  # smart_bench.N уже после очистки при выходе, и файл оставался
+  trap 'kill $(cat "$BENCH_DIR/pids" 2>/dev/null) 2>/dev/null; wait; exit 143' INT TERM HUP
   setup_probe_app_rule
   # оркестратор перечитывает state/smart_bench раз в 5 секунд
   sleep "${BENCH_SETTLE:-6}"
@@ -2208,6 +2262,66 @@ cmd_monet_system() {
   tail -n +2 "$cache"
 }
 
+# Журнал действий пользователя: всё, что меняет состояние модуля из WebUI
+# (или вручную из консоли), — строкой в журнал службы до выполнения. Чтобы
+# не гадать потом, кто остановил службу, сбросил выученное или отключил
+# сервер: модуль сам или человек. Фоновые вызовы службы (обучение, замер
+# места фильтра) сюда не попадают — это не действия пользователя.
+# Содержимое (base64 списков, конфигов) не пишется — только что и куда
+user_action() { # <команда> [аргументы] -> описание | пусто, если не действие
+  case "$1" in
+    start) echo "запуск службы" ;;
+    stop) echo "остановка службы" ;;
+    restart) echo "перезапуск службы" ;;
+    reload) echo "перечитать списки" ;;
+    save-conf-b64) echo "конфиг сохранён" ;;
+    reset-conf) echo "конфиг сброшен к умолчанию" ;;
+    set-strategy) echo "выбрана стратегия $2" ;;
+    strategy-save-b64) echo "стратегия $2 сохранена" ;;
+    strategy-reset) echo "стратегия $2 сброшена к исходной" ;;
+    import-add-b64) echo "импорт стратегии" ;;
+    delete-import) echo "удалена импортированная стратегия $2" ;;
+    rename-import) echo "переименована стратегия $2 → $3" ;;
+    save-list-b64) echo "список $2 сохранён" ;;
+    add-domain) echo "добавлен домен $2${3:+ в $3}" ;;
+    clear-auto) echo "auto.list очищен" ;;
+    reset-lists) echo "списки сброшены к умолчанию" ;;
+    set) echo "настройка $2=$3" ;;
+    set-mode) echo "режим списков: $2" ;;
+    dns-mode) echo "режим DNS: $2" ;;
+    extra-list-update) echo "обновление списка $2" ;;
+    home-pause) echo "пауза дома: ${2:-переключение}" ;;
+    net-recheck) echo "перепроверка сети" ;;
+    backup-create) echo "резервная копия создана" ;;
+    backup-restore|backup-restore-b64) echo "восстановление из резервной копии${2:+ $2}" ;;
+    smart-import-b64) echo "импорт выученного умного режима" ;;
+    smart-turbo) echo "турбо-обучение: ${2:-вкл}" ;;
+    smart-reset) if [ "${2:-all}" = all ]; then echo "умный режим: забыто всё выученное (все сети)"
+      else echo "умный режим: забыто выученное сети $2"; fi ;;
+    clear-logs) echo "журналы очищены" ;;
+    dns-set-enabled) echo "DNS модуля: $([ "$2" = 1 ] && echo включён || echo выключен)" ;;
+    dns-set-home) echo "DNS дома: $2" ;;
+    dns-restart) echo "перезапуск DNS" ;;
+    dns-set-default) echo "DNS по умолчанию: $2" ;;
+    dns-save-b64) echo "профиль DNS $2 сохранён" ;;
+    dns-profile-enable) echo "профиль DNS $2: $([ "$3" = 1 ] && echo включён || echo выключен)" ;;
+    dns-delete) shift; echo "удалены профили DNS: $*" ;;
+    dns-geo-scan) echo "проверка DNS обхода геоблока вручную" ;;
+    dns-geo-update) echo "обновление списка геоблока" ;;
+    dns-geo-off) echo "сервер обхода геоблока $2: $([ "$3" = 1 ] && echo отключён || echo снова в выборе)" ;;
+    hosts-block-add) echo "hosts: добавлена блокировка $2" ;;
+    hosts-set-enabled) echo "hosts: $2" ;;
+    hosts-sync) echo "hosts: синхронизация${2:+ ($2)}" ;;
+    hosts-bypass-preset|hosts-preset) echo "hosts: пресет $2${3:+ $3}" ;;
+  esac
+}
+ua=$(user_action "$@")
+if [ -n "$ua" ]; then
+  log_msg "действие пользователя: $ua" >/dev/null
+  # забытое выученное — и в журнал умного режима: там его будут искать
+  [ "$1" = smart-reset ] && echo "$(date '+%Y-%m-%d %H:%M:%S') действие пользователя: $ua" >> "$LOG_DIR/smart.log" 2>/dev/null
+fi
+
 case "$1" in
   status) cmd_status ;;
   json-status) cmd_json_status ;;
@@ -2320,6 +2434,9 @@ case "$1" in
     fi
     echo "$newname" ;;
 
+  # все списки модуля: «имя<TAB>записей» (экран «Все списки»)
+  list-all) for f in "$LISTS_DIR"/*.list; do [ -f "$f" ] || continue; n=${f##*/}
+      printf '%s\t%s\n' "${n%.list}" "$(grep -cv -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$f")"; done ;;
   get-list) f=$(list_file "$2") || { echo "Неизвестный список" >&2; exit 1; }
     [ -f "$f" ] || cp -f "$MODDIR/defaults/lists/${f##*/}" "$f" 2>/dev/null
     if [ -f "$f" ]; then cat "$f"; fi ;;
@@ -2449,6 +2566,7 @@ EOF
   dpi-distance) cmd_dpi_distance ;;
   domain-check) cmd_domain_check "$2" ;;
   share) cmd_share "$2" "$3" ;;
+  share-saved) cmd_share_saved "$2" ;;
   # Список изменений из архива модуля — для «Что нового» в WebUI
   changelog) cat "$MODDIR/changelog.md" 2>/dev/null || { echo "Нет changelog.md в модуле" >&2; exit 1; } ;;
   probe-cancel) cmd_probe_cancel ;;
@@ -2471,7 +2589,9 @@ EOF
   dns-*) dns_ctl "$@" ;;
   hosts-*) hosts_ctl "$@" ;;
   clear-logs) : > "$SERVICE_LOG"; : > "$NFQWS_LOG"; rm -f "$LOG_DIR/nfqws2-debug.log" "$LOG_DIR/auto.log"
-    for f in "$LOG_DIR/dns.log" "$LOG_DIR/smart.log"; do [ -f "$f" ] && : > "$f"; done; echo OK ;;
+    for f in "$LOG_DIR/dns.log" "$LOG_DIR/smart.log"; do [ -f "$f" ] && : > "$f"; done
+    # след очистки — первой строкой нового журнала
+    log_msg "действие пользователя: $ua" >/dev/null; echo OK ;;
   *)
     echo "Команды: status json-status is-running check dry-run start stop restart reload doctor get-conf save-conf-b64 reset-conf conf-modified" >&2
     echo "         list-strategies get-strategy set-strategy strategy-get-b64 strategy-path strategy-save-b64 strategy-reset" >&2

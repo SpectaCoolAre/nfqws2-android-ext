@@ -407,8 +407,14 @@ body.swiping .state::after { opacity: 0 !important; }
   transition: background-color var(--dur-medium-long) var(--standard), color var(--dur-medium-long) var(--standard);
 }
 .hero.running { --hero-bg: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container); }
-.hero-head { display: flex; align-items: center; gap: 16px; }
+/* Шапка карточки — сетка: значок на две строки; справа время работы так, что
+   цифры стоят на одной линии с «Работает», а подпись «время работы» — с
+   режимом. Раньше подпись была сверху, а цифры — между строк, и правая
+   колонка смотрелась съехавшей. */
+.hero-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  column-gap: 16px; row-gap: 2px; align-items: baseline; }
 .hero-icon {
+  grid-row: 1 / 3; grid-column: 1; align-self: center;
   width: 56px; height: 56px; flex: none; display: grid; place-items: center;
   border-radius: var(--shape-large);
   background: var(--md-sys-color-surface-container); color: var(--md-sys-color-on-surface-variant);
@@ -418,21 +424,23 @@ body.swiping .state::after { opacity: 0 !important; }
 .hero-icon svg { width: 36px; height: 36px; }
 .hero.running .hero-icon { border-radius: 28px; background: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary); }
 .hero.offline .hero-icon { background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); }
-.hero-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.hero-state { font-size: var(--ts-headline-small); line-height: var(--lh-headline-small); font-weight: var(--w-emph); }
-.hero-sub { font-size: var(--ts-body-medium); line-height: var(--lh-body-medium);
+.hero-titles, .hero-stats { display: contents; }
+.hero-stats[hidden] { display: none; }
+.hero-state { grid-column: 2; grid-row: 1; min-width: 0;
+  font-size: var(--ts-headline-small); line-height: var(--lh-headline-small); font-weight: var(--w-emph); }
+.hero-sub { grid-column: 2 / 4; grid-row: 2; min-width: 0;
+  font-size: var(--ts-body-medium); line-height: var(--lh-body-medium);
   letter-spacing: var(--tr-body-medium); opacity: .8;
   /* одна строка: длинное имя сети не растягивает карточку */
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* Время работы — справа от состояния: карточка одной высоты при работе,
-   паузе и остановке */
-.hero-stats { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; min-width: 0; }
-.hero-stats[hidden] { display: none; }
-.hstat-label { font-size: var(--ts-label-medium); line-height: var(--lh-label-medium); font-weight: var(--w-medium);
-  opacity: .75; white-space: nowrap; }
-.hstat-value { font-size: var(--ts-title-large); line-height: var(--lh-title-large); font-weight: var(--w-emph);
+/* при работе вторая строка делится с подписью «время работы» */
+.hero.running .hero-sub { grid-column: 2; }
+.hstat-value { grid-column: 3; grid-row: 1; justify-self: end;
+  font-size: var(--ts-title-large); line-height: var(--lh-title-large); font-weight: var(--w-emph);
   font-variant-numeric: tabular-nums; white-space: nowrap; }
-/* Основное действие растянуто; перезапуск — outlined icon button рядом (M3 button group) */
+.hstat-label { grid-column: 3; grid-row: 2; justify-self: end;
+  font-size: var(--ts-label-medium); line-height: var(--lh-label-medium); font-weight: var(--w-medium);
+  letter-spacing: var(--tr-label-medium); opacity: .75; white-space: nowrap; }
 .hero-actions { display: flex; align-items: center; gap: 8px; }
 .hero-actions #bt {
   flex: 1 1 auto; min-width: 0; padding: 0 24px;
@@ -719,6 +727,9 @@ html[data-containers="true"] .list > .list-item:active {
 }
 .code-block { max-height: 46vh; }
 .log-view { min-height: 40vh; max-height: 60vh; }
+/* на экране «Журналы» журнал — до низа экрана (под ним только отступ) */
+.logs-page .log-view { max-height: none; min-height: 240px;
+  height: calc(100dvh - var(--top-inset) - var(--appbar-height) - var(--bottom-inset) - 88px); }
 
 /* ── Progress indicators ─────────────────────────────────────────────── */
 .progress-linear { position: relative; height: 4px; overflow: hidden;
@@ -929,14 +940,19 @@ body.kb-open .snackbar { bottom: 16px; }
    Индикатор снизу 1dp, в фокусе 2dp primary. Подсказка-placeholder видна
    только в фокусе, чтобы не спорить с меткой. Фокус показывает индикатор,
    а не общее кольцо фокуса. */
+/* Индикатор — псевдоэлемент поверх содержимого: тенью на самом поле его
+   закрывал фон поля ввода, и черта оставалась только под кнопкой справа */
 .tf {
   position: relative; display: flex; align-items: center; height: 56px;
   background: var(--md-sys-color-surface-container-highest);
   border-radius: var(--shape-extra-small) var(--shape-extra-small) 0 0;
-  box-shadow: inset 0 -1px 0 var(--md-sys-color-on-surface-variant);
-  transition: box-shadow var(--dur-short) var(--standard);
 }
-.tf:focus-within { box-shadow: inset 0 -2px 0 var(--md-sys-color-primary); }
+.tf::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; pointer-events: none;
+  background: var(--md-sys-color-on-surface-variant);
+  transition: height var(--dur-short) var(--standard), background-color var(--dur-short) var(--standard);
+}
+.tf:focus-within::after { height: 2px; background: var(--md-sys-color-primary); }
 .tf input {
   flex: 1; min-width: 0; height: 100%; padding: 24px 16px 6px;
   border: 0; outline: none; background: inherit; border-radius: inherit; appearance: none; -webkit-appearance: none;
@@ -955,6 +971,10 @@ body.kb-open .snackbar { bottom: 16px; }
 .tf input:focus + label, .tf input:not(:placeholder-shown) + label { transform: translateY(-9px) scale(.75); }
 .tf input:focus + label { color: var(--md-sys-color-primary); }
 .tf > .icon-btn { margin-right: 4px; }
+/* кнопка действия в поле — тональная, как в M3 (не голый значок над чертой) */
+.tf > .icon-btn.tone-primary {
+  background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container); margin-right: 8px;
+}
 
 /* ── M3 search bar: 56dp, полностью скруглённый ─────────────────────────── */
 .search-bar {

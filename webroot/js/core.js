@@ -84,23 +84,12 @@ async function exportBlobFile(blob, filename, mimeType, localFilePath, targetDir
   if(localFilePath && ksu){
     const dir = normSaveDir(targetDir);
     const targetFile = dir + '/' + filename;
-    // file:// в ACTION_SEND с Android 7 запрещён: отдаём content:// из MediaStore
-    // запасной адрес — на тот файл, который и правда скопирован (в папку назначения)
-    const safUri = 'content://com.android.externalstorage.documents/document/primary%3A' +
-      encodeURIComponent(targetFile.replace(/^\/(sdcard|storage\/emulated\/0)\//, ''));
+    // копия — в папку назначения; «Поделиться» — модуль (share-saved): ссылкой
+    // content:// из MediaStore, которую получатель может прочитать
     try {
       await sh('f=' + q(localFilePath) + '; tf=' + q(targetFile) + '; mkdir -p ' + q(dir) + ' 2>/dev/null; ' +
         'if [ "$f" != "$tf" ]; then cp -f "$f" "$tf" 2>/dev/null; chmod 666 "$tf" 2>/dev/null; fi; ' +
-        'case "$tf" in /sdcard/*) rf="/storage/emulated/0/${tf#/sdcard/}" ;; *) rf="$tf" ;; esac; ' +
-        'am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d "file://$rf" >/dev/null 2>&1; ' +
-        'u=$(content insert --uri content://media/external/file --bind _data:s:"$rf" --bind mime_type:s:"application/octet-stream" 2>/dev/null | grep -o \'content://[^ ]*\'); ' +
-        '[ -z "$u" ] && u=$(content query --uri content://media/external/file --projection _id --where "_data=\'$tf\' OR _data=\'$rf\'" 2>/dev/null | grep -o \'_id=[0-9]*\' | head -n1 | sed \'s/_id=/content:\\/\\/media\\/external\\/file\\//\'); ' +
-        '[ -z "$u" ] && u=' + q(safUri) + '; ' +
-        // ссылка и в данных intent: am не переносит EXTRA_STREAM в ClipData, и без
-        // этого флаг чтения не даёт получателю доступа (Telegram: unsupported attachment)
-        'am start -a android.intent.action.SEND --user 0 -d "$u" -t ' + q(/\.tar$/.test(filename) ? 'application/x-tar' : /\.zip$/.test(filename) ? 'application/zip' : 'application/octet-stream') +
-        ' --eu android.intent.extra.STREAM "$u" --es android.intent.extra.SUBJECT ' + q(filename) +
-        ' --es android.intent.extra.TITLE ' + q(filename) + ' -f 0x10000001 >/dev/null 2>&1');
+        q(CTL) + ' share-saved "$tf" >/dev/null 2>&1');
     } catch(e) {}
     toast(t('Архив сохранён: {0}', targetFile));
     return true;
@@ -378,12 +367,12 @@ async function ctlx(a, ms, onLine){
 }
 const errText = (r, fallback) => ((r.err || '').trim() || (r.out || '').trim().split('\n').pop() || t(fallback));
 
-/* «Поделиться» файлом модуля: файлом (file:// на настоящий путь — root-
-   проводник вроде MT Manager откроет его на месте) или текстом (в чат). */
+/* «Поделиться» файлом модуля: файлом (копия в общей памяти по ссылке
+   content:// — см. share_stream в nfqws2-ctl) или текстом (в чат). */
 const CONFFILE_PATH = '/data/adb/nfqws2/nfqws2.conf';
 function shareFileMenu(anchor, path){
   openMenu(anchor, [
-    {label: t('Файлом'), sub: t('MT Manager и другие root-проводники'), icon: 'file', onClick: () => shareFile('file', path)},
+    {label: t('Файлом'), sub: t('Telegram, почта, Quick Share, проводник'), icon: 'file', onClick: () => shareFile('file', path)},
     {label: t('Текстом'), sub: t('В чат, заметки, почту'), icon: 'copy', onClick: () => shareFile('text', path)}
   ]);
 }
@@ -585,9 +574,18 @@ const PAGE_META = {
   control:  {title: 'Состояние', init: () => { renderStatus(); stat(); initStrategySelector(); loadLive(); }},
   lists:    {title: 'Списки', init: () => { renderMode(); renderListFiles(); stat(); }},
   settings: {title: 'Настройки', init: () => renderSettings()},
+  alllists: {title: 'Все списки', child: true, parent: 'lists', init: () => allListsInit(),
+             actions: [{icon: 'refresh', label: 'Обновить', fn: () => allListsInit()}]},
   config:   {title: 'Обход', init: () => confInit(),
              actions: [{icon: 'refresh', label: 'Обновить', fn: () => confInit()}]},
-  logs:     {title: 'Журналы', child: true, init: () => { renderLogsLong(); loadLog(); }},
+  // Экспорт, очистка и настройки — в верхней панели: раньше они стояли под
+  // сводкой, и до них приходилось долго листать
+  logs:     {title: 'Журналы', child: true, init: () => { renderLogsLong(); loadLog(); },
+             actions: [{icon: 'refresh', label: 'Обновить журнал', fn: () => loadLog()},
+                       {icon: 'download', label: 'Экспорт логов', fn: () => exportLogs()},
+                       {icon: 'trash', label: 'Очистить журналы', fn: () => clearLogs()},
+                       {icon: 'tune', label: 'Настройки журналов', fn: () => navigate('logset')}]},
+  logset:   {title: 'Настройки журналов', child: true, parent: 'logs', init: () => renderLogsLong()},
   work:     {title: 'Работа модуля', child: true, parent: 'settings', init: () => { renderWork(); return stat(true).then(renderWork); }},
   wifi:     {title: 'Отключать на Wi‑Fi', child: true, parent: 'work', init: () => wifiInit()},
   apps:     {title: 'Фильтр приложений', child: true, parent: 'settings', init: () => appsInit(),
@@ -597,7 +595,9 @@ const PAGE_META = {
              actions: [{icon: 'refresh', label: 'Проверить снова', fn: () => diagInit()}]},
   dns:      {title: 'DNS профили', child: true, parent: 'settings', init: () => dnsInit(),
              actions: [{icon: 'logs', label: 'Журнал DNS', fn: () => openDnsLog()}]},
-  dnsprof:  {title: 'Профиль DNS', child: true, parent: 'dns', init: () => dnsProfInit()},
+  dnsgeo:   {title: 'Обход геоблока', child: true, parent: 'dns', init: () => dnsInit()},
+  dnsprofiles: {title: 'Профили DNS', child: true, parent: 'dns', init: () => dnsInit()},
+  dnsprof:  {title: 'Профиль DNS', child: true, parent: 'dnsprofiles', init: () => dnsProfInit()},
   hosts:    {title: 'Редактор hosts', child: true, parent: 'settings', init: () => hostsInit(),
              actions: [{icon: 'refresh', label: 'Обновить состояние', fn: () => hostsInit()}]}
 };
@@ -883,7 +883,7 @@ function navigate(page, slide){
   pageScroll[currentPage] = scrollPos();
   // Выбор профилей DNS живёт только на своём экране
   dnsLongCancel();
-  if(dnsSel){ dnsSel = null; if(currentPage === 'dns') renderDns(); }
+  if(dnsSel){ dnsSel = null; if(currentPage === 'dnsprofiles') renderDns(); }
   if(mode === 'forward') delete pageScroll[page];
   currentPage = page;
   if(!PAGE_META[page].child){ lastTop = page; backOverride = null; }
@@ -907,6 +907,12 @@ function navigate(page, slide){
   });
   scheduleSync();
 }
+/* Вкладка с главного экрана (плитки «Умный режим», «Списки»): с начала, как
+   повторное нажатие на вкладку, а не там, где её листали в прошлый раз */
+function openTop(page){
+  if(page !== currentPage) delete pageScroll[page];
+  navigate(page);
+}
 /* Экран, открытый не со своего родителя (DNS — долгим нажатием на карточке
    состояния), возвращает «назад» туда, откуда открыт */
 let backOverride = null;
@@ -915,7 +921,7 @@ function openFrom(page){
   navigate(page);
 }
 function goBack(){
-  if(dnsSel && currentPage === 'dns') return dnsSelExit();
+  if(dnsSel && currentPage === 'dnsprofiles') return dnsSelExit();
   const o = backOverride;
   if(o && o.page === currentPage){ backOverride = null; return navigate(o.to); }
   navigate(PAGE_META[currentPage].parent || lastTop);
@@ -959,6 +965,14 @@ function goThen(page, fn){
   navigate(page);
   setTimeout(() => { if(currentPage === page) fn(); }, 420);
 }
+/* Дочерний экран вкладки — напрямую, с любого места: вкладка становится
+   текущей (её значок в панели), и «назад» ведёт в неё, а не туда, откуда
+   открыли */
+function openChildOf(top, page){
+  if(currentPage === page) return;
+  lastTop = top; backOverride = null;
+  navigate(page);
+}
 function prevListMode(){
   const p = store.get('nfq_prev_mode'), cur = S.mode;
   return ['auto', 'list', 'all'].includes(p) && p !== cur ? p : (cur === 'auto' ? 'list' : 'auto');
@@ -977,10 +991,11 @@ const NAV_QUICK = {
       {icon: 'list', label: t('Режим работы: {0}', m), sub: t('сейчас {0}', S.mode || '—'), onClick: () => goThen('lists', () => setMode(m))}
     ];
   },
+  // сразу нужный экран, без промежуточного показа настроек; «назад» — в настройки
   settings: () => [
-    {icon: 'dns', label: t('DNS профили'), onClick: () => goThen('settings', () => navigate('dns'))},
-    {icon: 'edit', label: t('Редактор hosts'), onClick: () => goThen('settings', () => navigate('hosts'))},
-    {icon: 'test', label: t('Проверка доступности'), onClick: () => goThen('settings', () => navigate('test'))}
+    {icon: 'dns', label: t('DNS профили'), onClick: () => openChildOf('settings', 'dns')},
+    {icon: 'edit', label: t('Редактор hosts'), onClick: () => openChildOf('settings', 'hosts')},
+    {icon: 'test', label: t('Проверка доступности'), onClick: () => openChildOf('settings', 'test')}
   ],
   config: () => isSmartMode() ? [
     {icon: 'share', label: t('Поделиться обучением'), onClick: () => goThen('config', () => smartExport())},
@@ -1212,7 +1227,7 @@ function handleBack(allowExit){
     closeSlideEditor(); return true;
   }
   if(openSheetId){ closeSheet(); return true; }
-  if(dnsSel && currentPage === 'dns'){ dnsSelExit(); return true; }
+  if(dnsSel && currentPage === 'dnsprofiles'){ dnsSelExit(); return true; }
   if(PAGE_META[currentPage].child){ goBack(); return true; }
   if(allowExit && currentPage !== 'control'){ navigate('control'); return true; }
   return false;
@@ -1245,7 +1260,7 @@ let histDepth = (history.state && history.state.nfq) || 0, histPending = false, 
 function uiLayers(){
   let n = pageDepth(currentPage) + (PAGE_META[currentPage].child ? (lastTop !== 'control' ? 1 : 0) : (currentPage !== 'control' ? 1 : 0));
   if(openSheetId) n++;
-  if(dnsSel && currentPage === 'dns') n++;
+  if(dnsSel && currentPage === 'dnsprofiles') n++;
   if(editorCtx) n++;
   if($('dialog-wrap').classList.contains('open')) n++;
   if(openMenuEntry) n++;

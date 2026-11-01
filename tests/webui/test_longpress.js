@@ -170,11 +170,18 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   eq(false, await page.evaluate(() => $('dialog-wrap').classList.contains('open')), 'no folder dialog');
   await page.click('#logs-btn'); await page.waitForTimeout(600);
   eq('logs', await cur(), 'a tap still opens the logs');
+  // экспорт, очистка и настройки — в верхней панели, без пролистывания сводки
+  const barLabels = await page.$$eval('#bar-actions button', b => b.map(x => x.getAttribute('aria-label')));
+  eq('Обновить журнал,Экспорт логов,Очистить журналы,Настройки журналов', barLabels.join(','), 'refresh, export, clear and settings sit in the top bar');
+  await page.click('#bar-actions button[aria-label="Настройки журналов"]'); await page.waitForTimeout(600);
+  eq('logset', await cur(), 'settings open their own screen');
   eq('Экспорт логов', await page.textContent('#logs-long-value'), 'where the long-press action is set');
+  await page.evaluate(() => goBack()); await page.waitForTimeout(600);
+  eq('logs', await cur(), 'and back leads to the logs');
 
   sect('logs: debug source and export sheet');
   eq(false, await page.evaluate(() => logSources().some(s => s[0] === 'debug')), 'without the verbose log there is no debug log to pick');
-  await page.click('button[onclick="exportLogs()"]'); await page.waitForTimeout(500);
+  await page.click('#bar-actions button[aria-label="Экспорт логов"]'); await page.waitForTimeout(500);
   eq(true, await page.evaluate(() => $('logs-export-sheet').classList.contains('open')), 'export asks what to export');
   const lx = await page.$$eval('#logs-export-list input[data-lx]', r => r.map(x => x.dataset.lx + ':' + x.checked));
   truthy(lx.includes('smart:true') && lx.includes('diag:true') && !lx.some(x => x.startsWith('debug')), 'everything but debug, all ticked: ' + lx.join(' '));
@@ -182,15 +189,17 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   await page.click('#lx-save'); await page.waitForTimeout(400);
   eq(1, await calls("'export-logs' 'path' 'dns'"), 'Export saves just the chosen log, without the share sheet');
   eq(false, await page.evaluate(() => $('logs-export-sheet').classList.contains('open')), 'and closes the sheet');
-  await page.click('button[onclick="exportLogs()"]'); await page.waitForTimeout(500);
+  await page.click('#bar-actions button[aria-label="Экспорт логов"]'); await page.waitForTimeout(500);
   eq('dns', await page.evaluate(() => [...$('logs-export-list').querySelectorAll('input[data-lx]:checked')].map(x => x.dataset.lx).join(',')), 'the choice is remembered');
   await page.click('#lx-share'); await page.waitForTimeout(400);
   eq(1, await calls("'export-logs' 'share' 'dns'"), 'Share builds a temporary one for the share sheet');
   await page.evaluate(() => $('prompt-container').classList.remove('show'));
+  await page.click('#bar-actions button[aria-label="Настройки журналов"]'); await page.waitForTimeout(600);
   await page.click('#logs-long-value'); await page.waitForTimeout(200);
   await page.click('.menu .mi:nth-child(2)'); await page.waitForTimeout(200);
   eq('Очистка журналов', await page.textContent('#logs-long-value'), 'and can be switched to clearing');
   const cl0 = await calls("'clear-logs'");
+  await page.evaluate(() => { goBack(); }); await page.waitForTimeout(600);
   await page.evaluate(() => { goBack(); $('prompt-container').classList.remove('show'); }); await page.waitForTimeout(600);
   await hold('#logs-btn');
   eq(cl0 + 1, await calls("'clear-logs'"), 'then holding the icon clears the logs');

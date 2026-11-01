@@ -340,7 +340,7 @@ html[data-containers="true"] .settings-grid .list > .list-item:active {
 .smart-tile.warn .st-head { color: inherit; }
 .st-title { font-size: var(--ts-label-large); line-height: var(--lh-label-large); font-weight: var(--w-emph);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.st-value { font-size: var(--ts-headline-small); line-height: var(--lh-headline-small); font-weight: var(--w-emph); margin-top: auto; }
+.st-value { font-size: var(--ts-headline-small); line-height: var(--lh-headline-small); font-weight: var(--w-emph); margin-top: 8px; }
 .st-sub { font-size: var(--ts-body-small); line-height: var(--lh-body-small); color: var(--md-sys-color-on-surface-variant);
   width: 100%; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .smart-tile.warn .st-sub { color: inherit; opacity: .85; }
@@ -393,5 +393,3 @@ html[data-containers="true"] .settings-grid .list > .list-item:active {
 
 /* Группы экрана DNS («Профили», «Обход геоблока»): стрелка заголовка
    поворачивается вниз, когда группа раскрыта */
-.dns-group .li-trail svg { transition: transform var(--dur-short) var(--standard); }
-.dns-group[aria-expanded="true"] .li-trail svg { transform: rotate(90deg); }

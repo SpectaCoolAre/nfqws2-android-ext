@@ -320,6 +320,28 @@ printf '%s' "$ctl_out" > "$SANDBOX/live.json"
 node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$SANDBOX/live.json" 2>/dev/null
 assert_rc 0 $? "live-status is valid JSON"
 assert_contains "$ctl_out" '"conn":{"ok":42,"err":5}' "the status screen gets this strategy's connections"
+assert_contains "$ctl_out" '"dns_rss":0,' "no dnsproxy running: its memory is 0"
+# dnsproxy (основной и для CDN): своя память в отдельном поле; мёртвый pid и
+# мусор в файле не считаются
+sleep 30 & dp1=$!
+sleep 30 & dp2=$!
+# память читать после exec: до него у процесса память оболочки, и она другая
+i=0; while [ $i -lt 50 ]; do
+  case "$(tr '\0' ' ' < "/proc/$dp1/cmdline")$(tr '\0' ' ' < "/proc/$dp2/cmdline")" in "sleep 30 sleep 30 ") break ;; esac
+  sleep 0.1; i=$((i + 1))
+done
+echo "$dp1" > "$STATE_DIR/dnsproxy.pid"
+echo "$dp2" > "$STATE_DIR/dnsproxy-cdn.pid"
+ctl live-status
+r1=$(awk '/^VmRSS:/ { print $2 }' "/proc/$dp1/status"); r2=$(awk '/^VmRSS:/ { print $2 }' "/proc/$dp2/status")
+assert_contains "$ctl_out" "\"dns_rss\":$((r1 + r2))," "the memory of both dnsproxy processes is added up"
+kill "$dp2" 2>/dev/null; wait "$dp2" 2>/dev/null
+echo 'x1' > "$STATE_DIR/dnsproxy-cdn.pid"
+ctl live-status
+r1=$(awk '/^VmRSS:/ { print $2 }' "/proc/$dp1/status")
+assert_contains "$ctl_out" "\"dns_rss\":$r1," "a dead or broken pid is not counted"
+kill "$dp1" 2>/dev/null; wait "$dp1" 2>/dev/null
+rm -f "$STATE_DIR/dnsproxy.pid" "$STATE_DIR/dnsproxy-cdn.pid"
 rm -f "$LAST_STRATEGY_FILE"
 echo smart > "$ACTIVE_FILE"
 ctl last-strategy
@@ -414,8 +436,29 @@ assert_contains "$ctl_out" "пусто" "an empty log reports (пусто) rathe
 printf 'learned something\n' > "$CONFDIR/logs/smart.log"
 ctl clear-logs
 assert_rc 0 "$ctl_rc" "clear-logs works"
-assert_eq "0" "$(wc -c < "$CONFDIR/logs/service.log" | tr -d ' ')" "service.log is truncated"
+assert_eq "1" "$(grep -c . "$CONFDIR/logs/service.log")" "service.log is truncated"
+assert_contains "$(cat "$CONFDIR/logs/service.log")" "действие пользователя: журналы очищены" "keeping one line: who cleared it"
 assert_eq "0" "$(wc -c < "$CONFDIR/logs/smart.log" | tr -d ' ')" "and the smart mode log too"
+
+# Действия пользователя — в журнал службы: кто остановил, что забыто, что
+# отключено. Чтение (состояние, списки) — нет
+section "user actions are logged"
+: > "$CONFDIR/logs/service.log"
+ctl status >/dev/null; ctl get-list user >/dev/null; ctl smart-status >/dev/null; ctl dns-state >/dev/null
+assert_eq "0" "$(grep -c 'действие пользователя' "$CONFDIR/logs/service.log")" "reading the state is not an action"
+ctl set SMART_LEARN 0
+assert_contains "$(cat "$CONFDIR/logs/service.log")" "действие пользователя: настройка SMART_LEARN=0" "a setting change is logged with its value"
+ctl smart-reset all
+assert_contains "$(cat "$CONFDIR/logs/service.log")" "действие пользователя: умный режим: забыто всё выученное (все сети)" "forgetting everything learned is logged"
+assert_contains "$(cat "$CONFDIR/logs/smart.log")" "действие пользователя: умный режим: забыто всё выученное" "in the smart mode log too, where it will be looked for"
+ctl smart-reset mobile-25001
+assert_contains "$(cat "$CONFDIR/logs/service.log")" "забыто выученное сети mobile-25001" "forgetting one network names it"
+ctl add-domain example.org
+assert_contains "$(cat "$CONFDIR/logs/service.log")" "действие пользователя: добавлен домен example.org" "a domain added by hand"
+ctl dns-geo-off dns.example 1
+assert_contains "$(cat "$CONFDIR/logs/service.log")" "сервер обхода геоблока dns.example: отключён" "a bypass DNS switched off by hand"
+ctl dns-geo-off dns.example 0
+ctl set SMART_LEARN 1
 
 # ── backup & export ───────────────────────────────────────────────────────────
 section "backup and export"
@@ -485,6 +528,12 @@ ctl get-list '../../etc/passwd'
 assert_rc 1 "$ctl_rc" "a path is refused"
 ctl get-list nosuchlist
 assert_rc 1 "$ctl_rc" "a missing list is refused"
+# все списки модуля для экрана «Все списки»: имя и число записей без комментариев
+printf '# мой список\na.example\n\nb.example\n' > "$LISTS_DIR/mine.list"
+ctl list-all
+assert_contains "$ctl_out" "$(printf 'mine\t2')" "every list with its entries, comments and blank lines not counted"
+assert_contains "$ctl_out" "$(printf 'user\t')" "the main ones too"
+rm -f "$LISTS_DIR/mine.list"
 
 # ── проверка одного домена ────────────────────────────────────────────────────
 section "domain-check"
@@ -673,9 +722,35 @@ rm -f "$MOCKBIN/ping" "$MOCKBIN/curl"
 section "share"
 printf '#!/bin/sh\necho "$*" >> "$MOCK_DIR/am.log"; echo "Starting: Intent"\n' > "$MOCKBIN/am"
 chmod 0755 "$MOCKBIN/am"; : > "$MOCK_DIR/am.log"
+# content: scan_file отвечает ссылкой — как MediaProvider на устройстве
+printf '#!/bin/sh\necho "$*" >> "$MOCK_DIR/content.log"\ncase "$*" in *scan_file*) [ -f "$MOCK_DIR/noscan" ] || echo "Result: Bundle[{android.intent.extra.STREAM=content://media/external_primary/file/42}]" ;; esac\n' > "$MOCKBIN/content"
+chmod 0755 "$MOCKBIN/content"; : > "$MOCK_DIR/content.log"
+EXP_OLD2="${NFQWS_BACKUP_DIR:-}"; export NFQWS_BACKUP_DIR="$SANDBOX/shared"
 ctl share file "$CONFFILE"
 assert_rc 0 "$ctl_rc" "the config is shared as a file"
-assert_contains "$(cat "$MOCK_DIR/am.log")" "file://$CONFFILE" "by a link to its real path"
+assert_eq "$(cat "$CONFFILE")" "$(cat "$SANDBOX/shared/.share/nfqws2.conf" 2>/dev/null)" "a copy goes to shared storage: apps cannot read /data/adb"
+assert_contains "$(cat "$MOCK_DIR/content.log")" "--method scan_file --arg $SANDBOX/shared/.share/nfqws2.conf" "MediaStore scans the copy at once"
+assert_match "$(cat "$MOCK_DIR/am.log")" "SEND --user 0 -d content://media/external_primary/file/42 -t text/plain" "and the link it answers with is shared, as plain text"
+assert_not_contains "$(cat "$MOCK_DIR/am.log")" "file://" "no file:// link: other apps (Telegram, ChatGPT, Quick Share) cannot read it"
+assert_contains "$(cat "$LOG_DIR/service.log")" "поделиться: nfqws2.conf — content://media/external_primary/file/42 (scan)" "which link was shared goes to the log"
+# без ответа scan_file и MediaStore — ссылка DocumentsProvider на файл в общей памяти
+touch "$MOCK_DIR/noscan"; : > "$MOCK_DIR/am.log"
+mkdir -p "$SANDBOX/sd"
+echo "a	b" > "$SANDBOX/sd/learn.tsv"
+ctl share-saved "$SANDBOX/sd/learn.tsv"
+assert_rc 1 "$ctl_rc" "share-saved takes only files in shared storage"
+ctl share-saved /storage/emulated/0/Download/../../../etc/passwd
+assert_rc 1 "$ctl_rc" "and no path that climbs out of it"
+# запасные пути share_uri: поиск в MediaStore по пути, затем ссылка DocumentsProvider
+sed -n '/^share_uri() {/,/^}/p' "$MODDIR/bin/nfqws2-ctl" > "$SANDBOX/share_uri.sh"
+printf '#!/bin/sh\ncase "$*" in *query*) echo "Row: 0 _id=7" ;; esac\n' > "$MOCKBIN/content"
+uri=$(sh -c '. "$1"; share_uri /storage/emulated/0/Download/nfqws2/learn-wifi.tsv text/plain' _ "$SANDBOX/share_uri.sh")
+assert_eq "content://media/external/file/7	query" "$uri" "no answer from scan_file: the file is looked up in MediaStore by its path"
+printf '#!/bin/sh\ntrue\n' > "$MOCKBIN/content"
+uri=$(sh -c '. "$1"; share_uri /storage/emulated/0/Download/nfqws2/learn-wifi.tsv text/plain' _ "$SANDBOX/share_uri.sh")
+assert_eq "content://com.android.externalstorage.documents/document/primary%3ADownload%2Fnfqws2%2Flearn-wifi.tsv	documents" "$uri" "MediaStore silent: a DocumentsProvider link to the same file"
+rm -f "$MOCK_DIR/noscan" "$MOCKBIN/content"
+if [ -n "$EXP_OLD2" ]; then NFQWS_BACKUP_DIR="$EXP_OLD2"; else unset NFQWS_BACKUP_DIR; fi
 ctl share text "$CONFFILE"
 assert_contains "$(cat "$MOCK_DIR/am.log")" "android.intent.extra.TEXT" "or as text"
 ctl share file /etc/passwd

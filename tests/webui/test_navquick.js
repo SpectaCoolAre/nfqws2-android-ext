@@ -126,10 +126,16 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     await page.evaluate(() => navigate('control')); await page.waitForTimeout(600);
     await hold(nav('settings'));
     if (i === 1) eq('DNS профили,Редактор hosts,Проверка доступности', (await items()).join(), 'DNS, hosts, reachability check');
+    // настройки по пути не показываются: экран открывается сразу
+    await page.evaluate(() => { window.__sawSettings = false; const el = document.querySelector('.page[data-page="settings"]');
+      window.__mo = new MutationObserver(() => { if (el.classList.contains('active')) window.__sawSettings = true; });
+      window.__mo.observe(el, { attributes: true, attributeFilter: ['class'] }); });
     await page.click(`.menu .mi:nth-child(${i})`); await page.waitForTimeout(1200);
-    eq(pg, await cur(), `item ${i} opens settings, then «${pg}»`);
+    eq(pg, await cur(), `item ${i} opens «${pg}»`);
+    eq(false, await page.evaluate(() => { window.__mo.disconnect(); return window.__sawSettings; }), 'straight away, without showing the settings first');
     await page.evaluate(() => goBack()); await page.waitForTimeout(600);
     eq('settings', await cur(), 'and back leads to settings');
+    eq('page', await page.getAttribute(nav('settings'), 'aria-current'), 'with the settings tab current');
   }
 
   sect('Конфиг');

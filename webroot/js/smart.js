@@ -192,7 +192,7 @@ async function smartGroup(k){
       top[sl].slice().sort((a, b) => b.sites - a.sites || b.ok - a.ok).slice(0, 6).map(v => {
         const p = pct(v.ok, v.err);
         return settingsRow({icon: v.err > v.ok ? 'warn' : 'check', title: v.name || ('#' + v.n),
-          sub: t('Сайтов: {0} · удачных {1}%', v.sites, p == null ? '—' : p)});
+          sub: p == null ? t('Сайтов: {0} · соединений через него ещё не было', v.sites) : t('Сайтов: {0} · удачных {1}%', v.sites, p)});
       }).join('') + '</div>').join('');
   smartSheet(t(title), (varRows || '<div class="empty"><span>' + esc(t('Пока нет данных')) + '</span></div>') +
     '<h2 class="subhead">' + esc(t('Сайты')) + '</h2><div id="smart-grp-sites"><div class="helper">' + esc(t('Загрузка…')) + '</div></div>');

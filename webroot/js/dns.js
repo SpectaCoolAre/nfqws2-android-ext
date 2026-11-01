@@ -167,12 +167,12 @@ async function dnsInit(){
       dnsSt = parseDnsState(snap);
       dnsSt.profiles.sort((a, b) => a.name.localeCompare(b.name, LANG));
       dnsLoaded = true;
-      snapLock('dns', true);
+      DNS_PAGES.forEach(p => snapLock(p, true));
     }
     renderDns();
   }
   const ok = await loadDnsState();
-  snapLock('dns', false);
+  DNS_PAGES.forEach(p => snapLock(p, false));
   if(ok) renderDns();
   await stat(true);
   renderDnsDoh();
@@ -181,12 +181,13 @@ async function dnsInit(){
 /* Пока экран DNS открыт — состояние раз в 3 секунды само (кнопки «Обновить»
    больше нет). Не трогает экран, пока выбирают профили или открыт лист */
 let dnsPollT = 0;
+const DNS_PAGES = ['dns', 'dnsgeo', 'dnsprofiles'];
 function dnsPollArm(){
   clearTimeout(dnsPollT);
   dnsPollT = setTimeout(async () => {
-    if(currentPage !== 'dns') return;
+    if(!DNS_PAGES.includes(currentPage)) return;
     if(!document.hidden && !dnsSel && !openSheetId && !openMenuEntry && !$('dialog-wrap').classList.contains('open')){
-      if(await loadDnsState() && currentPage === 'dns' && !dnsSel) renderDns();
+      if(await loadDnsState() && DNS_PAGES.includes(currentPage) && !dnsSel) renderDns();
     }
     dnsPollArm();
   }, 3000);
@@ -197,7 +198,7 @@ function dnsPollArm(){
 function renderDnsDoh(){
   renderDnsMode();
   renderDnsGeo();
-  renderDnsSmart();
+  renderDnsNav();
   setHTML('dns-doh', settingsRow({icon: 'shield', title: 'Обход блокировки DoT/DoH', sw: true, checked: S.doh_bypass == 1,
     sub: t('Если провайдер режет DoH и DoT — соединения с DNS-серверами идут через обход'),
     on: 'setDohBypass(this.checked, this)'}), false);
@@ -226,7 +227,6 @@ function renderDnsMode(){
     b.classList.toggle('selected', on);
     b.setAttribute('aria-checked', on ? 'true' : 'false');
   });
-  $('dns-smart-sec').hidden = !smart;
 }
 async function setDnsMode(mode){
   if((mode === 'smart') === dnsSmartMode()) return;
@@ -243,25 +243,6 @@ async function setDnsMode(mode){
   await stat(true);
   if(await loadDnsState()) renderDns(); else renderDnsDoh();
 }
-/* ── Группы: заголовок раскрывает содержимое ──────────────────────────
-   «Профили» (в обоих режимах) и «Обход геоблока» (умный режим) устроены
-   одинаково: строка-заголовок с краткой сводкой, по нажатию — список.
-   Раскрыта группа или нет — запоминается */
-const dnsGroupOpen = id => store.get('dns_grp_' + id) === '1';
-function dnsGroupToggle(id){
-  store.set('dns_grp_' + id, dnsGroupOpen(id) ? '0' : '1');
-  renderDns();
-}
-function dnsGroupHead(id, ic, title, sub){
-  const open = dnsGroupOpen(id);
-  return '<div class="list-item two-line clickable state dns-group" role="button" tabindex="0" aria-expanded="' + open + '"' +
-    ' onclick="dnsGroupToggle(' + jsArg(id) + ')">' +
-    '<span class="li-icon">' + icon(ic, 's24') + '</span>' +
-    '<span class="li-text"><span class="li-primary">' + esc(t(title)) + '</span>' +
-      '<span class="li-secondary truncate">' + esc(sub) + '</span></span>' +
-    '<span class="li-trail">' + icon('chevron-right', 's24') + '</span></div>';
-}
-
 /* Обход геоблока — по списку сервисов (geoblock.list): их домены идут на DNS
    с обходом, который модуль выбирает сам (проверка серверов раз в 6 часов,
    см. lib/dns.sh dns_geo_scan), остальное — на DNS сети. Свой сервер для
@@ -279,29 +260,30 @@ const dnsGeoFlaky = host => { const [ok, n] = dnsGeoTry(host); return n > 0 && o
 const dnsGeoOff = host => (dnsSt.status.geo_off || '').split(' ').includes(host);
 const dnsGeoRole = host => dnsGeoOff(host) ? t('отключён вручную') : dnsGeoPool().includes(host) ? t('в пуле')
   : dnsGeoFor(host) ? t('доменов: {0}', fmtCount(dnsGeoFor(host))) : '';
+/* Сводка обхода геоблока для строки на главном экране DNS */
+function dnsGeoSummary(){
+  const pool = dnsGeoPool();
+  return pool.length ? t('DNS: {0}', pool.join(', ')) : t('DNS: Comss — до первой проверки');
+}
+/* Экран «Обход геоблока»: проверка, серверы, список сервисов */
 function renderDnsGeo(){
   const st = dnsSt.status || {};
   if(!$('dns-geo')) return;
-  const pool = dnsGeoPool();
-  const rows = [dnsGroupHead('geo', 'globe', 'Обход геоблока',
-    pool.length ? t('DNS: {0}', pool.join(', ')) : t('DNS: Comss — до первой проверки'))];
-  if(dnsGroupOpen('geo')){
-    rows.push(settingsRow({icon: 'refresh', title: 'Проверить DNS сейчас', on: 'dnsGeoScan()'}));
-    const list = (dnsSt.geoscan || []).slice().sort((a, b) => (b.ok - a.ok) || (dnsGeoFor(b.host) - dnsGeoFor(a.host)) || (b.proxy - a.proxy) || (a.ms - b.ms));
-    list.forEach(r => {
-      const sub = !r.ok ? t('не отвечает')
-        : [t('{0} мс', r.ms), t('обходит {0} из {1}', fmtCount(r.proxy), fmtCount(r.total))].concat(r.proto === 'https' ? ['DoH'] : [],
-          dnsGeoFlaky(r.host) ? [t('через раз')] : [], dnsGeoRole(r.host) ? [dnsGeoRole(r.host)] : []).join(' · ');
-      rows.push('<div class="list-item two-line clickable state" role="button" tabindex="0" onclick="dnsGeoServerInfo(' + jsArg(r.host) + ')">' +
-        '<span class="li-icon">' + icon(dnsGeoOff(r.host) ? 'pause' : r.ok ? (dnsGeoRole(r.host) ? 'check' : 'dns') : 'error', 's24') + '</span>' +
-        '<span class="li-text"><span class="li-primary truncate">' + esc(r.host) + '</span>' +
-        '<span class="li-secondary truncate">' + esc(sub) + '</span></span></div>');
-    });
-    const n = +st.geo_domains || 0;
-    rows.push(settingsRow({icon: 'list', title: 'Список сервисов', sub: t('geoblock.list · доменов: {0}', fmtCount(n)),
-      on: "openSlideEditor('list', 'geoblock')", chevron: true}));
-    rows.push(settingsRow({icon: 'download', title: 'Обновить список', sub: t('itdoginfo и GeoHide, ваши домены останутся'), on: 'dnsGeoUpdate()'}));
-  }
+  const rows = [settingsRow({icon: 'refresh', title: 'Проверить DNS сейчас', sub: dnsGeoSummary(), on: 'dnsGeoScan()'})];
+  const list = (dnsSt.geoscan || []).slice().sort((a, b) => (b.ok - a.ok) || (dnsGeoFor(b.host) - dnsGeoFor(a.host)) || (b.proxy - a.proxy) || (a.ms - b.ms));
+  list.forEach(r => {
+    const sub = !r.ok ? t('не отвечает')
+      : [t('{0} мс', r.ms), t('обходит {0} из {1}', fmtCount(r.proxy), fmtCount(r.total))].concat(r.proto === 'https' ? ['DoH'] : [],
+        dnsGeoFlaky(r.host) ? [t('через раз')] : [], dnsGeoRole(r.host) ? [dnsGeoRole(r.host)] : []).join(' · ');
+    rows.push('<div class="list-item two-line clickable state" role="button" tabindex="0" onclick="dnsGeoServerInfo(' + jsArg(r.host) + ')">' +
+      '<span class="li-icon">' + icon(dnsGeoOff(r.host) ? 'pause' : r.ok ? (dnsGeoRole(r.host) ? 'check' : 'dns') : 'error', 's24') + '</span>' +
+      '<span class="li-text"><span class="li-primary truncate">' + esc(r.host) + '</span>' +
+      '<span class="li-secondary truncate">' + esc(sub) + '</span></span></div>');
+  });
+  const n = +st.geo_domains || 0;
+  rows.push(settingsRow({icon: 'list', title: 'Список сервисов', sub: t('geoblock.list · доменов: {0}', fmtCount(n)),
+    on: "openSlideEditor('list', 'geoblock')", chevron: true}));
+  rows.push(settingsRow({icon: 'download', title: 'Обновить список', sub: t('itdoginfo и GeoHide, ваши домены останутся'), on: 'dnsGeoUpdate()'}));
   setHTML('dns-geo', rows.join(''), false);
 }
 /* Подробности проверки сервера — по нажатию: что с каждым сервисом-образцом */
@@ -340,13 +322,22 @@ async function dnsGeoUpdate(){
   toast(t('Список обновлён: доменов {0}', fmtCount(+(r.out || '').trim() || 0)));
   if(await loadDnsState()) renderDns();
 }
-/* Видео и CDN — самый быстрый адрес из DNS сети и публичных, оптимистичный кэш */
-function renderDnsSmart(){
-  const st = (dnsSt.status || {}).cdn || '';
-  const sub = st === 'running' ? t('Видео и CDN — самый быстрый адрес, повторы из кэша')
-    : st === 'down' ? t('Не запустился — см. журнал DNS')
-    : t('Включится вместе с DNS модуля');
-  setHTML('dns-smart', settingsRow({icon: 'auto', title: 'Скорость', sub}), false);
+/* Разделы DNS на главном экране — строками, каждая открывает свой экран:
+   обход геоблока и скорость (умный режим), профили (оба режима) */
+function renderDnsNav(){
+  if(!$('dns-nav')) return;
+  const st = dnsSt.status || {}, smart = dnsSmartMode();
+  const max = dnsMax('profiles', 32), n = dnsSt.profiles.length, en = dnsSt.profiles.filter(p => p.enabled).length;
+  const cdn = st.cdn || '';
+  const rows = [];
+  if(smart){
+    rows.push(settingsRow({icon: 'globe', title: 'Обход геоблока', sub: dnsGeoSummary(), on: "navigate('dnsgeo')", chevron: true}));
+    rows.push(settingsRow({icon: 'auto', title: 'Скорость', sub: cdn === 'running' ? t('Видео и CDN — самый быстрый адрес, повторы из кэша')
+      : cdn === 'down' ? t('Не запустился — см. журнал DNS') : t('Включится вместе с DNS модуля')}));
+  }
+  rows.push(settingsRow({icon: 'dns', title: 'Профили', sub: n ? t('{0} из {1} · включено: {2}', n, max, en) : t('Профилей пока нет'),
+    on: "navigate('dnsprofiles')", chevron: true}));
+  setHTML('dns-nav', rows.join(''), false);
 }
 
 function dnsDefaultLabel(){
@@ -440,7 +431,7 @@ function renderDns(){
   const s = dnsSt.status, on = s.enabled === '1';
   $('dns-toggle').checked = on;
   $('dns-main').classList.toggle('on', on);
-  ['dns-body', 'dns-general'].forEach(id => {
+  ['dns-body', 'dns-general', 'dns-nav', 'dns-geo'].forEach(id => {
     $(id).classList.toggle('is-disabled', !on || !dnsLoaded);
     $(id).inert = !on || !dnsLoaded;
   });
@@ -453,13 +444,8 @@ function renderDns(){
   setHTML('dns-general', (dnsLoaded && on ? dnsStateRow() : '') + (dnsSmartMode() ? ''
     : settingsRow({icon: 'globe', title: 'DNS по умолчанию', sub: dnsDefaultLabel() + ' · ' + t('для доменов вне профилей'),
       on: 'pickDnsDefault(this)', menu: true})), false);
-  const max = dnsMax('profiles', 32), n = dnsSt.profiles.length, en = dnsSt.profiles.filter(p => p.enabled).length;
-  // выбор нескольких — только в раскрытой группе
-  if(dnsSel) store.set('dns_grp_profiles', '1');
-  const open = dnsGroupOpen('profiles');
-  $('dns-addrow').hidden = !open;
-  setHTML('dns-profiles', dnsGroupHead('profiles', 'dns', 'Профили',
-    n ? t('{0} из {1} · включено: {2}', n, max, en) : t('Профилей пока нет')) + (!open ? '' : n ? dnsSt.profiles.map(p => {
+  const max = dnsMax('profiles', 32), n = dnsSt.profiles.length;
+  setHTML('dns-profiles', n ? dnsSt.profiles.map(p => {
     const sel = dnsSel && dnsSel.has(p.id);
     return '<div class="list-item two-line clickable state' + (sel ? ' selected' : '') + '" role="button" tabindex="0" data-id="' + esc(p.id) + '"' +
         (dnsSel ? ' aria-pressed="' + !!sel + '"' : '') + ' onclick="dnsRowClick(' + jsArg(p.id) + ')">' +
@@ -474,7 +460,7 @@ function renderDns(){
     '</div>';
   }).join('')
     : '<div class="empty"><span class="empty-icon">' + icon('dns', 's24') + '</span><span>' +
-      esc(t('Профилей пока нет. Добавьте свой или возьмите готовый из пресетов.')) + '</span></div>'), false);
+      esc(t('Профилей пока нет. Добавьте свой или возьмите готовый из пресетов.')) + '</span></div>', false);
   $('dns-add').disabled = n >= max;
   renderDnsDoh();
 }
@@ -497,13 +483,13 @@ function dnsSelEnter(id){
 }
 function dnsSelExit(quiet){
   dnsSel = null;
-  if(quiet || currentPage !== 'dns') return;
-  renderAppBar('dns', false);
+  if(quiet || currentPage !== 'dnsprofiles') return;
+  renderAppBar('dnsprofiles', false);
   renderDns();
   scheduleSync();
 }
 function dnsSelRender(){
-  if(!dnsSel || currentPage !== 'dns') return;
+  if(!dnsSel || currentPage !== 'dnsprofiles') return;
   $('app-title').textContent = t('Выбрано: {0}', dnsSel.size);
   const all = dnsSt.profiles.length && dnsSt.profiles.every(p => dnsSel.has(p.id));
   fillBarActions([
@@ -552,7 +538,7 @@ let dnsLongFired = false, dnsLongCancel = () => {};
     // таймер срабатывал уже на другом экране и вешал туда панель выбора
     tm = setTimeout(() => {
       tm = 0;
-      if(currentPage !== 'dns' || !row.isConnected || openSheetId || document.hidden || !document.hasFocus()) return;
+      if(currentPage !== 'dnsprofiles' || !row.isConnected || openSheetId || document.hidden || !document.hasFocus()) return;
       dnsLongFired = true; dnsSelEnter(row.dataset.id);
     }, 500);
   });
@@ -588,7 +574,7 @@ async function setDnsDefault(id){
   if(r.code){ toast(errText(r, 'Не удалось сохранить')); return; }
   dnsSt.status.default = id;
   await loadDnsState();
-  if(currentPage === 'dns') renderDns(); else if(currentPage === 'dnsprof') renderDnsProfile();
+  if(DNS_PAGES.includes(currentPage)) renderDns(); else if(currentPage === 'dnsprof') renderDnsProfile();
 }
 
 async function toggleDnsProfile(id, on, el){
@@ -605,7 +591,7 @@ async function toggleDnsProfile(id, on, el){
   if(on && !p.domains.length && dnsSt.status.default !== id)
     toast(t('В профиле нет доменов: он работает, только если выбран DNS по умолчанию'));
   await loadDnsState();
-  if(currentPage === 'dns') renderDns(); else renderDnsProfile();
+  if(DNS_PAGES.includes(currentPage)) renderDns(); else renderDnsProfile();
 }
 
 /* Свободный идентификатор профиля: из названия латиницей, иначе p1, p2… */
@@ -649,7 +635,7 @@ async function addDnsPreset(id){
     servers: pre.servers.slice(), domains: pre.domains.slice(), enabled: pre.domains.length > 0});
   if(await saveDnsProfile(p)){
     toast(t('Профиль «{0}» добавлен', p.name));
-    if(currentPage === 'dns') renderDns();
+    if(DNS_PAGES.includes(currentPage)) renderDns();
   }
 }
 

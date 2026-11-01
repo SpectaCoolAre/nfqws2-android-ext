@@ -151,7 +151,7 @@ function rerenderAll(){
   if(currentPage === 'wifi') renderWifi();
   if(currentPage === 'test') testInit();
   if(currentPage === 'diag') diagInit();
-  if(currentPage === 'dns') renderDns();
+  if(['dns', 'dnsgeo', 'dnsprofiles'].includes(currentPage)) renderDns();
   if(currentPage === 'dnsprof') renderDnsProfile();
   if(currentPage === 'hosts') renderHosts();
   if(currentPage === 'logs') loadLog();

@@ -191,13 +191,10 @@ eq(sampleStr.length, blob.size, 'Blob size matches original byte length');
   await sandbox.exportBlobFile(blob, 'backup.tar', 'application/x-tar', '/sdcard/Download/backup.tar');
   truthy(downloadedFiles.length > 0, 'exportBlobFile falls back to <a download>');
   eq('backup.tar', downloadedFiles[0].download, 'download attribute matches requested filename');
-  const sendCmd = sharedIntents.find(cmd => cmd.includes('am start -a android.intent.action.SEND') && cmd.includes('backup.tar'));
-  truthy(sendCmd, 'exportBlobFile executes am start ACTION_SEND intent in ksu environment');
-  truthy(sendCmd && sendCmd.includes("-t 'application/x-tar'"), 'intent carries the real type of the archive');
-  truthy(sendCmd && sendCmd.includes('-d "$u"'), 'and the link as intent data: am does not move EXTRA_STREAM to ClipData, so only this gives the receiving app (Telegram) read access');
-  truthy(sendCmd && sendCmd.includes('-f 0x10000001'), 'intent passes NEW_TASK and GRANT_READ_URI_PERMISSION flags');
-  truthy(sendCmd && sendCmd.includes('--user 0'), 'intent targets primary user');
-  truthy(sendCmd && !sendCmd.includes('file:///sdcard/Download/backup.tar"'), 'no bare file:// URI is shared');
+  const sendCmd = sharedIntents.find(cmd => cmd.includes('share-saved') && cmd.includes('backup.tar'));
+  truthy(sendCmd, 'exportBlobFile hands the saved copy to the module to share (share-saved: a content:// link apps can read)');
+  truthy(sendCmd && sendCmd.includes("tf='/sdcard/Download/nfqws2/backup.tar'"), 'the copy in shared storage, not the file in /data/adb');
+  truthy(sendCmd && !sendCmd.includes('file://'), 'no bare file:// URI is shared');
 
   // ── markup invariants ───────────────────────────────────────────────────────
   sect('markup invariants');
@@ -207,8 +204,8 @@ eq(sampleStr.length, blob.size, 'Blob size matches original byte length');
   truthy(html.includes('accept=".tar,application/x-tar"'), 'backupFile accepts .tar and application/x-tar');
   truthy(html.includes('restoreBackupFromFile(this.files[0])'), 'backupFile invokes restoreBackupFromFile onchange');
   truthy(html.includes('onclick="$(\'backupFile\').click()"'), 'backup-sheet contains button to trigger backupFile');
-  truthy(html.includes('onclick="exportLogs()"'), 'logs page contains exportLogs button');
-  truthy(html.includes('>Экспорт логов</span>'), 'export button is titled "Экспорт логов"');
+  const coreSrc = fs.readFileSync(path.join(path.dirname(INDEX_HTML), 'js', 'core.js'), 'utf8');
+  truthy(/icon: 'download', label: 'Экспорт логов', fn: \(\) => exportLogs\(\)/.test(coreSrc), 'the logs top bar has the export button');
 
   // ── i18n completeness ───────────────────────────────────────────────────────
   sect('i18n completeness');
