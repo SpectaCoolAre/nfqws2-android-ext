@@ -453,3 +453,22 @@ func TestWhoamiDetectsInterception(t *testing.T) {
 		t.Fatalf("ответ из своей сети — не перехват: %q", lastWhoami)
 	}
 }
+
+func TestSiteRefuses(t *testing.T) {
+	for _, c := range []struct {
+		resp string
+		bad  bool
+	}{
+		{"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<html>Gemini</html>", false},
+		{"HTTP/1.1 302 Found\r\nLocation: https://www.google.com/sorry/index?continue=x\r\n\r\n", true},
+		{"HTTP/1.1 429 Too Many Requests\r\n\r\n", true},
+		{"HTTP/1.1 200 OK\r\n\r\nOur systems have detected unusual traffic from your computer network.", true},
+		{"HTTP/1.1 200 OK\r\n\r\nGemini isn't supported in your country yet", true},
+		{"HTTP/1.1 302 Found\r\nLocation: https://gemini.google.com/app\r\n\r\n", false},
+		{"", false},
+	} {
+		if got := siteRefuses(c.resp); got != c.bad {
+			t.Errorf("%q: %v, ждали %v", c.resp, got, c.bad)
+		}
+	}
+}

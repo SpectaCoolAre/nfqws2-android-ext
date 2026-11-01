@@ -275,7 +275,9 @@ const dnsGeoFor = host => +dnsSt.status['geo_for_' + host] || 0;
    «через раз»: в маршрутах он после надёжных */
 const dnsGeoTry = host => (dnsSt.status['geo_try_' + host] || '').split('/').map(Number);
 const dnsGeoFlaky = host => { const [ok, n] = dnsGeoTry(host); return n > 0 && ok > 0 && ok < n; };
-const dnsGeoRole = host => dnsGeoPool().includes(host) ? t('в пуле')
+/* Отключён вручную (geo_off): в пул и маршруты не идёт */
+const dnsGeoOff = host => (dnsSt.status.geo_off || '').split(' ').includes(host);
+const dnsGeoRole = host => dnsGeoOff(host) ? t('отключён вручную') : dnsGeoPool().includes(host) ? t('в пуле')
   : dnsGeoFor(host) ? t('доменов: {0}', fmtCount(dnsGeoFor(host))) : '';
 function renderDnsGeo(){
   const st = dnsSt.status || {};
@@ -291,7 +293,7 @@ function renderDnsGeo(){
         : [t('{0} мс', r.ms), t('обходит {0} из {1}', fmtCount(r.proxy), fmtCount(r.total))].concat(r.proto === 'https' ? ['DoH'] : [],
           dnsGeoFlaky(r.host) ? [t('через раз')] : [], dnsGeoRole(r.host) ? [dnsGeoRole(r.host)] : []).join(' · ');
       rows.push('<div class="list-item two-line clickable state" role="button" tabindex="0" onclick="dnsGeoServerInfo(' + jsArg(r.host) + ')">' +
-        '<span class="li-icon">' + icon(r.ok ? (dnsGeoRole(r.host) ? 'check' : 'dns') : 'error', 's24') + '</span>' +
+        '<span class="li-icon">' + icon(dnsGeoOff(r.host) ? 'pause' : r.ok ? (dnsGeoRole(r.host) ? 'check' : 'dns') : 'error', 's24') + '</span>' +
         '<span class="li-text"><span class="li-primary truncate">' + esc(r.host) + '</span>' +
         '<span class="li-secondary truncate">' + esc(sub) + '</span></span></div>');
     });
@@ -303,7 +305,7 @@ function renderDnsGeo(){
   setHTML('dns-geo', rows.join(''), false);
 }
 /* Подробности проверки сервера — по нажатию: что с каждым сервисом-образцом */
-function dnsGeoServerInfo(host){
+async function dnsGeoServerInfo(host){
   const r = (dnsSt.geoscan || []).find(x => x.host === host);
   if(!r) return;
   const at = +dnsSt.status.geo_scan_time ? new Date(dnsSt.status.geo_scan_time * 1000).toLocaleString() : '';
@@ -313,10 +315,19 @@ function dnsGeoServerInfo(host){
       t('Из них своим адресом: {0} — для этих доменов годится любой протокол, в том числе игры', fmtCount(r.own)),
       t('Направлено к нему доменов: {0}', fmtCount(dnsGeoFor(host)))]
       .concat(dnsGeoFlaky(host) ? [t('Отвечает через раз: {0} из {1} подключений — в маршрутах после надёжных', ...dnsGeoTry(host))] : [],
-        +dnsSt.status['geo_cert_' + host] ? [t('Не отдал настоящий сертификат сайта для {0} доменов — для них не используется', dnsSt.status['geo_cert_' + host])] : [])
+        +dnsSt.status['geo_cert_' + host] ? [t('Не прошёл проверку по факту для {0} доменов (сертификат сайта или ответ «необычный трафик», «недоступно в стране») — для них не используется', dnsSt.status['geo_cert_' + host])] : [])
     : [t('Не отвечает'), r.err || ''];
+  const off = dnsGeoOff(host);
+  if(off) lines.unshift(t('Отключён вручную: в пул и маршруты не идёт'), '');
   if(at) lines.push('', t('Проверено {0}', at));
-  mdDialog({title: host, text: lines.join('\n'), icon: false, cancel: false, ok: t('Закрыть')});
+  // Ручное отключение: сервер, с которым сайт ведёт себя плохо (Gemini пишет
+  // «необычный трафик»), — убрать из выбора, не дожидаясь проверки
+  if(!await mdDialog({title: host, text: lines.join('\n'), icon: false, cancel: t('Закрыть'),
+    ok: off ? t('Использовать снова') : t('Не использовать')})) return;
+  const x = await withBusy(['dns-geo-off', host, off ? '0' : '1'], 30000);
+  if(x.code){ toast(errText(x, 'Не удалось изменить')); return; }
+  toast(off ? t('{0} снова в выборе', host) : t('{0} больше не используется', host));
+  if(await loadDnsState()) renderDns(); else renderDnsGeo();
 }
 async function dnsGeoScan(){
   const r = await withBusy(['dns-geo-scan'], 60000);
@@ -347,6 +358,13 @@ function dnsDefaultLabel(){
 
 /* IPv6-адрес среди серверов профилей, которые сейчас работают (включённые и
    профиль по умолчанию): 2606:4700::1111, [2001:db8::1]:53, tls://[…] */
+/* Серверы включённых профилей (и профиля по умолчанию), заданные адресом без
+   шифрования: 8.8.8.8, 1.1.1.1:53, [2001:4860::8888] */
+function dnsPlainServers(){
+  const def = dnsSt.status.default_used || dnsSt.status.default;
+  const plain = a => /^(\d+\.\d+\.\d+\.\d+(:\d+)?|\[[0-9a-f:.]+\](:\d+)?|[0-9a-f]*:[0-9a-f]*:[0-9a-f:.]*)$/i.test(a);
+  return [...new Set(dnsSt.profiles.filter(p => p.enabled || p.id === def).flatMap(p => p.servers.filter(plain)))];
+}
 function dnsActiveV6(){
   const def = dnsSt.status.default_used || dnsSt.status.default;
   const v6 = a => /\[[0-9a-f]*:[0-9a-f:.]*\]/i.test(a) || /^[0-9a-f]*:[0-9a-f]*:[0-9a-f:.]*$/i.test(a);
@@ -374,9 +392,14 @@ function dnsWarnings(){
     });
     if(ov.length) w.push(banner('warn', 'warn', t('Домены из списка геоблока есть в профилях {0} — для них работает профиль, а не обход геоблока.', ov.join(', '))));
   }
-  // whoami.akamai.net: на «8.8.8.8» или «1.1.1.1» ответил резолвер оператора
-  if(s.geo_intercept === '1')
-    w.push(banner('warn', 'warn', t('Сеть перехватывает обычные DNS-запросы к публичным серверам (8.8.8.8, 1.1.1.1) — на них отвечает оператор. В профилях такие адреса без шифрования ничего не меняют: указывайте их как tls:// или https://.')));
+  // whoami.akamai.net: на «8.8.8.8» или «1.1.1.1» ответил резолвер оператора.
+  // Касается только профилей, где сервер — адрес без шифрования: остальным
+  // (DoT, DoH, обходу геоблока) это не мешает, и говорить незачем
+  const plain = dnsPlainServers();
+  if(s.geo_intercept === '1' && plain.length){
+    const who = ['google', 'cloudflare'].map(k => s['geo_who_' + k]).filter(v => v && v !== '-').map(v => v.replace('/', ', AS'));
+    w.push(banner('warn', 'warn', t('Сеть перехватывает обычные DNS-запросы: на запрос к 8.8.8.8 или 1.1.1.1 ответил не их сервер, а сервер сети ({0}). Значит, адреса без шифрования в профилях ({1}) на деле отвечает оператор — укажите их как tls:// или https://.', who.join('; ') || '—', plain.join(', '))));
+  }
   // Только когда это кого-то касается: в активных профилях есть IPv6-сервер
   if(s.ipv6 === 'none' && s.rules === 'on' && dnsActiveV6())
     w.push(banner('warn', 'warn', t('Запросы к IPv6-серверам DNS идут мимо: в ядре нет ip6tables nat, а у сети нет IPv4-серверов.')));

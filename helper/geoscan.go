@@ -693,6 +693,7 @@ func (r *scanResult) flaky() bool { return r.okTry > 0 && r.okTry < r.tries }
 // имени: прокси DNS обхода пропускает TLS сайта как есть, и рабочий отдаёт
 // сертификат самого сайта; неработающий рвёт соединение или подставляет
 // чужой (идея — zapretgui, MIT, censorliber: «честен ли DNS» по сертификату).
+// Затем — что отвечает сайт (siteRefuses).
 // Тесты подменяют
 var verifyProxy = func(ip net.IP, host string, wait time.Duration) bool {
 	d := tls.Dialer{NetDialer: &net.Dialer{Timeout: wait}, Config: &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12, RootCAs: rootPool()}}
@@ -702,8 +703,39 @@ var verifyProxy = func(ip net.IP, host string, wait time.Duration) bool {
 	if err != nil {
 		return false
 	}
-	c.Close()
-	return true
+	defer c.Close()
+	// и что отвечает сам сайт: страница «необычный трафик», капча или «не
+	// работает в вашей стране» — прокси сайт не обходит (у Gemini так бывает
+	// у прокси, чей адрес Google считает подозрительным)
+	c.SetDeadline(time.Now().Add(wait))
+	fmt.Fprintf(c, "GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36\r\nAccept: text/html\r\nConnection: close\r\n\r\n", host)
+	b, _ := io.ReadAll(io.LimitReader(c, 32768))
+	return !siteRefuses(string(b))
+}
+
+// siteRefuses — ответ сайта говорит, что через этот адрес его не открыть:
+// код 429, переадресация на страницу «sorry» Google, текст о необычном
+// трафике или о том, что сервис недоступен в стране. Пустой ответ (сервер
+// закрыл соединение после рукопожатия) — не довод: так бывает и у живых
+func siteRefuses(resp string) bool {
+	head, body, _ := strings.Cut(resp, "\r\n\r\n")
+	low := strings.ToLower(head)
+	if f := strings.Fields(head); len(f) >= 2 && f[1] == "429" {
+		return true
+	}
+	for _, l := range strings.Split(low, "\r\n") {
+		if strings.HasPrefix(l, "location:") && (strings.Contains(l, "/sorry/") || strings.Contains(l, "unsupported")) {
+			return true
+		}
+	}
+	low = strings.ToLower(body)
+	for _, m := range []string{"unusual traffic", "our systems have detected", "not available in your country", "isn't supported in your country",
+		"is not supported in your country", "not available in your region", "unsupported_country", "unsupported country"} {
+		if strings.Contains(low, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // proxyTLSPort — порт сайта для verifyProxy (тесты подменяют)

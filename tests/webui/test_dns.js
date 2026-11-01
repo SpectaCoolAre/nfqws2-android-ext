@@ -68,7 +68,7 @@ window.__presets = ${JSON.stringify(PRESETS)};
       'private=' + st.priv, 'private_host=' + st.privHost, 'net_dns=192.168.1.1', 'hits=' + (on ? 1234 : 0), 'error=',
       'max_profiles=32', 'max_servers=8', 'max_domains=1000', 'smart=' + (window.__smart === 0 ? 0 : 1),
       'cdn=' + (st.enabled && window.__smart !== 0 ? 'running' : ''),
-      'geo=' + (window.__geo !== 0 ? 'on' : 'off'), 'geo_domains=' + st.geoN, 'geo_updated=' + st.geoAt, 'geo_pool=dns.fast.example', 'geo_for_dns.fast.example=600', 'geo_for_dns.ai.example=12', 'geo_direct=110', 'geo_try_dns.ai.example=2/3', 'geo_intercept=1', 'geo_cert_dns.ai.example=4', 'geo_overlap_x=2', 'geo_scan_time=1767225600',
+      'geo=' + (window.__geo !== 0 ? 'on' : 'off'), 'geo_domains=' + st.geoN, 'geo_updated=' + st.geoAt, 'geo_pool=dns.fast.example', 'geo_for_dns.fast.example=600', 'geo_for_dns.ai.example=12', 'geo_direct=110', 'geo_try_dns.ai.example=2/3', 'geo_intercept=1', 'geo_off=' + (st.geoOff || ''), 'geo_who_net=213.87.1.1/8359', 'geo_who_google=213.87.1.1/8359', 'geo_who_cloudflare=-', 'geo_cert_dns.ai.example=4', 'geo_overlap_x=2', 'geo_scan_time=1767225600',
       '#geoscan', 'dns.fast.example\tok\t40\t610\t722\t5\ttls', 'dns.ai.example\tok\t20\t40\t722\t12\ttls',
       'dns.dead.example\tfail\t0\t0\t722\t0\t-\ttimeout', '#status'];
     Object.keys(st.profiles).forEach(id => { out.push('#profile ' + id); out = out.concat(st.profiles[id].split('\\n')); });
@@ -85,6 +85,7 @@ window.__presets = ${JSON.stringify(PRESETS)};
       case 'dns-save-b64': try { st.profiles[a[1]] = norm(dec(a[2])); return [0, 'OK']; } catch (e) { return [1, '', String(e)]; }
       case 'dns-profile-enable': st.profiles[a[1]] = st.profiles[a[1]].replace(/ENABLED=\\d/, 'ENABLED=' + a[2]); return [0, 'OK'];
       case 'dns-geo-scan': return [0, 'dns.fast.example'];
+      case 'dns-geo-off': st.geoOff = a[2] === '1' ? a[1] : ''; return [0, 'OK'];
       case 'dns-geo-update': st.geoN = 731; st.geoAt = 1767225600; return [0, '731'];
       case 'dns-delete': a.slice(1).forEach(id => { delete st.profiles[id]; if (st.def === id) st.def = 'net'; }); return [0, 'OK'];
     }
@@ -208,7 +209,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     truthy((await page.textContent('#dns-general')).includes('Не активно'), 'the state says nothing is applied yet');
     eq(false, (await page.textContent('#dns-general')).includes('DNS по умолчанию'), 'smart mode: no default DNS row — everything else goes to the network DNS');
     truthy((await page.textContent('#dns-warn')).includes('Домены из списка геоблока есть в профилях x (2)'), 'a profile that takes domains of the geo-block list away from the bypass is warned about');
-    truthy((await page.textContent('#dns-warn')).includes('Сеть перехватывает обычные DNS-запросы'), 'interception of plain DNS by the network is warned about');
+    eq(false, (await page.textContent('#dns-warn')).includes('перехватывает'), 'interception of plain DNS is not mentioned while no profile has plain addresses — nothing to fix');
     let geoTxt = await page.textContent('#dns-geo');
     truthy(geoTxt.includes('DNS: dns.fast.example'), 'the geo-block bypass line names the DNS in use');
     eq(false, geoTxt.includes('dns.dead.example') || geoTxt.includes('Comss') && geoTxt.includes('GeoHide'), 'folded: no server list and no provider choice');
@@ -222,7 +223,19 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     await page.waitForSelector('#dialog-wrap.open');
     const info = await page.textContent('#dialog-wrap');
     truthy(info.includes('Обходит геоблок для 40 из 722 доменов списка') && info.includes('Из них своим адресом: 12') && info.includes('Направлено к нему доменов: 12') && info.includes('Отвечает через раз: 2 из 3') && info.includes('для 4 доменов'), 'a tap on a server shows what it bypasses, what goes to it and how reliable it is');
-    await page.click('#d-ok'); await page.waitForTimeout(400);
+    truthy((await page.textContent('#d-ok')).includes('Не использовать'), 'a server can be switched off by hand from there');
+    await page.click('#d-cancel'); await page.waitForTimeout(400);
+    eq(false, await page.evaluate(() => window.__dns.calls.some(c => c.startsWith('dns-geo-off'))), 'closing the dialog changes nothing');
+    await page.click('#dns-geo .list-item:has-text("dns.ai.example")');
+    await page.waitForSelector('#dialog-wrap.open');
+    await page.click('#d-ok'); await idle(); await page.waitForTimeout(400);
+    truthy(await page.evaluate(() => window.__dns.calls.includes('dns-geo-off dns.ai.example 1')), '«Don\'t use» switches it off');
+    truthy((await page.textContent('#dns-geo')).includes('отключён вручную'), 'and the list says so');
+    await page.click('#dns-geo .list-item:has-text("dns.ai.example")');
+    await page.waitForSelector('#dialog-wrap.open');
+    truthy((await page.textContent('#dialog-wrap')).includes('Отключён вручную') && (await page.textContent('#d-ok')).includes('Использовать снова'), 'its dialog offers to use it again');
+    await page.click('#d-ok'); await idle(); await page.waitForTimeout(400);
+    truthy(await page.evaluate(() => window.__dns.calls.includes('dns-geo-off dns.ai.example 0')), 'and back on');
     await page.click('#dns-geo .clickable:has-text("Проверить DNS сейчас")'); await idle(); await page.waitForTimeout(300);
     truthy(await page.evaluate(() => window.__dns.calls.includes('dns-geo-scan')), 'the check can be run at once');
     truthy(geoTxt.includes('geoblock.list · доменов: 722'), 'the service list shows its size');
@@ -428,6 +441,8 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     state = await page.textContent('#dns-general');
     truthy(state.includes('Работает'), 'DNS works with the service stopped');
     truthy(state.includes('остальное — через DNS сети (192.168.1.1)'), 'the network DNS is shown when it is the default');
+    const warnTxt = await page.textContent('#dns-warn');
+    truthy(warnTxt.includes('ответил не их сервер, а сервер сети (213.87.1.1, AS8359)') && warnTxt.includes('(8.8.8.8, 8.8.4.4)'), 'an enabled profile with plain addresses: the warning says who really answered and which addresses to change');
     await shot('standalone');
     await page.evaluate(() => { window.__dns.service = true; });
 

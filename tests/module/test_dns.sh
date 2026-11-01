@@ -623,7 +623,7 @@ assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "-boot 192.168.1.1:53" "refere
 assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "dns.zapret.moe" "all the DoT servers of the list are checked"
 assert_eq "chatgpt.com claude.ai" "$(tr '\n' ' ' < "$MOCK_DIR/geoscan.list" | sed 's/ $//')" "on every domain of the list, not on a few samples"
 assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "-asncache $DNS_GEO_SCAN_DIR/asn.cache" "network numbers are cached"
-assert_eq "fast.example mid.example next.example" "$(dns_geo_pick | tr '\n' ' ' | sed 's/ $//')" "the common pool: the three fastest of those that bypass the most domains"
+assert_eq "fast.example" "$(dns_geo_pick)" "the common pool: one server — the fastest of those that bypass the most domains (several at once gave a site different exit addresses in one session)"
 assert_not_contains "$(dns_geo_pick)" "ai.example" "a faster server that bypasses fewer stays out of it"
 assert_eq "applied" "$(cat "$MOCK_DIR/geo.applied")" "a new pool is applied at once"
 ctl dns-geo-scan
@@ -639,9 +639,18 @@ assert_rc 1 $? "after a check nothing is due for hours"
 dns_build
 geo=$(grep '/chatgpt.com/' "$DNS_RUN_DIR/upstreams.txt")
 assert_contains "$geo" "]tls://fast.example" "a domain without a route goes to the pool over DoT"
-assert_eq "3" "$(printf '%s\n' "$geo" | grep -c .)" "to the three of it"
-assert_contains "$geo" "]https://mid.example/dns-query" "a server that got through only over DoH on this network goes there over DoH"
-assert_eq "fast.example, mid.example, next.example" "$(dns_geo_label)" "the log and the screen name the pool"
+assert_eq "1" "$(printf '%s\n' "$geo" | grep -c .)" "to it alone"
+assert_eq "fast.example" "$(dns_geo_label)" "the log and the screen name the pool"
+# Закреплённый сервер пула остаётся, пока обходит не меньше 90% от лучшего
+echo "* mid.example" > "$(dns_geo_scan_file).pin"
+assert_eq "mid.example" "$(dns_geo_pick)" "the pinned server stays, though another is faster"
+dns_build
+assert_contains "$(grep '/chatgpt.com/' "$DNS_RUN_DIR/upstreams.txt")" "]https://mid.example/dns-query" "a server that got through only over DoH on this network goes there over DoH"
+echo "* ai.example" > "$(dns_geo_scan_file).pin"
+assert_eq "fast.example" "$(dns_geo_pick)" "a pinned server far behind the best is let go"
+dns_geo_pin_save
+assert_contains "$(cat "$(dns_geo_scan_file).pin")" "* fast.example" "and the new one is pinned"
+dns_build
 rm -f "$MOCK_DIR/geo.applied"; dns_geo_scan
 assert_no_file "$MOCK_DIR/geo.applied" "the same pool again — nothing to apply"
 sed -i '1s/^#time=[0-9]*/#time=1/' "$(dns_geo_scan_file)"
@@ -666,7 +675,7 @@ mv "$HELPER_BIN" "$HELPER_BIN.ok"
 printf '#!/bin/sh\nprintf "fast.example\\tfail\\t0\\t0\\t2\\t0\\t-\\tnetwork is unreachable\\n"\n' > "$HELPER_BIN"; chmod 0755 "$HELPER_BIN"
 dns_geo_scan >/dev/null
 assert_eq "$good" "$(cat "$(dns_geo_scan_file)")" "a check nobody answered keeps the working result (no errors on the screen)"
-assert_eq "fast.example mid.example next.example" "$(dns_geo_pick | tr '\n' ' ' | sed 's/ $//')" "and the pool"
+assert_eq "fast.example" "$(dns_geo_pick)" "and the pool"
 assert_contains "$(tail -n 1 "$DNS_LOG")" "ни один сервер не ответил" "the DNS log says why"
 dns_geo_scan_due
 assert_rc 1 $? "no new check at once"
@@ -700,7 +709,7 @@ printf 'chatgpt.com\nab.chatgpt.com\nclashofclans.com\nintel.com\nopenai.com\n' 
   printf '=gone.example\tdead.example\n'
   printf '?whoami\tnet=93.1.1.1/8359\tgoogle=93.1.1.1/8359\tcloudflare=-\tintercept=1\n'
 } > "$(dns_geo_scan_file)"
-assert_eq "chatgpt.com	comss.example	https|chatgpt.com	zapret.example	tls|clashofclans.com	comss.example	https|intel.com	-" "$(dns_geo_routes | sort | tr '\n' '|' | sed 's/|$//')" "routes come from the check, with each server's protocol (a dead one is dropped)"
+assert_eq "chatgpt.com	zapret.example	tls|clashofclans.com	comss.example	https|intel.com	-" "$(dns_geo_routes | sort | tr '\n' '|' | sed 's/|$//')" "routes come from the check, one server a domain, with its protocol (a dead one is dropped)"
 assert_eq "comss.example" "$(dns_geo_pick)" "the common pool: the one that bypasses the most (route lines are not servers)"
 dns_build
 up=$(cat "$DNS_RUN_DIR/upstreams.txt")
@@ -711,9 +720,10 @@ assert_not_contains "$up" "/intel.com/" "a domain no server bypasses goes to the
 assert_contains "$(grep '/openai.com/' "$DNS_RUN_DIR/upstreams.txt")" "]https://comss.example/dns-query" "a domain without data — to the common pool"
 assert_eq "geo" "$(dns_pid() { echo 1; }; dns_route chatgpt.com)" "a per-domain route still counts as the geo-block bypass"
 st=$(dns_state)
-assert_contains "$st" "geo_for_comss.example=2" "the screen learns how many domains go to a server"
+assert_contains "$st" "geo_for_comss.example=1" "the screen learns how many domains go to a server"
 assert_contains "$st" "geo_direct=1" "and how many to the network DNS"
 assert_contains "$st" "geo_intercept=1" "and that the network intercepts plain DNS"
+assert_contains "$st" "geo_who_google=93.1.1.1/8359" "with who really answered"
 assert_not_contains "$(printf '%s\n' "$st" | sed -n '/^#geoscan/,/^#/p')" "=chatgpt.com" "route lines stay out of the server list"
 # Частая проверка: домены списка, которыми пользуются, — раз в полчаса;
 # полная — раз в 4 часа; в спячке — ни та ни другая
@@ -767,6 +777,36 @@ dns_geo_scan >/dev/null
 assert_no_file "$(dns_geo_scan_file).hot" "a full check replaces the frequent one"
 assert_contains "$(cat "$MOCK_DIR/geoscan.list")" "gamea.clashofclans.com" "and checks the used names too"
 rm -rf "$SMART_DIR"
+# Все домены одного сайта — через один сервер: разные прокси в одной сессии —
+# разные адреса выхода, и Google отвечает «unusual traffic». Закреплённый
+# сервер сайта остаётся, пока годится; отключённый вручную не берётся
+{ printf '#time=%s boot=x v=2\n' "$(date +%s)"
+  printf 'a.example\tok\t20\t3\t3\t0\ttls\n'
+  printf 'b.example\tok\t30\t3\t3\t0\ttls\n'
+  printf '=gemini.google.com\ta.example,b.example\n'
+  printf '=aistudio.google.com\tb.example,a.example\n'
+  printf '=accounts.google.com\tb.example\n'
+} > "$(dns_geo_scan_file)"
+rm -f "$(dns_geo_scan_file).pin" "$(dns_geo_scan_file).hot"
+assert_eq "accounts.google.com	b.example	tls|aistudio.google.com	b.example	tls|gemini.google.com	b.example	tls" "$(dns_geo_routes | sort | tr '\n' '|' | sed 's/|$//')" "the whole site goes through the server most of its domains can use"
+echo "google.com a.example" > "$(dns_geo_scan_file).pin"
+assert_eq "accounts.google.com	b.example	tls|aistudio.google.com	a.example	tls|gemini.google.com	a.example	tls" "$(dns_geo_routes | sort | tr '\n' '|' | sed 's/|$//')" "a pinned server keeps the site (a domain it cannot serve takes its own)"
+dns_geo_pin_save
+assert_contains "$(cat "$(dns_geo_scan_file).pin")" "google.com a.example" "the pin is kept"
+echo a.example > "$DNS_GEO_OFF"
+assert_not_contains "$(dns_geo_routes)" "a.example" "a server switched off by hand is not used"
+assert_eq "b.example" "$(dns_geo_pick)" "nor in the pool"
+ctl dns-geo-off a.example 0
+assert_rc 0 "$ctl_rc" "it is switched back on from the screen"
+assert_contains "$(dns_geo_routes)" "a.example" "and used again"
+ctl dns-geo-off b.example 1
+assert_eq "b.example" "$(cat "$DNS_GEO_OFF")" "switching off is remembered"
+st=$(dns_state)
+assert_contains "$st" "geo_off=b.example" "and shown on the screen"
+ctl dns-geo-off b.example 0
+ctl dns-geo-off 'bad host' 1
+assert_rc 1 "$ctl_rc" "a bad name is refused"
+rm -f "$(dns_geo_scan_file).pin" "$DNS_GEO_OFF"
 printf 'chatgpt.com\nclaude.ai\n' > "$DNS_GEO_LIST"
 dns_geo_scan >/dev/null
 unset -f dns_apply_now
