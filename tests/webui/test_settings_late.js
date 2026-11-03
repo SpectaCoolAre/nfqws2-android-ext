@@ -37,7 +37,7 @@ window.ksu = { exec: function(cmd, o, cb){
   else if (cmd.indexOf("'changelog'") >= 0) out = ${JSON.stringify(CHANGELOG)};
   else if (cmd.indexOf("'strategy-path'") >= 0) out = '/data/adb/modules/nfqws2/strategies/alt2.conf';
   else if (cmd.indexOf("'strategy-get-b64'") >= 0) out = btoa('--filter-tcp=443\\n');
-  var delay = cmd.indexOf('json-status') >= 0 && !window.__stDone ? 2000 : 0;
+  var delay = cmd.indexOf('json-status') >= 0 && !window.__stDone ? 5000 : 0;
   if (cmd.indexOf('json-status') >= 0) window.__stDone = true;
   setTimeout(function(){ if (window[id]) window[id](rc, out, ''); }, delay);
   return 'job';
@@ -75,7 +75,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   await page.waitForTimeout(300);
   const dnsRow = () => page.$$eval('#settings-body .li-primary', r => r.some(e => e.textContent.trim() === 'DNS профили'));
   eq(false, await dnsRow(), 'no status yet — no DNS row');
-  await page.waitForTimeout(2600);
+  await page.waitForTimeout(5600);
   eq(true, await dnsRow(), 'the status arrives — the DNS row appears without leaving the page');
   eq('settings', await page.evaluate(() => currentPage), 'still on settings');
   eq(0, errors.length, 'no page errors' + (errors.length ? ': ' + errors.join('; ') : ''));

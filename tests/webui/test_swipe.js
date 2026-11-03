@@ -58,6 +58,9 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   }
   const ctx = await browser.newContext({ viewport: { width: 380, height: 560 }, hasTouch: true, isMobile: true });
   await ctx.addInitScript(STUB);
+  // UI_DESIGN=miuix — те же жесты в дизайне HyperOS
+  const MX = process.env.UI_DESIGN === 'miuix';
+  if (MX) await ctx.addInitScript(() => { try { localStorage.setItem('ui_design', 'miuix'); } catch (e) {} });
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -81,7 +84,10 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     return [Math.round(r.left), Math.round(r.top), Math.round(r.width), document.documentElement.scrollWidth].join(); });
   const NAV0 = await navGeo();
   const shown = () => page.evaluate(() => [...document.querySelectorAll('.page')]
-    .filter(e => getComputedStyle(e).display !== 'none').map(e => e.dataset.page).sort().join(','));
+    .filter(e => getComputedStyle(e).display !== 'none' && getComputedStyle(e).visibility !== 'hidden').map(e => e.dataset.page).sort().join(','));
+  // остальные вкладки держатся разложенными, но невидимыми — свайп показывает готовую страницу
+  const warm = () => page.evaluate(() => [...document.querySelectorAll('.page.warm')]
+    .filter(e => getComputedStyle(e).display !== 'none' && getComputedStyle(e).visibility === 'hidden').map(e => e.dataset.page).sort().join(','));
 
   sect('tap in the navigation bar');
   // Сдвиг идёт анимацией в композиторе (300 мс); под нагрузкой он успевал
@@ -101,6 +107,8 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   await page.evaluate(() => window.__slide.forEach(a => a.play()));
   await page.waitForTimeout(500);
   eq('config', await shown(), 'after the slide only config is on screen');
+  eq('control,lists,settings', await warm(), 'the other tabs stay laid out but invisible: the next swipe shows a ready page');
+  eq(0, await page.evaluate(() => document.querySelector('.page[data-page="lists"]').offsetHeight > 0 ? 0 : 1), 'a hidden tab keeps its layout (has height)');
   await page.click('.nav-dest[data-page="control"]');
   await page.waitForTimeout(600);
   eq('control', await cur(), 'and back to state');
@@ -199,7 +207,11 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   await touch(line(190, 200, 190, 440, 12), { mid: async () => { pulled = await page.evaluate(() => ({
     page: document.querySelector('.page.active').style.transform,
     nav: [getComputedStyle($('nav-bar')).transform, Math.round($('nav-bar').getBoundingClientRect().top)].join() })); } });
-  truthy(/scaleY\(1\.0\d+\)/.test(pulled.page), 'pulling down at the top stretches the page: ' + pulled.page);
+  if (MX) {
+    // HyperOS: страница не растягивается, а сдвигается с затуханием (miuix overScrollVertical)
+    const dy = +((/translateY\(([\d.]+)px\)/.exec(pulled.page) || [])[1] || 0);
+    truthy(dy > 20 && dy < 240, 'pulling down at the top moves the page down, damped, not stretched: ' + pulled.page);
+  } else truthy(/scaleY\(1\.0\d+\)/.test(pulled.page), 'pulling down at the top stretches the page: ' + pulled.page);
   eq(navBefore, pulled.nav, 'the navigation bar stays put');
   const tm = await page.evaluate(() => window.__tm);
   truthy(tm[1] > 0 && tm[1] >= tm[0] - 1, `while the page stretches the browser does not get the pull (${tm[1]} of ${tm[0]} moves held back)`);
@@ -264,6 +276,64 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   await page.waitForTimeout(600);
   await touch(line(300, 300, 80, 300, 12));
   eq('logs', await cur(), 'child screens do not swipe');
+
+  sect('a swipe that starts with a slight downward move');
+  // У края страницы палец, чуть ушедший вниз, сначала начинал оттягивание. Когда
+  // жест забирал свайп, оттягивание отпускалось анимацией на той же странице, и
+  // полсекунды она держала страницу на месте: соседняя вкладка уже въезжала,
+  // а текущая стояла (видео с телефона)
+  await page.evaluate(() => { navigate('control'); }); await page.waitForTimeout(700);
+  await page.evaluate(() => scrollToY(0));
+  const dpts = [[300, 300], [300, 302], [299, 304]];
+  for (let i = 1; i <= 8; i++) dpts.push([299 - i * 14, 304]);
+  let pair = null;
+  await touch(dpts, { mid: async () => { pair = await page.evaluate(() => {
+    const f = document.querySelector('.page[data-page="control"]'), p = document.querySelector('.page.peek');
+    return { gap: p ? Math.round(p.getBoundingClientRect().left - f.getBoundingClientRect().left) : -1, anims: f.getAnimations().length, w: innerWidth,
+      moved: Math.round(f.getBoundingClientRect().left) }; }); } });
+  eq(pair.w, pair.gap, 'the current tab and the neighbour move together, a screen apart');
+  eq(0, pair.anims, 'nothing holds the current tab back while the finger drags it');
+  truthy(pair.moved < -60, 'the current tab follows the finger at once: ' + pair.moved + 'px');
+  if (await cur() !== 'lists') await page.evaluate(() => navigate('lists'));
+  await page.waitForTimeout(600);
+
+  sect('a scroll that runs into the edge without lifting the finger');
+  // Жестом ведёт браузер (касание уже нельзя отменить): оттягивать нельзя —
+  // на обратном ходе браузер прокручивал страницу, а оттягивание ещё и
+  // возвращало её, и страница ехала быстрее пальца
+  await page.evaluate(() => { $('content').style.minHeight = '3000px'; scrollToY(scroller.scrollHeight - scroller.clientHeight - 60); });
+  await page.waitForTimeout(300);
+  const tr = [];
+  const spts = [[200, 450]];
+  for (let i = 1; i <= 12; i++) spts.push([200, 450 - i * 15]);
+  for (let i = 1; i <= 12; i++) spts.push([200, 270 + i * 15]);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 200, y: 450 }] });
+  for (const [x, y] of spts.slice(1)) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y }] });
+    await page.waitForTimeout(20);
+    tr.push(await page.evaluate(() => [Math.round(new DOMMatrix(getComputedStyle(document.querySelector('.page.active')).transform).m42), Math.round(scroller.scrollTop)]));
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await page.waitForTimeout(600);
+  eq(0, Math.max(...tr.map(t => Math.abs(t[0]))), 'the page is not pulled past the edge by a gesture the browser leads');
+  const back = tr.slice(12).map(t => t[1]), steps = back.slice(1).map((v, i) => back[i] - v).filter(d => d);
+  truthy(steps.length > 4 && steps.every(d => d <= 16), 'on the way back the page goes with the finger, not faster: ' + steps.join(','));
+  await page.evaluate(() => { $('content').style.minHeight = ''; scrollToY(0); });
+
+  sect('holding the logs icon anywhere on it');
+  // кнопка журналов у правого края: удержание её правой трети раньше
+  // пропускалось как «жест назад», и долгое нажатие срабатывало через раз
+  await page.evaluate(() => { window.__lp = 0; window.logsLongAction = () => { __lp++; }; });
+  const lb = await page.evaluate(() => { const b = $('logs-btn').getBoundingClientRect(); return [b.left, b.right, b.top + b.height / 2]; });
+  for (const k of [.2, .5, .85]) {
+    const x = lb[0] + (lb[1] - lb[0]) * k;
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y: lb[2] }] });
+    await page.waitForTimeout(700);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await page.waitForTimeout(400);
+  }
+  eq(3, await page.evaluate(() => __lp), 'a long press works on the left, the middle and the right part of the icon');
+  eq('lists', await cur(), 'and none of them opens the logs');
 
   eq(0, errors.length, 'no page errors' + (errors.length ? ': ' + errors.join('; ') : ''));
   await browser.close();

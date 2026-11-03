@@ -201,6 +201,18 @@ assert_eq "10201" "$(resolve_app_uids)" "single package resolves"
 : > "$CONFDIR/apps.list"
 assert_eq "" "$(resolve_app_uids)" "empty apps.list resolves to nothing"
 
+# Рабочие профили и другие пользователи (Shelter, Island; оригинал, aadd63e)
+export MOCK_USERS="0 10"
+printf 'com.termux\n' > "$CONFDIR/apps.list"
+assert_eq "10201,1010201" "$(resolve_app_uids)" "a bare package resolves in every profile"
+printf '10:com.termux\n' > "$CONFDIR/apps.list"
+assert_eq "1010201" "$(resolve_app_uids)" "10:pkg resolves only in profile 10 (work)"
+printf '0:com.termux\n' > "$CONFDIR/apps.list"
+assert_eq "10201" "$(resolve_app_uids)" "0:pkg resolves only in the personal profile"
+printf '10:com.termux\ncom.example.browser\n' > "$CONFDIR/apps.list"
+assert_eq "10123,1010123,1010201" "$(resolve_app_uids)" "profile-specific and bare entries mix"
+unset MOCK_USERS
+
 # ── _startup_args ─────────────────────────────────────────────────────────────
 section "_startup_args"
 

@@ -982,26 +982,68 @@ func loadShared(path string) map[string]map[string]int {
 	return out
 }
 
-// geoScan — все серверы разом; эталон — ответы DNS сети на те же домены
+// refServers — честные DNS для эталона ответов («адрес настоящий»): не DNS
+// сети, а независимые. Дома DNS сети — роутер, и он сам может обходить
+// геоблок (Comss, malw в его настройках); тогда эталон — адреса прокси, и
+// всё переворачивается: сервер с настоящим адресом Google выглядит
+// обходящим, а Comss — нет (Gemini и Clash of Clans дома получали серверы,
+// которые их не обходят). Элемент — «адрес:53» (UDP) или «https://имя»
+// (DoH: его роутер не перехватит). По очереди: домен без ответа — у
+// следующего; DNS сети — последний. Пусто — эталон только DNS сети
+var refServers []string
+
+func refAnswers(names []string, boot string, wait time.Duration) [][]net.IP {
+	real := make([][]net.IP, len(names))
+	for _, srv := range append(append([]string(nil), refServers...), boot) {
+		var todo []int
+		for i := range names {
+			if len(real[i]) == 0 {
+				todo = append(todo, i)
+			}
+		}
+		if len(todo) == 0 {
+			break
+		}
+		if strings.HasPrefix(srv, "https://") {
+			host := strings.TrimSuffix(strings.TrimPrefix(srv, "https://"), "/dns-query")
+			sub := make([]string, len(todo))
+			for k, i := range todo {
+				sub[k] = names[i]
+			}
+			r := dohScan(host, sub, boot, wait)
+			for k, i := range todo {
+				if k < len(r.ans) && len(r.ans[k]) > 0 {
+					real[i] = r.ans[k]
+				}
+			}
+			continue
+		}
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, 32)
+		for _, i := range todo {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				real[i], _ = udpResolve(srv, names[i], wait)
+			}(i)
+		}
+		wg.Wait()
+	}
+	return real
+}
+
+// geoScan — все серверы разом; эталон — ответы честного DNS (refServers),
+// иначе DNS сети, на те же домены
 func geoScan(servers, names []string, boot string, wait time.Duration) []scanResult {
 	// время: эталон — до четверти, серверы — половина, номера AS — остаток
 	refWait, scanWait, asnWait := wait/4, wait/2, wait/4
 	if refWait > 4*time.Second {
 		refWait = 4 * time.Second
 	}
-	real := make([][]net.IP, len(names))
+	real := refAnswers(names, boot, refWait)
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 32)
-	for i, s := range names {
-		wg.Add(1)
-		go func(i int, s string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			real[i], _ = udpResolve(boot, s, refWait)
-		}(i, s)
-	}
-	wg.Wait()
 	res := make([]scanResult, len(servers))
 	for i, s := range servers {
 		wg.Add(1)

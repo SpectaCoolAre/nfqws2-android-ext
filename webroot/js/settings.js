@@ -15,13 +15,18 @@ function settingsRow(o){
         ' onchange="' + o.on + '"></span>' +
     '</label>';
   }
+  // tone — цвет значка в HyperOS (цветной квадрат на главной настроек);
+  // mxValue — значение справа в HyperOS (там строка-указатель без пояснения);
+  // menu — в HyperOS справа ⇅: строка открывает выбор, а не переход
   return '<div class="list-item' + (o.sub ? ' two-line' : '') + (o.on ? ' clickable state' : '') + '"' +
     (o.long ? ' data-long="' + o.long + '"' : '') +
     (o.on ? ' role="button" tabindex="0"' + (o.menu ? ' aria-haspopup="menu"' : '') + ' onclick="' + o.on + '"' : '') + '>' +
-    '<span class="li-icon">' + icon(o.icon, 's24') + '</span>' +
+    '<span class="li-icon"' + (o.tone ? ' data-tone="' + o.tone + '"' : '') + '>' + icon(o.icon, 's24') + '</span>' +
     '<span class="li-text"><span class="li-primary">' + esc(t(o.title)) + '</span>' +
       (o.sub ? '<span class="li-secondary">' + esc(o.sub) + '</span>' : '') + '</span>' +
     (o.value ? '<span class="li-trail li-value">' + esc(o.value) + '</span>' : '') +
+    (o.mxValue ? '<span class="li-trail li-value mx-only">' + esc(o.mxValue) + '</span>' : '') +
+    (o.menu ? '<span class="li-trail mx-only">' + icon('unfold', 's20') + '</span>' : '') +
     (o.chevron ? '<span class="li-trail">' + icon('chevron-right', 's24') + '</span>' : '') +
   '</div>';
 }
@@ -30,25 +35,25 @@ function renderSettings(){
   const groups = [
     ['Инструменты', (S.dns_available == 1 ? [
       // только если в модуле есть dnsproxy
-      {icon: 'dns', title: 'DNS профили', sub: t('Свои DoH, DoT и DNS-серверы для выбранных доменов'), on: "navigate('dns')", chevron: true, long: 'dns'}
+      {icon: 'dns', tone: 'blue', title: 'DNS профили', sub: t('Свои DoH, DoT и DNS-серверы для выбранных доменов'), on: "navigate('dns')", chevron: true, long: 'dns'}
     ] : []).concat([
-      {icon: 'edit', title: 'Редактор hosts', sub: t('Обход ограничений и блокировка рекламы — без перезагрузки'), on: "navigate('hosts')", chevron: true},
-      {icon: 'tune', title: 'Работа модуля', sub: t('Паузы на Wi‑Fi и при VPN, автозапуск, IPv6, QUIC, точка доступа') + ' · ' + homeN, on: "navigate('work')", chevron: true},
-      {icon: 'apps', title: 'Фильтр приложений', sub: t('Обход только для выбранных приложений или для всех, кроме них'), on: "navigate('apps')", chevron: true},
-      {icon: 'test', title: 'Проверка доступности', sub: t('Открывает адреса из probe_hosts.list через обход'), on: "navigate('test')", chevron: true},
-      {icon: 'medical', title: 'Диагностика', sub: t('Ядро, правила iptables и аргументы запуска'), on: "navigate('diag')", chevron: true}
+      {icon: 'edit', tone: 'orange', title: 'Редактор hosts', sub: t('Обход ограничений и блокировка рекламы — без перезагрузки'), on: "navigate('hosts')", chevron: true},
+      {icon: 'tune', tone: 'indigo', title: 'Работа модуля', sub: t('Паузы на Wi‑Fi и при VPN, автозапуск, IPv6, QUIC, точка доступа') + ' · ' + homeN, on: "navigate('work')", chevron: true},
+      {icon: 'apps', tone: 'green', title: 'Фильтр приложений', sub: t('Обход только для выбранных приложений или для всех, кроме них'), on: "navigate('apps')", chevron: true},
+      {icon: 'test', tone: 'teal', title: 'Проверка доступности', sub: t('Открывает адреса из probe_hosts.list через обход'), on: "navigate('test')", chevron: true},
+      {icon: 'medical', tone: 'red', title: 'Диагностика', sub: t('Ядро, правила iptables и аргументы запуска'), on: "navigate('diag')", chevron: true}
     ])],
     ['Резервная копия', [
-      {icon: 'download', title: 'Создать копию', sub: t('Конфиг, списки, стратегии и оформление — в архив .tar'), on: 'createBackup()'},
-      {icon: 'upload', title: 'Восстановить из копии', sub: t('Выбрать архив .tar или из списка'), on: 'openBackupSheet()'}
+      {icon: 'download', tone: 'blue', title: 'Создать копию', sub: t('Конфиг, списки, стратегии и оформление — в архив .tar'), on: 'createBackup()'},
+      {icon: 'upload', tone: 'green', title: 'Восстановить из копии', sub: t('Выбрать архив .tar или из списка'), on: 'openBackupSheet()'}
     ]],
     ['Оформление', [
-      {icon: 'palette', title: 'Тема оформления', sub: t('Светлая, тёмная, AMOLED и цвет акцента'), on: 'openMonetModal()'},
-      {icon: 'apps', title: 'Ярлык на рабочий стол', sub: t('Добавить на главный экран телефона'), on: 'addDesktopShortcut()'},
-      {icon: 'translate', title: 'Язык', sub: LANG === 'en' ? 'English' : 'Русский', on: 'pickLanguage(this)', menu: true, long: 'lang'}
+      {icon: 'palette', tone: 'purple', title: 'Тема оформления', sub: t('Светлая, тёмная, AMOLED и цвет акцента'), on: 'openMonetModal()'},
+      {icon: 'apps', tone: 'orange', title: 'Ярлык на рабочий стол', sub: t('Добавить на главный экран телефона'), on: 'addDesktopShortcut()'},
+      {icon: 'translate', tone: 'blue', title: 'Язык', sub: LANG === 'en' ? 'English' : 'Русский', mxValue: LANG === 'en' ? 'English' : 'Русский', on: 'pickLanguage(this)', menu: true, long: 'lang'}
     ]],
     ['О модуле', [
-      {icon: 'info', title: 'nfqws2-android-ext', sub: t('Версия {0}', S.version || '—'), on: 'openUrl(' + jsArg(GITHUB_URL) + ')', chevron: true, long: 'ver'}
+      {icon: 'info', tone: 'gray', title: 'nfqws2-android-ext', sub: t('Версия {0}', S.version || '—'), mxValue: S.version || '—', on: 'openUrl(' + jsArg(GITHUB_URL) + ')', chevron: true, long: 'ver'}
     ]]
   ];
   let devHtml = '';
@@ -239,7 +244,7 @@ async function setHomeWifi(on){
 }
 
 /* ══ РЕЗЕРВНАЯ КОПИЯ ═════════════════════════════════════════════════════ */
-const UI_KEYS = ['m3_seed', 'm3_mode', 'm3_amoled', 'm3_containers', 'm3_monochrome', 'nfq_lang', 'nfq_dev'];
+const UI_KEYS = ['m3_seed', 'm3_mode', 'm3_amoled', 'm3_containers', 'm3_monochrome', 'ui_design', 'nfq_lang', 'nfq_dev'];
 async function createBackup(){
   const dir = SAVE_DIR_DEFAULT;
   const ui = {};

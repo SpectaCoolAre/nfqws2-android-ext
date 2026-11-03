@@ -8,21 +8,26 @@ const APP_MODES = [
   ['include', 'Только выбранные', 'Трафик остальных приложений идёт напрямую'],
   ['exclude', 'Все, кроме выбранных', 'Выбранные приложения идут напрямую']
 ];
+let pkgsCheckedAt = 0;
 async function appsInit(){
-  renderAppModes();
   if(pkgs.length){
     drawPk();
     // Тихая сверка: ставили или удаляли приложения — модуль пересоберёт
-    // список сам, и экран обновится без спиннера (из оригинала, 0badd3d)
-    ctlx(['list-apps']).then(r => {
-      const raw = (r.out || '').trim();
-      if(r.code || !raw.startsWith('[')) return;
-      try {
-        const next = JSON.parse(raw);
-        if(JSON.stringify(next) !== JSON.stringify(pkgs)){ pkgs = next; drawPk(false); }
-      } catch(_) {}
-    });
+    // список сам, и экран обновится без спиннера (из оригинала, 0badd3d).
+    // Список везёт значки в base64 — не чаще раза в минуту (оригинал, 4bae987)
+    if(Date.now() - pkgsCheckedAt > 60000){
+      pkgsCheckedAt = Date.now();
+      ctlx(['list-apps']).then(r => {
+        const raw = (r.out || '').trim();
+        if(r.code || !raw.startsWith('[')) return;
+        try {
+          const next = JSON.parse(raw);
+          if(next.length !== pkgs.length || JSON.stringify(next) !== JSON.stringify(pkgs)){ pkgs = next; drawPk(false); }
+        } catch(_) {}
+      });
+    }
   } else loadPk();
+  // режимы — один раз, уже со свежими счётчиками (оригинал, 4bae987)
   await stat(true);
   renderAppModes();
 }
@@ -78,6 +83,24 @@ async function loadPk(force){
 let appsCache = null;
 let appTypeFilter = 'all';
 
+/* Рабочий профиль и другие пользователи (Shelter, Island, второе
+   пространство; оригинал, aadd63e, 07dea35). Ключ в apps.list —
+   «пользователь:пакет»: голый «пакет» модуль понимает как «во всех
+   профилях», и выбор личной копии включал бы и рабочую. Рабочий ли профиль,
+   знает генератор списка (isWork): гость или второй пользователь — тоже id > 0 */
+function appUser(item){ return (typeof item === 'object' && item && item.userId != null) ? Number(item.userId) : 0; }
+function isAppWork(item){
+  if(typeof item !== 'object' || !item) return false;
+  if(item.isWork != null) return item.isWork === true || item.isWork === 1 || item.isWork === 'true';
+  return appUser(item) > 0;
+}
+function appPkg(item){ return typeof item === 'string' ? item : (item && item.pkg) || ''; }
+function appKey(item){ return typeof item === 'string' ? item : appUser(item) + ':' + appPkg(item); }
+function isAppSelected(s, item){
+  const p = appPkg(item);
+  return !!p && (s.has(p) || s.has(appUser(item) + ':' + p));
+}
+
 function isAppSystem(item){
   if(typeof item === 'object' && typeof item.system === 'boolean') return item.system;
   if(typeof item === 'object' && item.system != null) return item.system === true || item.system === 1 || item.system === 'true';
@@ -85,8 +108,20 @@ function isAppSystem(item){
   return p.startsWith('com.android.') || p.startsWith('android') || p.startsWith('com.google.android.packageinstaller') || p.startsWith('com.google.android.gms');
 }
 
+/* HyperOS: фильтр списка — строкой-заголовком «Показывать: … ⇅» с меню, как
+   выбор сортировки в списках приложений Xiaomi; в Material 3 — чипы */
+const APP_TYPES = [['all', 'Все'], ['user', 'Пользовательские'], ['system', 'Системные'], ['selected', 'Выбранные'], ['work', 'Рабочие']];
+const appTypes = () => APP_TYPES.filter(a => a[0] !== 'work' || pkgs.some(isAppWork));
+function renderPkSort(){
+  const cur = APP_TYPES.find(a => a[0] === appTypeFilter) || APP_TYPES[0];
+  if($('pk-sort')) $('pk-sort').innerHTML = '<span>' + esc(t('Показывать: {0}', t(cur[1]))) + '</span>' + icon('unfold', 's16');
+}
+function pickAppTypeFilter(anchor){
+  openMenu(anchor, appTypes().map(([k, label]) => ({label: t(label), icon: k === appTypeFilter ? 'check' : '', onClick: () => setAppTypeFilter(k)})));
+}
 function setAppTypeFilter(type){
   appTypeFilter = type;
+  renderPkSort();
   const wrap = $('pk-filter-chips');
   if(wrap){
     wrap.querySelectorAll('.chip').forEach(c => {
@@ -112,31 +147,37 @@ function pkSearchInput(){
   pkTimer = setTimeout(() => drawPk(false), 180);
 }
 async function drawPk(animate){
+  // рабочих приложений нет (профиль удалили) — и фильтра по ним нет
+  const hasWork = pkgs.some(isAppWork);
+  if($('pk-chip-work')) $('pk-chip-work').hidden = !hasWork;
+  if(!hasWork && appTypeFilter === 'work'){ setAppTypeFilter('all'); return; }
+  renderPkSort();
   const f = $('pf').value.trim().toLowerCase();
   const s = await getAppsList();
   const shown = pkgs.filter(item => {
-    const p = typeof item === 'string' ? item : (item.pkg || '');
+    const p = appPkg(item);
     const n = typeof item === 'string' ? item : (item.name || item.pkg || '');
     const matchSearch = !f || p.toLowerCase().includes(f) || n.toLowerCase().includes(f);
     if(!matchSearch) return false;
     if(appTypeFilter === 'all') return true;
-    if(appTypeFilter === 'selected') return s.has(p);
+    if(appTypeFilter === 'selected') return isAppSelected(s, item);
+    if(appTypeFilter === 'work') return isAppWork(item);
     const isSys = isAppSystem(item);
     if(appTypeFilter === 'system') return isSys;
     if(appTypeFilter === 'user') return !isSys;
     return true;
   });
   shown.sort((a, b) => {
-    const pa = typeof a === 'string' ? a : a.pkg;
-    const pb = typeof b === 'string' ? b : b.pkg;
-    const sa = s.has(pa) ? 1 : 0;
-    const sb = s.has(pb) ? 1 : 0;
+    const sa = isAppSelected(s, a) ? 1 : 0;
+    const sb = isAppSelected(s, b) ? 1 : 0;
     if(sa !== sb) return sb - sa;
     const na = typeof a === 'string' ? a : (a.name || a.pkg || '');
     const nb = typeof b === 'string' ? b : (b.name || b.pkg || '');
-    return na.localeCompare(nb, undefined, { sensitivity: 'base' });
+    return na.localeCompare(nb, undefined, { sensitivity: 'base' }) || appUser(a) - appUser(b);
   });
-  $('pk-count').textContent = t('Найдено {0} из {1}, выбрано {2}', shown.length, pkgs.length, s.size) +
+  // выбрано — приложений, а не записей: личная и рабочая копия — одно
+  const nSel = new Set([...s].map(k => k.replace(/^\d+:/, ''))).size;
+  $('pk-count').textContent = t('Найдено {0} из {1}, выбрано {2}', shown.length, pkgs.length, nSel) +
     (shown.length > 120 ? '. ' + t('Показаны первые 120, уточните поиск') : '');
   const slice = shown.slice(0, 120);
   /* class="sel-single sel-first sel-mid sel-last" */
@@ -145,12 +186,14 @@ async function drawPk(animate){
     const name = typeof item === 'string' ? item : (item.name || item.pkg);
     const icon = typeof item === 'object' && item.icon ? item.icon : '';
     const isSys = isAppSystem(item);
-    const badge = isSys ? ' · ' + esc(t('Системное')) : '';
-    const sel = s.has(p);
+    const uName = typeof item === 'object' && item && item.userName ? item.userName : '';
+    const badge = (isSys ? ' · ' + esc(t('Системное')) : '') +
+      (isAppWork(item) ? ' · ' + esc(uName || t('Рабочий профиль')) : '');
+    const sel = isAppSelected(s, item);
     let selCls = '';
     if(sel){
-      const prev = idx > 0 && s.has(typeof slice[idx - 1] === 'string' ? slice[idx - 1] : slice[idx - 1].pkg);
-      const next = idx < slice.length - 1 && s.has(typeof slice[idx + 1] === 'string' ? slice[idx + 1] : slice[idx + 1].pkg);
+      const prev = idx > 0 && isAppSelected(s, slice[idx - 1]);
+      const next = idx < slice.length - 1 && isAppSelected(s, slice[idx + 1]);
       if(!prev && !next) selCls = ' sel-single';
       else if(!prev && next) selCls = ' sel-first';
       else if(prev && next) selCls = ' sel-mid';
@@ -166,31 +209,42 @@ async function drawPk(animate){
         '<span class="li-secondary li-mono">' + esc(p) + badge + '</span>' +
       '</span>' +
       '<span class="li-trail">' +
-        '<input type="checkbox" class="checkbox" data-pkg="' + esc(p) + '"' + (sel ? ' checked' : '') + '>' +
+        '<input type="checkbox" class="checkbox" data-key="' + esc(appKey(item)) + '" data-pkg="' + esc(p) + '"' + (sel ? ' checked' : '') + '>' +
       '</span>' +
     '</label>';
   }).join('') ||
-    '<div class="list-item"><span class="li-text"><span class="li-secondary">' + esc(t('Ничего не найдено')) + '</span></span></div>', !!animate);
-  $('pk').querySelectorAll('input[data-pkg]').forEach(cb => {
-    cb.onchange = () => togglePkg(cb.getAttribute('data-pkg'), cb.checked);
+    '<div class="list-item"><span class="li-text"><span class="li-secondary">' + esc(t('Ничего не найдено')) + '</span></span></div>', !!animate, false);
+  $('pk').querySelectorAll('input[data-key]').forEach(cb => {
+    cb.onchange = () => togglePkg(cb.getAttribute('data-key'), cb.getAttribute('data-pkg'), cb.checked);
   });
 }
 /* Сохранения идут по очереди: параллельные save-list-b64 со снимками списка
    могли лечь в обратном порядке, и одно переключение терялось */
 let pkSave = Promise.resolve();
-function togglePkg(p, want){
-  return (pkSave = pkSave.then(() => togglePkgNow(p, want), () => togglePkgNow(p, want)));
+function togglePkg(key, p, want){
+  return (pkSave = pkSave.then(() => togglePkgNow(key, p, want), () => togglePkgNow(key, p, want)));
 }
-async function togglePkgNow(p, want){
+async function togglePkgNow(key, p, want){
   const s = await getAppsList();
   // s — тот же Set, что лежит в кэше: он мутируется на месте, так что кэш уже
   // актуален и перечитывать список после сохранения не нужно.
-  if(want) s.add(p); else s.delete(p);
+  const before = new Set(s);
+  if(want) s.add(key);
+  else {
+    s.delete(key);
+    // запись без профиля («во всех профилях») снимается с этой копии, а
+    // другие копии того же приложения остаются выбранными (оригинал, 07dea35)
+    if(s.has(p)){
+      s.delete(p);
+      pkgs.forEach(o => { if(appPkg(o) === p && appKey(o) !== key) s.add(appKey(o)); });
+    }
+  }
   const r = await withBusy(['save-list-b64', 'apps', b64([...s].join('\n'))], 30000);
   // не сохранилось — вернуть кэш к тому, что на диске
-  if(r.code){ if(want) s.delete(p); else s.add(p); }
-  if(r.code) toast(errText(r, 'Не удалось сохранить'), {label: t('Повторить'), fn: () => togglePkg(p, want)});
-  else toast((want ? t('Добавлено: {0}', p) : t('Убрано: {0}', p)));
+  if(r.code){ s.clear(); before.forEach(k => s.add(k)); }
+  const name = (pkgs.find(o => appKey(o) === key) || {}).name || p;
+  if(r.code) toast(errText(r, 'Не удалось сохранить'), {label: t('Повторить'), fn: () => togglePkg(key, p, want)});
+  else toast((want ? t('Добавлено: {0}', name) : t('Убрано: {0}', name)));
   await drawPk(false);
   await stat(true);
   renderAppModes();

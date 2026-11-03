@@ -868,6 +868,30 @@ assert_contains "$ctl_out" "com.example.test" "with the cached names and icons"
 ctl list-apps refresh
 assert_rc 0 "$ctl_rc" "a refresh without the generator still succeeds"
 assert_contains "$ctl_out" "com.example.test" "and keeps the rich cache instead of bare package names"
+# генератор отработал с ошибкой и выдал пустой «[]» — рабочий кэш остаётся
+# (оригинал, 529c5e2): раньше приложения пропадали до следующей установки
+touch "$BIN_DIR/pkglist.jar"
+cat > "$MOCKBIN/app_process" <<'AP'
+#!/bin/sh
+out=""; while [ $# -gt 0 ]; do [ "$1" = "--out" ] && out="$2"; shift; done
+[ -n "$out" ] && printf '[]\n' > "$out"
+printf '[]\n'
+AP
+chmod 0755 "$MOCKBIN/app_process"
+ctl list-apps refresh
+assert_contains "$ctl_out" "com.example.test" "an empty [] from a failed generator run does not replace the cache"
+assert_contains "$(cat "$STATE_DIR/apps_cache.json")" "com.example.test" "the cache file keeps the apps"
+cat > "$MOCKBIN/app_process" <<'AP'
+#!/bin/sh
+out=""; while [ $# -gt 0 ]; do [ "$1" = "--out" ] && out="$2"; shift; done
+j='[{"pkg":"com.new.app","name":"New","icon":"","system":false,"userId":0,"isWork":false}]'
+[ -n "$out" ] && printf '%s\n' "$j" > "$out"
+printf '%s\n' "$j"
+AP
+ctl list-apps refresh
+assert_contains "$ctl_out" "com.new.app" "a real list from the generator replaces the cache"
+assert_eq "2" "$(cat "$STATE_DIR/apps_cache.json.version" 2>/dev/null)" "and records the cache schema version (profiles)"
+rm -f "$MOCKBIN/app_process" "$BIN_DIR/pkglist.jar" "$STATE_DIR/apps_cache.json.version"
 rm -f "$STATE_DIR/apps_cache.json"
 cat > "$MOCKBIN/pm" <<'PM'
 #!/bin/sh

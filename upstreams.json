@@ -1,6 +1,6 @@
 {
   "about": "Что взято из чужих проектов и до какой версии. Обновляется при каждом переносе изменений; читает модуль «трекер обновлений» (extras/update-tracker).",
-  "updated": "2026-10-31",
+  "updated": "2026-11-03",
   "module": "nfqws2-android-ext v2.2.4",
   "projects": [
     {
@@ -9,9 +9,9 @@
       "repo": "Dea1hwa1cher/nfqws2-android",
       "branch": "main",
       "track": "commits",
-      "ref": "a5e6aab2237114e2a723f93b301b2862b593b669",
-      "label": "v2.0.3",
-      "date": "2026-10-30T15:13:04Z",
+      "ref": "8e916c85d464ee9f0c6618592322469984abbeda",
+      "label": "v2.0.4",
+      "date": "2026-10-31T23:21:16Z",
       "use": "Основа модуля: служба, правила iptables, WebUI, сборка. Списки отсюда не берём"
     },
     {
@@ -21,9 +21,9 @@
       "branch": "main",
       "path": "strategies",
       "track": "commits",
-      "ref": "b61c87de08a0378477b9700cacf05633de8432e6",
-      "label": "b61c87d",
-      "date": "2026-10-30T14:04:57Z",
+      "ref": "817c1a23b6648b34bbfaf9a6d60c42f7d1616bc2",
+      "label": "817c1a2",
+      "date": "2026-11-02T23:21:33Z",
       "use": "Все стратегии (с IPv6 и без fastpath), списки lists/, блобы, hosts (пресет «nfqws-menu»)"
     },
     {
@@ -33,10 +33,10 @@
       "branch": "main",
       "path": "files/Zapret2/zapret2",
       "track": "commits",
-      "ref": "1545dca3b20b15aa9038f2c5211a6066b8907a50",
-      "label": "v4.24",
-      "date": "2026-10-23T15:55:56Z",
-      "use": "Стратегия «Zapret Manager» и кандидаты умного режима (TLS 38–54, Google 21–42) из его готового конфига zapret2. Следим только за этим файлом: изменения в нём — повод подтянуть стратегии"
+      "ref": "171791b26e3959de50b800a7c80365fc2b7f3fce",
+      "label": "v4.996",
+      "date": "2026-11-02T18:12:30Z",
+      "use": "Стратегия «Zapret Manager» и кандидаты умного режима (TLS 38–54, Google 21–42) из его готового конфига zapret2, Google 43–44 — «Отдельный обход googlevideo.com» (4.995). Следим только за этим файлом: изменения в нём — повод подтянуть стратегии"
     },
     {
       "id": "zapret2",
@@ -45,8 +45,9 @@
       "branch": "master",
       "track": "releases",
       "ref": "v1.0.6",
-      "date": "2026-10-21T08:49:48Z",
-      "use": "Бинарник nfqws2 (сборка в CI) и скрипты lua/ — из одного релиза"
+      "date": "2026-10-31T18:18:27Z",
+      "use": "Бинарник nfqws2 (сборка в CI) — с master после v1.0.6 (исправление UAF, «!» в hostlist), скрипты lua/ — v1.0.6 (после релиза менялся только zapret-obfs.lua, его в модуле нет)",
+      "label": "v1.0.6+f924d79"
     },
     {
       "id": "nfqws2-keenetic",

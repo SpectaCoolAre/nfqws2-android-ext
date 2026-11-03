@@ -336,24 +336,79 @@ function themeRoles(dark, amoled){
   }
   return R;
 }
+/* ── Дизайн: Material 3 или HyperOS (miuix) ─────────────────────────────
+   miuix — библиотека интерфейса HyperOS на Compose (compose-miuix-ui/miuix,
+   Apache-2.0); здесь — её внешний вид, перенесённый в CSS (css/miuix.css),
+   экраны и логика общие. HyperOS — это и вид, и цвета: палитра своя
+   (lightColorScheme/darkColorScheme в Colors.kt), акцент темы ей не нужен. */
+const uiDesign = () => store.get('ui_design') === 'miuix' ? 'miuix' : 'm3';
+const MX_CLASSIC = {
+  light: {primary: '#3482ff', onPrimary: '#ffffff', primaryContainer: '#eaf2ff', onPrimaryContainer: '#3482ff',
+    secondary: '#3482ff', onSecondary: '#ffffff', secondaryContainer: '#f0f0f0', onSecondaryContainer: '#303030',
+    tertiary: '#3482ff', onTertiary: '#ffffff', tertiaryContainer: '#eaf2ff', onTertiaryContainer: '#3482ff',
+    error: '#e94634', onError: '#ffffff', errorContainer: '#fdf6f4', onErrorContainer: '#410002',
+    background: '#f7f7f7', onBackground: '#000000', surface: '#f7f7f7', onSurface: '#000000',
+    surfaceVariant: '#f0f0f0', onSurfaceVariant: '#666666', surfaceDim: '#e8e8e8', surfaceBright: '#ffffff',
+    surfaceContainerLowest: '#ffffff', surfaceContainerLow: '#ffffff', surfaceContainer: '#ffffff',
+    surfaceContainerHigh: '#f0f0f0', surfaceContainerHighest: '#e8e8e8',
+    outline: '#d9d9d9', outlineVariant: '#e0e0e0', inverseSurface: '#303030', inverseOnSurface: '#f2f2f2',
+    inversePrimary: '#aecdff', surfaceTint: '#3482ff',
+    statusOk: '#1f9d55', statusWarn: '#b76e00', statusBad: '#e94634',
+    mx: {bg: '#f7f7f7', card: '#ffffff', cardHigh: '#e8e8e8', dialog: '#ffffff', on: '#000000',
+      summary: 'rgba(0,0,0,.6)', actions: 'rgba(0,0,0,.4)', subtitle: '#8c93b0', secondary: '#e6e6e6',
+      secondaryVariant: '#f0f0f0', onSecondaryVariant: '#303030', field: '#f0f0f0', thumbOff: '#ffffff',
+      tint: '#eaf2ff', onTint: '#3482ff', divider: '#e0e0e0', dim: 'rgba(0,0,0,.3)',
+      sheet: '#f7f7f7', sheetCard: '#ffffff'}},
+  dark: {primary: '#277af7', onPrimary: '#ffffff', primaryContainer: '#2b3b54', onPrimaryContainer: '#4788ff',
+    secondary: '#277af7', onSecondary: '#ffffff', secondaryContainer: '#434343', onSecondaryContainer: '#d9d9d9',
+    tertiary: '#277af7', onTertiary: '#ffffff', tertiaryContainer: '#2b3b54', onTertiaryContainer: '#4788ff',
+    error: '#f12522', onError: '#ffffff', errorContainer: '#2e0603', onErrorContainer: '#ffdad6',
+    background: '#000000', onBackground: '#f2f2f2', surface: '#000000', onSurface: '#f2f2f2',
+    surfaceVariant: '#242424', onSurfaceVariant: '#8c8c8c', surfaceDim: '#000000', surfaceBright: '#2d2d2d',
+    surfaceContainerLowest: '#000000', surfaceContainerLow: '#242424', surfaceContainer: '#242424',
+    surfaceContainerHigh: '#2d2d2d', surfaceContainerHighest: '#343434',
+    outline: '#404040', outlineVariant: '#393939', inverseSurface: '#e6e6e6', inverseOnSurface: '#1a1a1a',
+    inversePrimary: '#3482ff', surfaceTint: '#277af7',
+    statusOk: '#4cc27a', statusWarn: '#f0b23c', statusBad: '#ff6a5e',
+    mx: {bg: '#000000', card: '#242424', cardHigh: '#2d2d2d', dialog: '#242424', on: '#f2f2f2',
+      summary: 'rgba(255,255,255,.5)', actions: 'rgba(255,255,255,.4)', subtitle: '#787e96', secondary: '#505050',
+      secondaryVariant: '#434343', onSecondaryVariant: '#d9d9d9', field: '#434343', thumbOff: '#ffffff',
+      tint: '#2b3b54', onTint: '#4788ff', divider: '#393939', dim: 'rgba(0,0,0,.6)',
+      sheet: '#1c1c1c', sheetCard: '#2d2d2d'}}
+};
+function setDesign(d){
+  store.set('ui_design', d === 'miuix' ? 'miuix' : 'm3');
+  applyTheme();
+  if(typeof renderAppBar === 'function' && typeof currentPage !== 'undefined') renderAppBar(currentPage, false);
+}
 function applyTheme(skipUI){
   const dark = isDark();
   const amoled = store.get('m3_amoled') === 'true' && dark;
   const containers = store.get('m3_containers') !== 'false';
-  const R = themeRoles(dark, amoled);
+  const design = uiDesign();
+  let R = themeRoles(dark, amoled);
+  let MX = null;
+  if(design === 'miuix'){
+    const C = MX_CLASSIC[dark ? 'dark' : 'light'];
+    R = Object.assign({}, R, C);
+    MX = Object.assign({}, C.mx);
+  }
   // Палитра уходит в <style id="theme-vars">, а не инлайном на documentElement.
   // Инлайн-стиль нельзя переопределить из CSS — ни правилом компонента, ни
   // медиазапросом, — поэтому он закрывает тему наглухо. Отдельный блок в <head>
   // участвует в каскаде обычным порядком.
   let css = ':root{';
   for(const k in ROLE_VAR) css += ROLE_VAR[k] + ':' + R[k] + ';';
-  css += '--status-ok:' + R.statusOk + ';--status-warn:' + R.statusWarn + ';--status-bad:' + R.statusBad + ';}';
+  css += '--status-ok:' + R.statusOk + ';--status-warn:' + R.statusWarn + ';--status-bad:' + R.statusBad + ';';
+  if(MX) for(const k in MX) css += '--mx-' + k.replace(/[A-Z]/g, c => '-' + c.toLowerCase()) + ':' + MX[k] + ';';
+  css += '}';
   $('theme-vars').textContent = css;
   document.documentElement.setAttribute('data-mode', dark ? 'dark' : 'light');
   document.documentElement.setAttribute('data-amoled', amoled ? 'true' : 'false');
   document.documentElement.setAttribute('data-containers', containers ? 'true' : 'false');
+  document.documentElement.setAttribute('data-design', design);
   const meta = document.querySelector('meta[name="theme-color"]');
-  if(meta) meta.setAttribute('content', R.background);
+  if(meta) meta.setAttribute('content', MX ? MX.bg : R.background);
   if(!skipUI) drawThemeUI();
 }
 /* ── Лист темы ────────────────────────────────────────────────────────────
@@ -364,6 +419,14 @@ function applyTheme(skipUI){
    а в память пишется по отпусканию. */
 let wheelH = 270, wheelS = .6, wheelDrag = false, wheelFrame = 0;
 function drawThemeUI(){
+  const seg = (id, items, cur, fn) => setHTML(id, items.map(m =>
+    '<button class="seg state' + (cur === m[0] ? ' on' : '') + '" aria-pressed="' + (cur === m[0]) +
+    '" onclick="' + fn + '(' + jsArg(m[0]) + ')"><span class="check">' + icon('check', 's18') + '</span>' + esc(t(m[1])) + '</button>').join(''), false);
+  seg('theme-design', [['m3', 'Material 3'], ['miuix', 'HyperOS']], uiDesign(), 'setDesign');
+  // HyperOS: пункты всегда на карточках, палитра своя (без акцента), а тёмная
+  // тема и так на чёрном — AMOLED ей не нужен
+  const mx = uiDesign() === 'miuix';
+  ['containers-row', 'accent-block', 'amoled-row'].forEach(id => { if($(id)) $(id).hidden = mx; });
   setHTML('theme-mode', [['auto', 'Авто'], ['light', 'Светлая'], ['dark', 'Тёмная']].map(m =>
     '<button class="seg state' + (currentMode === m[0] ? ' on' : '') + '" aria-pressed="' + (currentMode === m[0]) +
     '" onclick="setThemeMode(' + jsArg(m[0]) + ')"><span class="check">' + icon('check', 's18') + '</span>' + esc(t(m[1])) + '</button>').join(''), false);

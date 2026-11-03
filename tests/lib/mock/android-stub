@@ -10,14 +10,20 @@ NAME=$(basename "$0")
 
 case "$NAME" in
   pm)
-    # `pm list packages -3` / `pm list packages -U`. Fixture: package:NAME uid:N
+    # `pm list packages -3` / `pm list packages -U` / `pm list users`. Fixture: package:NAME uid:N
+    # MOCK_USERS="0 10" — второй пользователь (рабочий профиль), UID со сдвигом
     FIX="${MOCK_PM_FILE:-}"
     case "$*" in
+      *list*users*)
+        printf 'Users:\n'
+        for u in ${MOCK_USERS:-0}; do printf '\tUserInfo{%s:User%s:30} running\n' "$u" "$u"; done ;;
       *-U*)
         if [ -n "$FIX" ] && [ -f "$FIX" ]; then cat "$FIX"; else
-          printf 'package:com.example.browser uid:10123\n'
-          printf 'package:org.mozilla.firefox uid:10188\n'
-          printf 'package:com.termux uid:10201\n'
+          u_off=0
+          case "$*" in *--user\ 10*) u_off=1000000 ;; esac
+          printf 'package:com.example.browser uid:%d\n' $((10123 + u_off))
+          printf 'package:org.mozilla.firefox uid:%d\n' $((10188 + u_off))
+          printf 'package:com.termux uid:%d\n' $((10201 + u_off))
         fi ;;
       *)
         if [ -n "$FIX" ] && [ -f "$FIX" ]; then sed 's/ uid:.*//' "$FIX"; else

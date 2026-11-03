@@ -65,14 +65,14 @@ function pickLogsLong(anchor){
 async function logsLongAction(){
   if(logsLong === 'clear'){
     const r = await withBusy(['clear-logs']);
-    toast(r.code ? errText(r, 'Не удалось очистить журналы') : t('Журналы очищены (долгое нажатие на значок журналов)'));
+    toast(r.code ? errText(r, 'Не удалось очистить журналы') : t('Журналы очищены'));
     if(currentPage === 'logs') loadLog();
   } else {
-    toast(t('Экспорт журналов (долгое нажатие на значок журналов)'));
+    toast(t('Экспорт журналов'));
     exportLogsRun('save');
   }
 }
-onLongPress($('logs-btn'), null, logsLongAction);
+onLongPress($('logs-btn'), null, () => logsLongAction());
 const STATUS_MAP = {ok: ['ok', 'check'], warn: ['warn', 'warn'], fail: ['bad', 'error'], info: ['info', 'info']};
 function statusRows(text){
   return text.trim().split('\n').filter(Boolean).map(l => l.split('\t')).map(([s, n, d]) => {

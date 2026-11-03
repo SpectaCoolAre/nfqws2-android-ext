@@ -354,6 +354,9 @@ body.nav-hidden .content { padding-bottom: calc(var(--bottom-inset) + 24px); }
 .page.leaving { pointer-events: none; z-index: 1; }
 /* Соседняя вкладка, пока её тянут пальцем: закреплена рядом со своей прокруткой */
 .page.peek { display: flex; position: fixed; pointer-events: none; z-index: 1; }
+/* Остальные вкладки — разложенные, но невидимые (core.js, warmTabs): свайп и
+   перелистывание показывают готовую страницу, а не раскладывают её заново */
+.page.warm { display: flex; position: fixed; visibility: hidden; pointer-events: none; z-index: 0; }
 /* Вертикальная прокрутка — браузеру, горизонталь — свайпу между вкладками */
 body:not(.nav-hidden) .content { touch-action: pan-y; }
 body.swiping .state:active { transform: none; }

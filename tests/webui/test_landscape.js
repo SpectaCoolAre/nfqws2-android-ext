@@ -113,6 +113,8 @@ const VIEWPORTS = [
     const ctx = await browser.newContext({ viewport: { width: vp.w, height: vp.h }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
     await ctx.addInitScript(STUB);
     await ctx.addInitScript(() => { try { localStorage.setItem('nfq_seen_ver', 'v2.2.1'); } catch (e) {} });
+    // UI_DESIGN=miuix — те же проверки в дизайне HyperOS
+    if (process.env.UI_DESIGN) await ctx.addInitScript(d => { try { localStorage.setItem('ui_design', d); } catch (e) {} }, process.env.UI_DESIGN);
     const page = await ctx.newPage();
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));

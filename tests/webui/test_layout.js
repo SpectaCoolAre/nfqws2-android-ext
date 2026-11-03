@@ -93,6 +93,8 @@ const VIEWPORTS = [
         deviceScaleFactor: vp.dpr, isMobile: true, hasTouch: true,
       });
       await ctx.addInitScript(`try{localStorage.setItem('m3_mode','${mode}');}catch(e){}`);
+      // UI_DESIGN=miuix — та же геометрия в дизайне HyperOS (там, где она общая)
+      if (process.env.UI_DESIGN) await ctx.addInitScript(`try{localStorage.setItem('ui_design','${process.env.UI_DESIGN}');}catch(e){}`);
       await ctx.addInitScript(STUB);
       const page = await ctx.newPage();
       const pageErrors = [];

@@ -52,7 +52,14 @@ DNS_GEO_CAND="$MODDIR/defaults/dns-geo-servers.list"
 # где чей прокси и свой ли у домена адрес, видно только по самому домену
 DNS_GEO_SCAN_DIR="$CONFDIR/dns/geoscan"
 DNS_GEO_SCAN_EVERY=14400     # полная проверка — раз в 4 часа
-DNS_GEO_SCAN_VER=2           # формат файла проверки: старый — проверить заново
+DNS_GEO_SCAN_VER=3           # формат файла проверки: старый — проверить заново
+# (3 — эталон «настоящих» адресов из честного DNS, а не DNS сети: в v2 дома за
+# роутером с обходом геоблока проверка шла по адресам прокси)
+# Эталон «настоящих» адресов для проверки серверов обхода: DoH Яндекса (его
+# роутер не перехватит), затем обычный Яндекс; DNS сети — запасной. Дома DNS
+# сети — роутер, и если он сам обходит геоблок (Comss, malw в его настройках),
+# его ответы — адреса прокси, а не настоящие
+DNS_GEO_REF="https://common.dot.dns.yandex.net/dns-query,77.88.8.8:53"
 # Частая проверка — домены списка, которыми пользуются (dns_geo_hot_list):
 # раз в полчаса, чтобы маршрут сменился, если сервер перестал обходить
 DNS_GEO_HOT_EVERY=1800
@@ -297,10 +304,10 @@ dns_geo_scan() { # [full|hot]
   { echo "#time=$(date +%s) boot=$boot v=$DNS_GEO_SCAN_VER"
     if [ "$mode" = hot ]; then
       # частая — и по факту: настоящий ли сертификат сайта по адресу прокси
-      "$HELPER_BIN" -geoscan "$cand" -samples "@$DNS_RUN_DIR/geoscan.list" -boot "$boot" -wait 20s \
+      "$HELPER_BIN" -geoscan "$cand" -samples "@$DNS_RUN_DIR/geoscan.list" -boot "$boot" -ref "$DNS_GEO_REF" -wait 20s \
         -max "$DNS_GEO_POOL" -asncache "$DNS_GEO_SCAN_DIR/asn.cache" -shared "$f" -verify 2>/dev/null
     else
-      "$HELPER_BIN" -geoscan "$cand" -samples "@$DNS_RUN_DIR/geoscan.list" -boot "$boot" -wait 40s \
+      "$HELPER_BIN" -geoscan "$cand" -samples "@$DNS_RUN_DIR/geoscan.list" -boot "$boot" -ref "$DNS_GEO_REF" -wait 40s \
         -max "$DNS_GEO_POOL" -asncache "$DNS_GEO_SCAN_DIR/asn.cache" 2>/dev/null
     fi
   } > "$out"

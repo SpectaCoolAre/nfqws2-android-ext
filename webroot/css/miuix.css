@@ -1,0 +1,552 @@
+/* nfqws2 WebUI · miuix.css — дизайн HyperOS (miuix) поверх base.css и app.css
+   ══════════════════════════════════════════════════════════════════════════
+   Внешний вид библиотеки compose-miuix-ui/miuix (Apache-2.0, см.
+   licenses/miuix-LICENSE), перенесённый в CSS: размеры, радиусы, шрифты и
+   цвета — из её исходников (theme/Colors.kt, TextStyles.kt; basic/Card,
+   Component, Switch, Checkbox, Button, TextField, SearchBar, TabRow,
+   ListPopup, NavigationBar, TopAppBar; layout/DialogContentLayout,
+   BottomSheetContentLayout). Экраны и логика — общие с Material 3: всё ниже
+   действует только при html[data-design="miuix"].
+
+   Цвета — переменные --mx-* (их пишет applyTheme(): из ролей Material 3
+   текущей темы или классическая палитра HyperOS) и роли --md-sys-color-*.
+   ══════════════════════════════════════════════════════════════════════════ */
+html[data-design="miuix"] {
+  --md-font: 'MiSans', 'MiSans VF', 'HarmonyOS Sans', 'Roboto', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /* TextStyles: main 17, body1 16, body2 14, footnote 13/11, title 32/24/20/18 */
+  --ts-body-large: 17px;  --lh-body-large: 22px;
+  --ts-body-medium: 14px; --lh-body-medium: 19px;
+  --ts-body-small: 13px;  --lh-body-small: 17px;
+  --ts-title-large: 20px; --lh-title-large: 26px;
+  --ts-title-medium: 17px; --lh-title-medium: 22px;
+  --ts-label-large: 14px; --ts-label-medium: 13px; --ts-label-small: 11px;
+  --tr-body-large: 0; --tr-body-medium: 0; --tr-body-small: 0; --tr-title-medium: 0; --tr-title-small: 0;
+  --tr-label-large: 0; --tr-label-medium: 0; --tr-label-small: 0;
+  /* карточки 16dp, кнопки и поля 16dp, диалог 32dp, лист 28dp */
+  --mx-r-card: 16px; --mx-r-btn: 16px; --mx-r-dialog: 32px; --mx-r-sheet: 28px;
+  --shape-large: 16px; --shape-card: 16px; --shape-extra-large: 24px;
+  /* шапка: строка 52dp (CollapsedHeight) и большой заголовок под ней */
+  --appbar-height: 52px; --mx-large-h: 56px;
+  --screen-margin: 12px; --gap: 12px;
+  /* пружина miuix: мягче, без отскока Material Expressive */
+  --spring: cubic-bezier(.3, 1.15, .5, 1); --spring-strong: cubic-bezier(.32, 1.25, .5, 1);
+}
+
+/* ── Фон и прокрутка ──────────────────────────────────────────────────── */
+html[data-design="miuix"], html[data-design="miuix"] body { background: var(--mx-bg); color: var(--mx-on); }
+html[data-design="miuix"] .content {
+  padding-top: calc(var(--top-inset) + var(--appbar-height));
+}
+
+/* ── Шапка: строка 52dp, большой заголовок 32sp — в самой странице ───────
+   Большой заголовок — первая строка страницы и прокручивается вместе с ней
+   браузером, без JS на каждый кадр (иначе он отставал от прокрутки). Когда он
+   уходит под шапку, в строке шапки проявляется маленький (20sp Medium).
+   Шапка над вершиной страницы прозрачна: при переходе между экранами фон
+   уезжает вместе со страницей. */
+html[data-design="miuix"] .app-bar {
+  min-height: calc(var(--top-inset) + var(--appbar-height));
+  align-items: flex-start; padding-top: var(--top-inset); background: transparent;
+  transition: background-color var(--dur-short) var(--standard);
+}
+html[data-design="miuix"] .app-bar > * { margin-top: 2px; }
+html[data-design="miuix"] .app-bar .icon-btn { width: 48px; height: 48px; color: var(--mx-on); }
+/* маленький заголовок — по центру строки, как в HyperOS; поля слева и справа
+   равные — по самой широкой стороне с кнопками (core.js, --bar-side) */
+html[data-design="miuix"] .app-bar .title {
+  position: absolute; top: var(--top-inset); left: var(--bar-side, 64px); right: var(--bar-side, 64px);
+  text-align: center; line-height: 52px; height: 52px; padding: 0; margin: 0;
+  font-size: 20px; font-weight: 500; color: var(--mx-on);
+  opacity: 0; transform: translateY(4px);
+  transition: opacity var(--dur-medium) var(--standard), transform var(--dur-medium) var(--standard);
+}
+html[data-design="miuix"] .app-bar.mx-collapsed .title { opacity: 1; transform: none; }
+/* маленький заголовок вынесен из строки (он по центру): кнопки справа
+   прижимает к краю отступ; без своих кнопок у экрана — у кнопки журналов */
+html[data-design="miuix"] .bar-actions { margin-left: auto; }
+html[data-design="miuix"] .bar-actions:empty + #logs-btn { margin-left: auto; }
+/* логотип модуля (пасхалка с игрой) — справа от большого заголовка на главной */
+html[data-design="miuix"] .mx-title .brand-logo {
+  display: grid; width: 34px; height: 34px; margin: 0; pointer-events: auto; cursor: pointer;
+  background: var(--md-sys-color-primary); color: #fff; }
+html[data-design="miuix"] .mx-title .brand-logo svg { width: 21px; height: 21px; }
+html[data-design="miuix"] .app-bar.scrolled { background: var(--mx-bg); }
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html[data-design="miuix"] .app-bar.scrolled {
+    background: color-mix(in srgb, var(--mx-bg) 72%, transparent);
+    -webkit-backdrop-filter: blur(24px) saturate(1.8); backdrop-filter: blur(24px) saturate(1.8);
+  }
+}
+.mx-title { display: none; }
+/* элементы только для HyperOS: в Material 3 их нет */
+.mx-only, .mx-sort, .mx-sheet-close { display: none; }
+.mx-sheet-head { display: contents; }
+/* длинный заголовок переносится на следующую строку, как «Подробная
+   информация и характеристики» в настройках HyperOS; маленький в шапке — с … */
+html[data-design="miuix"] .mx-title {
+  display: flex; align-items: center; gap: 12px; flex: none; grid-column: 1 / -1; margin: 2px 0 10px; padding: 0 14px;
+  font-size: 32px; line-height: 40px; font-weight: 400; color: var(--mx-on);
+  overflow-wrap: anywhere; pointer-events: none;
+}
+html[data-design="miuix"] .app-bar .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (min-width: 720px) { html[data-design="miuix"] { --screen-margin: 24px; } }
+/* Альбомная: экран и так низкий — без большого заголовка, маленький виден
+   всегда (иначе сворачивание двигало бы закреплённую левую колонку); поля —
+   как у Material 3 в альбомной */
+@media (orientation: landscape) and (min-width: 700px) {
+  html[data-design="miuix"] { --screen-margin: 32px; --mx-large-h: 0px;
+    --land-top: calc(var(--top-inset) + var(--appbar-height) + 8px); }
+  html[data-design="miuix"] .mx-title { display: none; }
+  html[data-design="miuix"] .app-bar { background: var(--mx-bg); }
+  html[data-design="miuix"] .app-bar .title { opacity: 1; transform: none; }
+}
+html[data-design="miuix"] .ptr { top: calc(var(--top-inset) + var(--appbar-height) + 4px); }
+
+/* ── Нажатие: затемнение, без волны и без «утапливания» (holdDownState) ── */
+html[data-design="miuix"] .ripple { display: none; }
+html[data-design="miuix"] .state:active::after { opacity: .08; }
+html[data-design="miuix"] .list-item.state:active,
+html[data-design="miuix"] .list-item:active { transform: none; }
+html[data-design="miuix"] .btn.state:active, html[data-design="miuix"] .smart-tile.state:active,
+html[data-design="miuix"] .mode-card.state:active { transform: scale(.98); }
+
+/* ── Карточки-группы (Card 16dp, surfaceContainer) и строки (BasicComponent)
+   Пункты списка — строки одной карточки: без своих подложек, 56dp, поля 16,
+   заголовок 17sp Medium, пояснение 14sp onSurfaceVariantSummary ─────────── */
+html[data-design="miuix"] .list {
+  gap: 0; background: var(--mx-card); border-radius: var(--mx-r-card); overflow: hidden;
+}
+html[data-design="miuix"] .list:empty { display: none; }
+html[data-design="miuix"] .list > .empty { background: var(--mx-card); }
+html[data-design="miuix"] .list-item,
+html[data-design="miuix"] .list > .list-item,
+html[data-design="miuix"] .settings-grid .list > .list-item,
+html[data-design="miuix"] .list > .list-item:first-child,
+html[data-design="miuix"] .list > .list-item:last-child,
+html[data-design="miuix"] .list > .list-item:only-child,
+html[data-design="miuix"] .list-item:active {
+  background: transparent; border-radius: 0;
+}
+html[data-design="miuix"] .list-item { min-height: 56px; padding: 14px 16px; gap: 14px; }
+html[data-design="miuix"] .list-item.two-line { min-height: 64px; }
+html[data-design="miuix"] .list-item .li-primary { font-size: 17px; line-height: 22px; font-weight: 500; color: var(--mx-on); }
+html[data-design="miuix"] .list-item .li-secondary { font-size: 14px; line-height: 19px; color: var(--mx-summary); }
+html[data-design="miuix"] .list-item .li-trail { color: var(--mx-summary); font-size: 14px; font-weight: 400; }
+html[data-design="miuix"] .list-item .li-trail svg.icon { color: var(--mx-actions); }
+html[data-design="miuix"] .list-item .li-value { color: var(--mx-summary); font-weight: 400; }
+/* значок строки — без круглой подложки, как в настройках HyperOS */
+html[data-design="miuix"] .list-item .li-icon {
+  width: 28px; height: 28px; background: transparent; color: var(--mx-on); border-radius: 0; }
+html[data-design="miuix"] .list-item .li-icon svg.icon { width: 24px; height: 24px; }
+html[data-design="miuix"] .list-item.selected {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 10%, transparent); border-radius: 0; }
+html[data-design="miuix"] .list-item.selected .li-primary { color: var(--md-sys-color-primary); }
+html[data-design="miuix"] .list-item.selected .li-secondary { color: var(--mx-summary); opacity: 1; }
+html[data-design="miuix"] .list-item.selected .li-icon { background: transparent; color: var(--md-sys-color-primary); }
+html[data-design="miuix"] .list-item.danger .li-icon { background: transparent; color: var(--md-sys-color-error); }
+html[data-design="miuix"] .sheet .list, html[data-design="miuix"] .dialog .list { background: transparent; }
+html[data-design="miuix"] .sheet .list-item { padding-left: 4px; padding-right: 4px; }
+/* выбранные приложения — та же карточка, выделение цветом */
+html[data-design="miuix"] #pk .list-item.selected,
+html[data-design="miuix"] #pk .list-item.sel-single, html[data-design="miuix"] #pk .list-item.sel-first,
+html[data-design="miuix"] #pk .list-item.sel-mid, html[data-design="miuix"] #pk .list-item.sel-last,
+html[data-design="miuix"] #pk .list-item:active { border-radius: 0; margin: 0; }
+html[data-design="miuix"] .list-item.split-sw { padding: 0; gap: 0; }
+html[data-design="miuix"] .split-sw .split-main { padding: 14px 16px; gap: 14px; }
+html[data-design="miuix"] .split-sw .split-div { background: var(--mx-divider); height: 32px; }
+
+/* ── Подзаголовки групп (SmallTitle: 14sp Bold, onBackgroundVariant, 28/8) ── */
+html[data-design="miuix"] .subhead {
+  font-size: 14px; line-height: 19px; font-weight: 700; color: var(--mx-subtitle);
+  padding: 10px 16px 0; margin: 0 0 -4px;
+}
+html[data-design="miuix"] .subhead.plain { padding: 0 4px; color: var(--mx-subtitle); }
+html[data-design="miuix"] .sheet-group { color: var(--mx-subtitle); font-weight: 700; font-size: 14px; }
+
+/* ── Переключатель (Switch): трек 49×28 капсулой, бегунок 20dp, без рамки ── */
+html[data-design="miuix"] .switch {
+  width: 49px; height: 28px; flex: 0 0 49px; border: 0; background: var(--mx-secondary);
+  transition: background-color var(--dur-medium) var(--standard);
+}
+html[data-design="miuix"] .switch::before {
+  left: 4px; width: 20px; height: 20px; background: var(--mx-thumb-off);
+  box-shadow: 0 1px 2px rgb(0 0 0 / .12);
+  transition: left 280ms cubic-bezier(.3, 1.3, .5, 1), transform 200ms var(--standard), background-color var(--dur-medium) var(--standard);
+}
+html[data-design="miuix"] .switch:checked { background: var(--md-sys-color-primary); }
+html[data-design="miuix"] .switch:checked::before { left: 25px; width: 20px; height: 20px; background: var(--md-sys-color-on-primary); }
+html[data-design="miuix"] .switch::after { display: none; }
+/* при нажатии бегунок чуть больше (×1.127) */
+html[data-design="miuix"] .switch:active::before { width: 20px; height: 20px; left: 4px; transform: translateY(-50%) scale(1.127); }
+html[data-design="miuix"] .switch:checked:active::before { left: 25px; }
+@media (hover: hover) { html[data-design="miuix"] .switch:hover { border-color: transparent; } }
+html[data-design="miuix"] .switch:disabled { background: color-mix(in srgb, var(--mx-secondary) 60%, transparent); }
+html[data-design="miuix"] .switch:checked:disabled { background: color-mix(in srgb, var(--md-sys-color-primary) 40%, var(--mx-card)); }
+html[data-design="miuix"] .switch:disabled::before { background: color-mix(in srgb, var(--mx-thumb-off) 70%, transparent); }
+
+/* ── Флажок и радио: круг 26dp (Checkbox/RadioButton), заливка primary с галочкой ── */
+html[data-design="miuix"] .checkbox, html[data-design="miuix"] .radio {
+  width: 26px; height: 26px; flex: 0 0 26px; margin: 0; border: 0; border-radius: 50%; background: var(--mx-secondary);
+}
+html[data-design="miuix"] .checkbox:checked, html[data-design="miuix"] .radio:checked { background: var(--md-sys-color-primary); }
+html[data-design="miuix"] .checkbox:checked::after, html[data-design="miuix"] .radio::after {
+  inset: 0; transform: none; border-radius: 50%; background: var(--md-sys-color-on-primary);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 22'%3E%3Cpath d='M6.5 11.2l3 3 6-6.2' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center / 26px 26px;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 22'%3E%3Cpath d='M6.5 11.2l3 3 6-6.2' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center / 26px 26px;
+}
+html[data-design="miuix"] .radio::after { content: ""; position: absolute; opacity: 0; transition: opacity var(--dur-short) var(--standard); }
+html[data-design="miuix"] .radio:checked::after { opacity: 1; }
+html[data-design="miuix"] .list-item.selected .radio:checked { background: var(--md-sys-color-primary); }
+html[data-design="miuix"] .list-item.selected .radio:checked::after { background: var(--md-sys-color-on-primary); }
+
+/* ── Кнопки (Button: 16dp, 17sp; обычная — secondaryVariant, главная — primary) ── */
+html[data-design="miuix"] .btn {
+  height: 44px; padding: 0 20px; border-radius: var(--mx-r-btn);
+  font-size: 16px; font-weight: 500; letter-spacing: 0;
+}
+html[data-design="miuix"] .btn.height-m { height: 50px; font-size: 17px; }
+html[data-design="miuix"] .btn.sm { height: 38px; padding: 0 14px; border-radius: 12px; font-size: 14px; }
+html[data-design="miuix"] .btn.tonal { background: var(--mx-secondary-variant); color: var(--mx-on-secondary-variant); }
+html[data-design="miuix"] .btn.text { background: transparent; color: var(--md-sys-color-primary); }
+html[data-design="miuix"] .btn.text.danger { color: var(--md-sys-color-error); }
+html[data-design="miuix"] .btn[disabled] { background: var(--mx-secondary-variant); color: color-mix(in srgb, var(--mx-on) 30%, transparent); }
+html[data-design="miuix"] .btn.text[disabled] { background: transparent; }
+html[data-design="miuix"] .icon-btn.sm { width: 40px; height: 40px; }
+html[data-design="miuix"] .suggest .btn.tonal, html[data-design="miuix"] .strat-hero .btn.tonal {
+  background: var(--mx-card); color: var(--md-sys-color-primary); }
+
+/* ── Сегменты (TabRow с контуром: подложка 12dp, выбранный — белая плашка) ── */
+html[data-design="miuix"] .segmented, html[data-design="miuix"] .seg-mode {
+  gap: 0; padding: 4px; height: auto; border: 0; border-radius: 14px; background: var(--mx-secondary-variant); }
+html[data-design="miuix"] .segmented .seg, html[data-design="miuix"] .seg-mode .seg {
+  height: 38px; border: 0 !important; border-radius: 10px !important; margin: 0 !important;
+  color: var(--mx-summary); font-size: 15px; font-weight: 500;
+  transition: background-color var(--dur-medium) var(--standard), color var(--dur-medium) var(--standard), box-shadow var(--dur-medium) var(--standard);
+}
+html[data-design="miuix"] .segmented .seg.on, html[data-design="miuix"] .seg-mode .seg.selected {
+  background: var(--mx-card); color: var(--mx-on); font-weight: 600; box-shadow: 0 1px 3px rgb(0 0 0 / .10); }
+html[data-design="miuix"] .segmented .seg .check, html[data-design="miuix"] .seg-mode .seg-check { display: none; }
+/* в тёмной теме выбранный сегмент светлее подложки, а не темнее */
+html[data-design="miuix"][data-mode="dark"] .segmented .seg.on, html[data-design="miuix"][data-mode="dark"] .seg-mode .seg.selected {
+  background: color-mix(in srgb, var(--mx-on) 16%, var(--mx-secondary-variant)); box-shadow: none; }
+html[data-design="miuix"] .seg-mode .seg + .seg { border-left: 0; }
+
+/* ── Чипы: плашки 12dp без рамки; выбранный — акцентный тон ────────────── */
+html[data-design="miuix"] .chip {
+  height: 34px; border: 0; border-radius: 12px; background: var(--mx-secondary-variant);
+  color: var(--mx-on-secondary-variant); font-weight: 500; font-size: 14px; }
+html[data-design="miuix"] .chip.selected, html[data-design="miuix"] .chip.dropdown[aria-expanded="true"] {
+  background: var(--mx-tint); color: var(--mx-on-tint); }
+
+/* ── Поля (TextField: 16dp, secondaryContainer, рамка 2dp primary в фокусе) ── */
+html[data-design="miuix"] .tf, html[data-design="miuix"] .field input, html[data-design="miuix"] .field select,
+html[data-design="miuix"] .field textarea, html[data-design="miuix"] .hex-group {
+  background: var(--mx-field); border: 0; border-radius: var(--mx-r-btn); }
+html[data-design="miuix"] .tf::after { display: none; }
+html[data-design="miuix"] .tf:focus-within, html[data-design="miuix"] .field input:focus,
+html[data-design="miuix"] .field textarea:focus, html[data-design="miuix"] .hex-group:focus-within {
+  box-shadow: inset 0 0 0 2px var(--md-sys-color-primary); background: var(--mx-field); }
+html[data-design="miuix"] .tf input + label { color: var(--mx-summary); }
+html[data-design="miuix"] .tf input:focus + label { color: var(--md-sys-color-primary); }
+html[data-design="miuix"] .tf > .icon-btn.tone-primary { background: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary); border-radius: 12px; }
+
+/* ── Поиск (SearchBar: 45dp, капсула, secondaryContainer) ──────────────── */
+html[data-design="miuix"] .search-bar {
+  height: 45px; gap: 8px; padding: 0 16px; background: var(--mx-field); color: var(--mx-summary); }
+html[data-design="miuix"] .search-bar input { font-size: 16px; }
+html[data-design="miuix"] .find-bar .search-bar { height: 45px; }
+
+/* ── Меню (ListPopup: 16dp, минимум 200dp, тень) ───────────────────────── */
+html[data-design="miuix"] .menu {
+  min-width: 200px; max-width: 288px; padding: 8px 0; border-radius: var(--mx-r-card);
+  background: var(--mx-dialog); color: var(--mx-on);
+  box-shadow: 0 6px 24px rgb(0 0 0 / .14), 0 0 0 .75px var(--mx-divider);
+}
+html[data-design="miuix"] .menu .mi { min-height: 50px; padding: 0 20px; font-size: 16px; color: var(--mx-on); }
+html[data-design="miuix"] .menu .mi .mi-icon { color: var(--mx-summary); }
+html[data-design="miuix"] .menu .mi .mi-sub { font-family: inherit; color: var(--mx-summary); font-size: 13px; }
+html[data-design="miuix"] .menu .mi[aria-checked="true"], html[data-design="miuix"] .menu .mi.on { color: var(--md-sys-color-primary); }
+/* выбор из списка (у пункта галочка): как DropdownImpl miuix — галочка справа, выбранный пункт цветом акцента */
+html[data-design="miuix"] .menu:has(use[href="#i-check"]) .mi .mi-icon { order: 2; margin-left: auto; padding-left: 16px; }
+html[data-design="miuix"] .menu .mi:has(use[href="#i-check"]), html[data-design="miuix"] .menu .mi:has(use[href="#i-check"]) .mi-icon { color: var(--md-sys-color-primary); }
+html[data-design="miuix"] .menu .sep { background: var(--mx-divider); margin: 4px 16px; }
+
+/* ── Диалог (DialogContentLayout: снизу, поля 12dp, радиус 32dp, фон background;
+   заголовок 18sp Medium по центру, текст 16sp по центру, кнопки поровну) ── */
+html[data-design="miuix"] .dialog-wrap { align-items: flex-end; padding: 12px 12px calc(12px + var(--bottom-inset)); }
+html[data-design="miuix"] .dialog-wrap .dialog-scrim { background: var(--mx-dim); }
+html[data-design="miuix"] .dialog {
+  max-width: 420px; border-radius: var(--mx-r-dialog); padding: 24px 24px 20px; gap: 12px;
+  background: var(--mx-dialog); color: var(--mx-on); box-shadow: none;
+  animation: mx-dialog-in 380ms cubic-bezier(.2, .9, .3, 1);
+}
+@keyframes mx-dialog-in { from { opacity: 0; transform: translateY(40%); } to { opacity: 1; transform: none; } }
+html[data-design="miuix"] .dialog .d-title { text-align: center; font-size: 18px; line-height: 24px; font-weight: 500; }
+html[data-design="miuix"] .dialog .d-body { text-align: center; font-size: 16px; line-height: 22px; color: var(--mx-summary); }
+html[data-design="miuix"] .dialog .d-icon { color: var(--md-sys-color-primary); }
+html[data-design="miuix"] .dialog .d-actions { justify-content: stretch; gap: 12px; margin-top: 8px; }
+html[data-design="miuix"] .dialog .d-actions .btn {
+  flex: 1 1 0; height: 48px; padding: 0 12px; border-radius: var(--mx-r-btn); font-size: 17px; font-weight: 500;
+  background: var(--mx-secondary-variant); color: var(--mx-on-secondary-variant); }
+html[data-design="miuix"] .dialog .d-actions .btn:last-child { background: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary); }
+html[data-design="miuix"] .dialog .d-actions .btn.danger:last-child,
+html[data-design="miuix"] .dialog .d-actions .btn:last-child.danger { background: var(--md-sys-color-error); color: var(--md-sys-color-on-error); }
+html[data-design="miuix"] .dialog .d-actions .btn[hidden] { display: none; }
+html[data-design="miuix"] .dialog .tf, html[data-design="miuix"] .dialog input { text-align: left; }
+@media (min-width: 600px) {
+  html[data-design="miuix"] .dialog-wrap { align-items: center; }
+  html[data-design="miuix"] .dialog { animation: dialogIn var(--dur-long) var(--spring); }
+}
+
+/* ── Лист (BottomSheet: верхние углы 28dp, фон background, заголовок 18sp по центру) ── */
+html[data-design="miuix"] .scrim { background: var(--mx-dim); }
+html[data-design="miuix"] .sheet {
+  background: var(--mx-dialog); border-radius: var(--mx-r-sheet) var(--mx-r-sheet) 0 0; box-shadow: none;
+  padding-left: 16px; padding-right: 16px; }
+html[data-design="miuix"] .sheet .handle { width: 40px; height: 4px; opacity: .25; background: var(--mx-on); }
+html[data-design="miuix"] .sheet:focus-visible { outline: none; }
+html[data-design="miuix"] .sheet-title { text-align: center; font-size: 18px; line-height: 24px; font-weight: 500; }
+html[data-design="miuix"] .sheet-desc { text-align: center; color: var(--mx-summary); }
+html[data-design="miuix"] .sheet-hint { background: var(--mx-tint); color: var(--mx-on-tint); border-radius: 12px; }
+/* лист темы: блоки — карточками на фоне листа */
+html[data-design="miuix"] .theme-preview, html[data-design="miuix"] .picker { background: var(--mx-bg); border-radius: 20px; }
+html[data-design="miuix"] .amoled-row { background: var(--mx-bg); border-radius: 16px; padding-left: 16px; padding-right: 16px; }
+
+/* ── Полноэкранный редактор ────────────────────────────────────────────── */
+html[data-design="miuix"] .fs-dialog { background: var(--mx-bg); }
+html[data-design="miuix"] .fs-bar { background: var(--mx-bg); }
+html[data-design="miuix"] .fs-bar .fs-title { font-size: 20px; font-weight: 500; }
+html[data-design="miuix"] .code-edit { background: var(--mx-card); border-radius: var(--mx-r-card); }
+html[data-design="miuix"] .code-edit.selecting > textarea { background: var(--mx-card); }
+
+/* ── Снекбар (Snackbar: тёмная плашка 16dp над навигацией) ─────────────── */
+/* уведомление — плашка-пилюля по ширине текста, полупрозрачная с размытием
+   фона, со значком модуля слева, как уведомления в Галерее HyperOS */
+html[data-design="miuix"] .snackbar {
+  left: 0; right: 0; width: fit-content; max-width: calc(100% - 48px); margin: 0 auto;
+  min-height: 52px; padding: 10px 22px 10px 12px; gap: 12px; border-radius: 28px;
+  background: var(--mx-card); color: var(--mx-on); font-size: 15px; line-height: 20px;
+  box-shadow: 0 0 0 .5px var(--mx-divider), 0 8px 28px rgb(0 0 0 / .14); }
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html[data-design="miuix"] .snackbar { background: color-mix(in srgb, var(--mx-card) 74%, transparent);
+    -webkit-backdrop-filter: blur(24px) saturate(1.8); backdrop-filter: blur(24px) saturate(1.8); }
+}
+html[data-design="miuix"] .snackbar .btn.text { color: var(--md-sys-color-primary); }
+.snack-ic { display: none; }
+html[data-design="miuix"] .snack-ic { display: grid; place-items: center; flex: none; width: 30px; height: 30px;
+  border-radius: 50%; background: var(--md-sys-color-primary); color: #fff; }
+html[data-design="miuix"] .snack-ic svg { width: 18px; height: 18px; }
+
+/* ── Навигация: плавающая капсула с размытием, как в HyperOS 3 (Галерея,
+   Проводник): выбранный раздел — в своей подложке-капсуле внутри панели.
+   Подложка и выбранный значок с подписью — синие (акцент miuix), остальные
+   разделы — полным цветом текста, а не блёклые: панель не выглядит серой.
+   Значок 26dp, подложка появляется с пружиной. ── */
+html[data-design="miuix"] .nav-bar {
+  background: color-mix(in srgb, var(--mx-card) 72%, transparent);
+  box-shadow: 0 0 0 .5px var(--mx-divider), 0 6px 24px rgb(0 0 0 / .10);
+}
+html[data-design="miuix"] .nav-dest::before { background: color-mix(in srgb, var(--md-sys-color-primary) 13%, transparent); }
+html[data-design="miuix"] .nav-dest { color: var(--mx-on); transition: color var(--dur-short) var(--standard), opacity var(--dur-short) var(--standard); }
+html[data-design="miuix"] .nav-dest[aria-current="page"] { color: var(--md-sys-color-primary); }
+html[data-design="miuix"] .nav-dest:active { opacity: .6; }
+html[data-design="miuix"] .nav-ind .icon { width: 26px; height: 26px; }
+html[data-design="miuix"] .nav-dest { flex-basis: 80px; width: 80px; }
+html[data-design="miuix"] .nav-label { font-size: 12px; font-weight: 400; letter-spacing: 0; }
+html[data-design="miuix"] .nav-dest[aria-current="page"] .nav-label { font-weight: 600; }
+
+/* ── Карточка состояния и карточки главной ───────────────────────────────
+   Карточка состояния — белая, как блоки «Безопасности» и «Об устройстве»
+   HyperOS, а не залитая акцентом: состояние показывает цвет значка (работает —
+   синий, пауза — оранжевый, остановлена — серый, нет связи — красный), текст
+   обычный чёрный с серой подписью. «Запустить» — синяя кнопка, «Остановить»
+   и значки рядом — серые вторичные кнопки miuix, как «Не сейчас». */
+html[data-design="miuix"] .hero, html[data-design="miuix"] .hero.running, html[data-design="miuix"] .hero.paused {
+  --hero-bg: var(--mx-card); border-radius: 24px; color: var(--mx-on); }
+html[data-design="miuix"] .hero-icon { border-radius: 18px; background: var(--mx-secondary-variant); color: var(--mx-summary); }
+html[data-design="miuix"] .hero.running .hero-icon { border-radius: 18px; background: var(--md-sys-color-primary); color: #fff; }
+html[data-design="miuix"] .hero.paused .hero-icon { border-radius: 18px; background: #ff8a00; color: #fff; }
+html[data-design="miuix"] .hero.offline .hero-icon { background: var(--md-sys-color-error); color: #fff; }
+html[data-design="miuix"] .hero-state { font-weight: 600; }
+html[data-design="miuix"] .hero-sub, html[data-design="miuix"] .hstat-label { color: var(--mx-summary); opacity: 1; }
+html[data-design="miuix"] .hero-actions .btn { border-radius: var(--mx-r-btn); }
+html[data-design="miuix"] .hero.running .hero-actions .btn, html[data-design="miuix"] .hero.paused .hero-actions .btn {
+  background: var(--mx-secondary-variant); color: var(--mx-on); }
+html[data-design="miuix"] .hero-restart { border-radius: var(--mx-r-btn); border: 0;
+  background: var(--mx-secondary-variant); color: var(--mx-on); }
+html[data-design="miuix"] .mode-card, html[data-design="miuix"] .smart-tile, html[data-design="miuix"] .strat-src,
+html[data-design="miuix"] .main-switch, html[data-design="miuix"] .group, html[data-design="miuix"] .suggest {
+  background: var(--mx-card); color: var(--mx-on); border-radius: var(--mx-r-card); }
+html[data-design="miuix"] .mode-card { border-radius: 20px; }
+html[data-design="miuix"] .mode-card-ic, html[data-design="miuix"] .strat-hero-ic {
+  border-radius: 14px; background: var(--mx-tint); color: var(--mx-on-tint); }
+html[data-design="miuix"] .mode-card-label, html[data-design="miuix"] .mode-card-sub { color: var(--mx-summary); opacity: 1; }
+html[data-design="miuix"] .st-head, html[data-design="miuix"] .st-sub { color: var(--mx-summary); }
+html[data-design="miuix"] .st-title { font-weight: 500; }
+html[data-design="miuix"] .st-value { font-weight: 600; }
+html[data-design="miuix"] .smart-tile.warn { background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); }
+html[data-design="miuix"] .smart-hero, html[data-design="miuix"] .strat-hero {
+  background: var(--mx-card); color: var(--mx-on); border-radius: 24px; }
+html[data-design="miuix"] .smart-hero-sub, html[data-design="miuix"] .smart-hero-net { color: var(--mx-summary); opacity: 1; }
+html[data-design="miuix"] .smart-ring .track { stroke: var(--mx-secondary-variant); }
+html[data-design="miuix"] .main-switch { min-height: 64px; padding: 16px; font-size: 18px; font-weight: 500; }
+html[data-design="miuix"] .main-switch.on { background: var(--mx-card); color: var(--mx-on); }
+html[data-design="miuix"] .suggest { background: var(--mx-tint); color: var(--mx-on-tint); }
+html[data-design="miuix"] .banner { border-radius: var(--mx-r-card); background: var(--mx-tint); color: var(--mx-on-tint); }
+html[data-design="miuix"] .banner.danger { background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); }
+html[data-design="miuix"] .pill { border-radius: 6px; }
+html[data-design="miuix"] .pill.tonal { background: var(--mx-tint); color: var(--mx-on-tint); }
+html[data-design="miuix"] .status.info { background: var(--mx-secondary-variant); color: var(--mx-summary); }
+html[data-design="miuix"] .empty .empty-icon { background: var(--mx-card); color: var(--mx-summary); }
+html[data-design="miuix"] .helper { color: var(--mx-summary); padding-left: 16px; padding-right: 16px; }
+
+/* ── Журнал, код, прогресс, ползунок ───────────────────────────────────── */
+html[data-design="miuix"] .code-block, html[data-design="miuix"] .log-view {
+  background: var(--mx-card); border: 0; border-radius: var(--mx-r-card); color: var(--mx-on); }
+html[data-design="miuix"] .logs-page .log-view {
+  height: calc(100dvh - var(--top-inset) - var(--appbar-height) - var(--mx-large-h) - var(--bottom-inset) - 88px); }
+html[data-design="miuix"] .progress-linear { height: 6px; background: var(--mx-secondary-variant); }
+html[data-design="miuix"] .slider::-webkit-slider-runnable-track { height: 28px; border-radius: 14px; }
+html[data-design="miuix"] .slider::-webkit-slider-thumb {
+  width: 20px; height: 20px; margin-top: 4px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / .3); }
+
+/* ── Выбор цвета на листе темы ─────────────────────────────────────────── */
+html[data-design="miuix"] .swatch-dot.on { border-radius: 50%; box-shadow: 0 0 0 3px var(--mx-dialog), 0 0 0 5px var(--md-sys-color-primary); }
+
+/* ── Фокус с клавиатуры — акцентом, как остальное ──────────────────────── */
+html[data-design="miuix"] :where(button, a, input, select, textarea, label.clickable, [tabindex]):focus-visible,
+html[data-design="miuix"] .switch:focus-visible { outline-color: var(--md-sys-color-primary); }
+
+
+/* ══ Раскладка HyperOS ═══════════════════════════════════════════════════
+   Вид элемента в HyperOS следует из его назначения (настройки, Bluetooth,
+   «Уведомления», списки приложений Xiaomi):
+   - главная страница настроек — указатель разделов: строки прямо на фоне,
+     цветной квадрат-значок, без пояснений, группы разделены линией, без
+     заголовков групп; значение — справа;
+   - внутренние страницы — карточки-группы, строки без значков (что строка
+     делает, говорит её текст), маленький серый заголовок группы;
+   - выбор из списка (выпадающая строка) — значение справа и ⇅, переход — >;
+   - списки приложений — значок, название, черта и переключатель; фильтр —
+     строкой-заголовком над списком;
+   - листы — крестик и заголовок по центру, внутри — карточки на сером;
+   - отдельное действие под списком — карточка с синим текстом («More»). */
+
+html[data-design="miuix"] .mx-only { display: flex; }
+html[data-design="miuix"] .list-item .li-primary { font-weight: 400; }
+
+/* заголовок группы — маленький серый (Notifications, Status bar, AVAILABLE DEVICES) */
+html[data-design="miuix"] .subhead, html[data-design="miuix"] .subhead.plain, html[data-design="miuix"] .sheet-group {
+  font-size: 13px; line-height: 18px; font-weight: 400; color: var(--mx-summary); padding: 8px 16px 0; }
+html[data-design="miuix"] .subhead.plain { padding: 0 4px; }
+
+/* ── главная настроек ── */
+html[data-design="miuix"] #settings-body .subhead { display: none; }
+html[data-design="miuix"] #settings-body .list { background: transparent; border-radius: 0; }
+html[data-design="miuix"] #settings-body .list-item { padding: 12px 12px; min-height: 56px; }
+html[data-design="miuix"] #settings-body .li-secondary { display: none; }
+html[data-design="miuix"] #settings-body > .stack + .stack { border-top: 1px solid var(--mx-divider); padding-top: 8px; margin-left: 12px; margin-right: 12px; }
+html[data-design="miuix"] #settings-body > .stack + .stack > .list { margin-left: -12px; margin-right: -12px; }
+html[data-design="miuix"] #settings-body #dev-block .subhead { display: block; }
+html[data-design="miuix"] #settings-body #dev-block .li-secondary { display: block; }
+html[data-design="miuix"] .li-icon[data-tone] {
+  width: 32px; height: 32px; border-radius: 9px; color: #fff; display: grid; place-items: center; }
+html[data-design="miuix"] .li-icon[data-tone] svg.icon { width: 20px; height: 20px; }
+html[data-design="miuix"] .li-icon[data-tone="blue"]   { background: #3482ff; }
+html[data-design="miuix"] .li-icon[data-tone="green"]  { background: #2bc26b; }
+html[data-design="miuix"] .li-icon[data-tone="orange"] { background: #ff8a1f; }
+html[data-design="miuix"] .li-icon[data-tone="red"]    { background: #f5455c; }
+html[data-design="miuix"] .li-icon[data-tone="purple"] { background: #8d6bff; }
+html[data-design="miuix"] .li-icon[data-tone="teal"]   { background: #19b6c4; }
+html[data-design="miuix"] .li-icon[data-tone="indigo"] { background: #5c7cff; }
+html[data-design="miuix"] .li-icon[data-tone="gray"]   { background: #8e8e93; }
+
+/* ── внутренние страницы и листы: строки без значков (кроме значков приложений) ── */
+html[data-design="miuix"] .page:not([data-page="settings"]) .list-item > .li-icon:not(.app-ico-cell),
+html[data-design="miuix"] .sheet .list-item > .li-icon:not(.app-ico-cell) { display: none; }
+html[data-design="miuix"] .split-sw .split-main > .li-icon { display: none; }
+html[data-design="miuix"] .list-item .li-trail.li-value { color: var(--mx-summary); }
+
+/* ── сегменты: выбранный залит акцентом (как «Default for calls» / «Data SIM») ── */
+html[data-design="miuix"] .segmented .seg.on, html[data-design="miuix"] .seg-mode .seg.selected,
+html[data-design="miuix"][data-mode="dark"] .segmented .seg.on, html[data-design="miuix"][data-mode="dark"] .seg-mode .seg.selected {
+  background: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary); box-shadow: none; font-weight: 500; }
+
+/* ── отдельные действия под списком — карточка с синим текстом ── */
+html[data-design="miuix"] .page .row:has(> .btn.text):not(:has(> :not(.btn.text))) {
+  flex-direction: column; align-items: stretch; gap: 0; background: var(--mx-card); border-radius: var(--mx-r-card); overflow: hidden; }
+html[data-design="miuix"] .page .row:has(> .btn.text):not(:has(> :not(.btn.text))) > .btn.text {
+  justify-content: flex-start; height: 56px; padding: 0 16px; border-radius: 0; font-size: 17px; font-weight: 400; }
+html[data-design="miuix"] .page .row:has(> .btn.text):not(:has(> :not(.btn.text))) > .btn.text > svg { display: none; }
+
+/* ── списки приложений: значок-«квадрат», название, черта и переключатель ── */
+html[data-design="miuix"] #pk-filter-chips { display: none; }
+html[data-design="miuix"] .mx-sort {
+  display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; margin: 4px 0 -4px 16px;
+  appearance: none; border: 0; background: none; padding: 4px 0; cursor: pointer;
+  font-size: 13px; line-height: 18px; color: var(--mx-summary); }
+html[data-design="miuix"] #pk .app-ico, html[data-design="miuix"] #pk .app-ico-fallback { border-radius: 11px; }
+html[data-design="miuix"] #pk .li-secondary.li-mono { font-family: inherit; font-size: 13px; }
+html[data-design="miuix"] #pk .li-trail { padding-left: 14px; border-left: 1px solid var(--mx-divider); align-self: center; height: 32px; }
+html[data-design="miuix"] #pk .checkbox {
+  width: 49px; height: 28px; flex: 0 0 49px; border-radius: 14px; background: var(--mx-secondary); position: relative;
+  transition: background-color var(--dur-medium) var(--standard); }
+html[data-design="miuix"] #pk .checkbox::after {
+  content: ""; position: absolute; width: 20px; height: 20px; border-radius: 50%; inset: auto;
+  top: 4px; left: 4px; background: var(--mx-thumb-off); -webkit-mask: none; mask: none; box-shadow: 0 1px 2px rgb(0 0 0 / .12);
+  transition: left 280ms cubic-bezier(.3, 1.3, .5, 1); }
+html[data-design="miuix"] #pk .checkbox:checked { background: var(--md-sys-color-primary); }
+html[data-design="miuix"] #pk .checkbox:checked::after { left: 25px; background: var(--md-sys-color-on-primary); }
+html[data-design="miuix"] #pk .list-item.selected { background: transparent; }
+html[data-design="miuix"] #pk .list-item.selected .li-primary { color: var(--mx-on); }
+
+/* ── листы: крестик слева, заголовок по центру; внутри — карточки на сером ── */
+html[data-design="miuix"] .sheet { background: var(--mx-sheet); }
+html[data-design="miuix"] .mx-sheet-head { display: flex; align-items: center; position: relative; min-height: 48px; }
+html[data-design="miuix"] .mx-sheet-head .sheet-title { flex: 1; padding: 0 48px; }
+html[data-design="miuix"] .mx-sheet-close { display: inline-flex; position: absolute; left: -8px; color: var(--mx-on); }
+html[data-design="miuix"] .sheet .list, html[data-design="miuix"] .sheet .sheet-scroll > .list {
+  background: var(--mx-sheet-card); border-radius: var(--mx-r-card); overflow: hidden; }
+html[data-design="miuix"] .sheet .list-item { padding-left: 16px; padding-right: 16px; }
+html[data-design="miuix"] .sheet .theme-preview, html[data-design="miuix"] .sheet .picker { background: var(--mx-sheet-card); }
+html[data-design="miuix"] .sheet .segmented { background: var(--mx-sheet-card); }
+/* кнопки листа — как в диалоге: поровну, главная залита акцентом; «Импорт» — текстом */
+html[data-design="miuix"] .sheet-actions { gap: 12px; }
+html[data-design="miuix"] .sheet-actions .btn { flex: 1 1 0; height: 48px; font-size: 17px; font-weight: 500;
+  background: var(--mx-secondary-variant); color: var(--mx-on-secondary-variant); }
+html[data-design="miuix"] .sheet-actions .btn:not(.text):not(.tonal) { background: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary); }
+html[data-design="miuix"] .sheet-actions .btn.sheet-lead { flex: none; background: none; color: var(--md-sys-color-primary); padding: 0 8px; }
+html[data-design="miuix"] .sheet-actions .btn > svg { display: none; }
+html[data-design="miuix"] .sheet-actions .btn.sheet-lead > svg { display: block; }
+/* «Отмена» и «Закрыть» в листе повторяют крестик — в HyperOS их нет */
+html[data-design="miuix"] .sheet-actions .btn[onclick="closeSheet()"] { display: none; }
+html[data-design="miuix"] .sheet-actions:not(:has(> .btn:not([onclick="closeSheet()"]))) { display: none; }
+
+/* ── выбор одного из списка («Стиль уведомлений» и т.п.): без кружков, у
+   выбранного — синяя галочка справа и синий текст ── */
+html[data-design="miuix"] .list-item > .radio, html[data-design="miuix"] .list-item .radio {
+  order: 9; margin-left: auto; width: 24px; height: 24px; flex: 0 0 24px; background: transparent; }
+html[data-design="miuix"] .list-item .radio::after {
+  inset: 0; opacity: 0; background: var(--md-sys-color-primary);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center / 24px 24px;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center / 24px 24px; }
+html[data-design="miuix"] .list-item .radio:checked, html[data-design="miuix"] .list-item.selected .radio:checked { background: transparent; }
+html[data-design="miuix"] .list-item .radio:checked::after, html[data-design="miuix"] .list-item.selected .radio:checked::after { opacity: 1; background: var(--md-sys-color-primary); }
+html[data-design="miuix"] .list-item:has(.radio:checked) .li-primary { color: var(--md-sys-color-primary); }
+html[data-design="miuix"] .list-item.selected:has(.radio) { background: transparent; }
+/* предпросмотр акцента: у HyperOS палитра своя, показывать нечего */
+html[data-design="miuix"] .theme-preview { display: none; }
+
+/* ── Переход между экранами (core.js, mxNavPages) ─────────────────────────
+   Верхний экран на время перехода — непрозрачный лист во весь экран: его фон
+   уходит под шапку и до низа экрана. Под ним — затемнение нижнего экрана. */
+html[data-design="miuix"] .content { min-height: 100%; }
+html[data-design="miuix"] .page.mx-surface { isolation: isolate; }
+html[data-design="miuix"] .page.mx-surface::before {
+  content: ""; position: absolute; z-index: -1; pointer-events: none;
+  top: calc(-1 * (var(--top-inset) + var(--appbar-height))); bottom: -100vh;
+  left: calc(-1 * var(--screen-margin)); right: calc(-1 * var(--screen-margin));
+  background: var(--mx-bg);
+}
+.mx-dim { position: fixed; inset: 0; z-index: 2; background: #000; opacity: 0; pointer-events: none; }

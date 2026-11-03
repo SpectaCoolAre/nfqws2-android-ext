@@ -619,7 +619,8 @@ dns_geo_scan_due
 assert_rc 0 $? "so a check is due"
 dns_apply_now() { echo applied >> "$MOCK_DIR/geo.applied"; }
 dns_geo_scan
-assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "-boot 192.168.1.1:53" "reference answers and server addresses come from the network DNS"
+assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "-boot 192.168.1.1:53" "server addresses come from the network DNS"
+assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "-ref https://common.dot.dns.yandex.net/dns-query,77.88.8.8:53" "reference «real» answers come from an honest DNS, not the network one (a router that bypasses geo-blocks answers with proxies)"
 assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "dns.zapret.moe" "all the DoT servers of the list are checked"
 assert_eq "chatgpt.com claude.ai" "$(tr '\n' ' ' < "$MOCK_DIR/geoscan.list" | sed 's/ $//')" "on every domain of the list, not on a few samples"
 assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "-asncache $DNS_GEO_SCAN_DIR/asn.cache" "network numbers are cached"
@@ -656,7 +657,7 @@ assert_no_file "$MOCK_DIR/geo.applied" "the same pool again — nothing to apply
 sed -i '1s/^#time=[0-9]*/#time=1/' "$(dns_geo_scan_file)"
 dns_geo_scan_due
 assert_rc 0 $? "an old check is due again"
-printf '#time=%s boot=x v=2\nfast.example\tfail\t0\t0\t7\t0\t-\n' "$(date +%s)" > "$(dns_geo_scan_file)"
+printf '#time=%s boot=x v=%s\nfast.example\tfail\t0\t0\t7\t0\t-\n' "$(date +%s)" "$DNS_GEO_SCAN_VER" > "$(dns_geo_scan_file)"
 assert_eq "" "$(dns_geo_pick)" "no server answered (the network was not up yet)"
 assert_contains "$(dns_geo_servers)" "https://dns.comss.one/dns-query" "Comss for now"
 dns_geo_scan_due
@@ -699,7 +700,7 @@ dns_geo_scan >/dev/null
 # Маршруты по доменам: каждый — к своим серверам (свой адрес прокси —
 # только к ним), никем не обходимый — в DNS сети, без данных — общий пул
 printf 'chatgpt.com\nab.chatgpt.com\nclashofclans.com\nintel.com\nopenai.com\n' > "$DNS_GEO_LIST"
-{ printf '#time=%s boot=x v=2\n' "$(date +%s)"
+{ printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
   printf 'zapret.example\tok\t20\t2\t4\t0\ttls\n'
   printf 'comss.example\tok\t60\t3\t4\t1\thttps\n'
   printf 'dead.example\tfail\t0\t0\t4\t0\t-\ttimeout\n'
@@ -780,7 +781,7 @@ rm -rf "$SMART_DIR"
 # Все домены одного сайта — через один сервер: разные прокси в одной сессии —
 # разные адреса выхода, и Google отвечает «unusual traffic». Закреплённый
 # сервер сайта остаётся, пока годится; отключённый вручную не берётся
-{ printf '#time=%s boot=x v=2\n' "$(date +%s)"
+{ printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
   printf 'a.example\tok\t20\t3\t3\t0\ttls\n'
   printf 'b.example\tok\t30\t3\t3\t0\ttls\n'
   printf '=gemini.google.com\ta.example,b.example\n'

@@ -134,7 +134,7 @@ html[data-mode="dark"] { --tk-keyword: #569cd6; --tk-string: #ce9178; --tk-strin
   }
   body.nav-hidden { --land-bottom: calc(var(--bottom-inset) + 16px); }
   .sheet { max-width: 760px; }
-  .page.split.active, .page.split.leaving, .page.split.peek {
+  .page.split.active, .page.split.leaving, .page.split.peek, .page.split.warm {
     display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 24px; align-items: start; }
   .page.split > .pcol { display: flex; flex-direction: column; gap: var(--gap); min-width: 0; }
   /* левая колонка закреплена; отступ 3 px — чтобы не резались рамки фокуса */

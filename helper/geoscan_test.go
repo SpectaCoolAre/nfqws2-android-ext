@@ -472,3 +472,28 @@ func TestSiteRefuses(t *testing.T) {
 		}
 	}
 }
+
+// Дома DNS сети — роутер, который сам обходит геоблок (в его настройках
+// Comss): он отдаёт адреса прокси. Эталон «настоящих» адресов — честный DNS
+// (refServers), а не роутер: иначе сервер с настоящим адресом выглядел бы
+// обходящим, а Comss — нет (так Gemini и Clash of Clans дома шли не туда)
+func TestGeoScanReferenceIsNotTheBypassingRouter(t *testing.T) {
+	real := map[string]string{"gemini.google.com": "142.250.74.14", "chatgpt.com": "104.18.32.47"}
+	router := netDNS(t, func(string) net.IP { return ip("206.223.251.18") }, true, nil) // роутер с Comss
+	honest := netDNS(t, func(n string) net.IP { return ip(real[n]) }, true, nil)
+	comss := fakeDoT(t, func(string) net.IP { return ip("206.223.251.18") })
+	plain := fakeDoT(t, func(n string) net.IP { return ip(real[n]) }) // ничего не обходит
+	names := []string{"gemini.google.com", "chatgpt.com"}
+	refServers = []string{honest}
+	defer func() { refServers = nil }()
+	res := geoScan([]string{comss, plain}, names, router, 6*time.Second)
+	if string(res[0].marks) != "pp" || string(res[1].marks) != "ss" {
+		t.Fatalf("с честным эталоном: Comss %q (ждали pp), без обхода %q (ждали ss)", res[0].marks, res[1].marks)
+	}
+	// честный DNS не ответил — эталон из DNS сети, как раньше: домены не
+	// остаются без эталона
+	refServers = []string{"127.0.0.1:1"}
+	if r := refAnswers(names, router, 2*time.Second); len(r[0]) != 1 || !r[0][0].Equal(ip("206.223.251.18")) {
+		t.Fatalf("запасной эталон: %v", r)
+	}
+}

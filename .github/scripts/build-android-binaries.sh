@@ -30,7 +30,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-$REPO_DIR}"
 
 ZAPRET2_REPO="${ZAPRET2_REPO:-https://github.com/bol-van/zapret2.git}"
 ZAPRET2_TAG="${ZAPRET2_TAG:-v1.0.6}"
-ZAPRET2_SHA="${ZAPRET2_SHA:-221d7dff24bfec0cd5ac0a5070b8acef2008af3d}" # v1.0.6
+ZAPRET2_SHA="${ZAPRET2_SHA:-f924d796b49da9e455c6bb09268298ef1471cd74}" # v1.0.6 + master 31.10.2026: исправление UAF, «!» в hostlist, вывод имени автолиста
 
 LUAJIT_RELEASE="${LUAJIT_RELEASE:-2.1-20250826}"
 LUAJIT_VER="2.1"

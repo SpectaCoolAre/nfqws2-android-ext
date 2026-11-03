@@ -49,10 +49,11 @@ const mockElements = {
     querySelectorAll: () => []
   },
   'apps-info': { textContent: '' },
-  'amode-list': { innerHTML: '' }
+  'amode-list': { innerHTML: '' },
+  'pk-chip-work': { style: { display: 'none' } }
 };
 
-['all', 'user', 'system', 'selected'].forEach(type => {
+['all', 'user', 'system', 'work', 'selected'].forEach(type => {
   const classes = new Set(['chip', 'filter', 'state']);
   if (type === 'all') classes.add('selected');
   chips[type] = {
@@ -130,6 +131,46 @@ truthy(sandbox.isAppSystem('android'), 'string android is system');
 truthy(sandbox.isAppSystem('com.google.android.gms'), 'string com.google.android.gms is system');
 truthy(!sandbox.isAppSystem('org.mozilla.firefox'), 'string org.mozilla.firefox is not system');
 
+// ── Multi-user / Shelter classification ─────────────────────────────────────
+sect('Multi-user / Shelter (Option B) classification');
+
+truthy(sandbox.isAppWork({ pkg: 'com.slack', userId: 10, isWork: true }),
+  'item with isWork: true is work profile');
+truthy(sandbox.isAppWork({ pkg: 'com.slack', userId: 10 }),
+  'item with userId > 0 is work profile');
+truthy(!sandbox.isAppWork({ pkg: 'com.slack', userId: 0, isWork: false }),
+  'item with userId: 0 is not work profile');
+truthy(!sandbox.isAppWork({ pkg: 'com.slack', userId: 11, isWork: false }),
+  'a guest or second user is not a work profile');
+truthy(!sandbox.isAppWork({ pkg: 'com.slack', userId: 12, isWork: 'false' }),
+  'the generator isWork flag wins over the bare user id');
+truthy(!sandbox.isAppWork({ pkg: 'com.slack' }),
+  'item without userId is not work profile');
+truthy(!sandbox.isAppWork('com.slack'),
+  'string is not work profile');
+
+eq('10:org.telegram.messenger', sandbox.appKey({ pkg: 'org.telegram.messenger', userId: 10 }),
+  'appKey generates prefixed key for secondary profile');
+// a bare package in apps.list means «every profile» to resolve_app_uids(), so
+// the personal copy must be named explicitly too, otherwise selecting it also
+// enables the work copy
+eq('0:org.telegram.messenger', sandbox.appKey({ pkg: 'org.telegram.messenger', userId: 0 }),
+  'appKey names the personal profile explicitly');
+eq('org.telegram.messenger', sandbox.appKey('org.telegram.messenger'),
+  'appKey preserves plain string');
+
+const mockSet = new Set(['org.telegram.messenger', '10:com.slack', '0:com.custom.app']);
+truthy(sandbox.isAppSelected(mockSet, { pkg: 'org.telegram.messenger', userId: 0 }),
+  'global package selection matches user 0');
+truthy(sandbox.isAppSelected(mockSet, { pkg: 'org.telegram.messenger', userId: 10 }),
+  'global package selection matches user 10 (Shelter)');
+truthy(sandbox.isAppSelected(mockSet, { pkg: 'com.slack', userId: 10 }),
+  'prefixed package matches targeted user 10');
+truthy(!sandbox.isAppSelected(mockSet, { pkg: 'com.slack', userId: 0 }),
+  'prefixed package (10:) does not match user 0');
+truthy(sandbox.isAppSelected(mockSet, { pkg: 'com.custom.app', userId: 0 }),
+  'prefixed package (0:) matches user 0');
+
 // ── setAppTypeFilter & chips ────────────────────────────────────────────────
 sect('setAppTypeFilter & chip toggling');
 
@@ -199,6 +240,21 @@ sect('drawPk filtering');
   truthy(!renderedHtml.includes('com.whatsapp'), 'selected excludes unselected whatsapp');
   truthy(!renderedHtml.includes('com.android.settings'), 'selected excludes unselected settings');
 
+  // 5. Work Profile filter & badge rendering
+  sandbox.pkgs.push({
+    pkg: 'org.telegram.messenger',
+    name: 'Telegram',
+    system: false,
+    userId: 10,
+    userName: 'Shelter',
+    isWork: true
+  });
+  sandbox.setAppTypeFilter('work');
+  await sandbox.drawPk(false);
+  truthy(renderedHtml.includes('· Shelter'), 'work profile app displays work badge with profile name');
+  truthy(renderedHtml.includes('data-key="10:org.telegram.messenger"'), 'work profile app outputs 10:pkg data-key');
+  truthy(!renderedHtml.includes('com.whatsapp'), 'work filter excludes main profile apps');
+
   // ── i18n and markup invariants ──────────────────────────────────────────────
   sect('i18n & markup invariants');
 
@@ -207,6 +263,7 @@ sect('drawPk filtering');
   truthy(html.includes('data-type="all"'), 'markup defines "all" chip');
   truthy(html.includes('data-type="user"'), 'markup defines "user" chip');
   truthy(html.includes('data-type="system"'), 'markup defines "system" chip');
+  truthy(html.includes('data-type="work"'), 'markup defines "work" chip');
   truthy(html.includes('data-type="selected"'), 'markup defines "selected" chip');
   truthy(html.includes('data-ta="aria-label"'), 'chips wrapper has data-ta="aria-label"');
 
@@ -218,6 +275,8 @@ sect('drawPk filtering');
   eq('App filter', EN['Фильтр приложений'], 'Фильтр приложений translated to App filter');
   eq('User', EN['Пользовательские приложения'], 'Пользовательские приложения translated to User');
   eq('System', EN['Системные'], 'Системные translated to System');
+  eq('Work', EN['Рабочие'], 'Рабочие translated to Work');
+  eq('Work profile', EN['Рабочий профиль'], 'Рабочий профиль translated to Work profile');
   eq('Selected', EN['Выбранные'], 'Выбранные translated to Selected');
   eq('System', EN['Системное'], 'Системное translated to System');
   eq('Custom', EN['Пользовательские'], 'Strategy group Пользовательские preserved as Custom');

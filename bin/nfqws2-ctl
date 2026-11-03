@@ -770,12 +770,16 @@ cmd_list_apps() {
   local refresh=0
   case "${1:-}" in refresh|--refresh|-f) refresh=1 ;; esac
   [ -f "$cache" ] || refresh=1
+  # версия схемы кэша: кэш без полей профиля (до рабочих профилей) собирается
+  # заново один раз после обновления (оригинал, 07dea35)
+  [ "$(cat "$cache.version" 2>/dev/null)" = "2" ] || refresh=1
 
-  # Кэш — пока на телефоне не ставили и не удаляли приложения: списки пакетов
-  # системы новее кэша — собираем заново (из оригинала, 0badd3d)
+  # Кэш — пока на телефоне не ставили и не удаляли приложения и не меняли
+  # пользователей и рабочие профили: списки системы новее кэша — собираем
+  # заново (оригинал, 0badd3d, 0ee2a2e)
   if [ "$refresh" = "0" ] && [ -s "$cache" ]; then
     local ref
-    for ref in /data/system/packages.list /data/system/packages.xml /data/app; do
+    for ref in /data/system/packages.list /data/system/packages.xml /data/app /data/system/users/userlist.xml; do
       if [ -e "$ref" ] && [ "$ref" -nt "$cache" ]; then refresh=1; break; fi
     done
     if [ "$refresh" = "0" ]; then cat "$cache"; return 0; fi
@@ -791,15 +795,21 @@ cmd_list_apps() {
     # во временный файл: сбой посреди записи не портит прежний кэш
     local out tmp="$cache.tmp.$$"
     out=$(CLASSPATH="$target" app_process /system/bin com.deathwatcher.PkgList --out "$tmp" --apps-list "$CONFDIR/apps.list" 2>/dev/null)
-    if [ -s "$tmp" ] && grep -q '^\[' "$tmp" 2>/dev/null; then
-      mv -f "$tmp" "$cache"
+    # пустой «[]» от неудачного запуска не должен заменять рабочий кэш
+    # (оригинал, 529c5e2): иначе приложения пропадали до следующей установки
+    if [ -s "$tmp" ] && grep -q '^\[' "$tmp" 2>/dev/null && grep -q '"pkg"' "$tmp" 2>/dev/null; then
+      mv -f "$tmp" "$cache" && printf '2\n' > "$cache.version" 2>/dev/null
       cat "$cache"
       return 0
     fi
     rm -f "$tmp"
-    if [ -n "$out" ] && [ "${out#\[}" != "$out" ]; then
+    if [ -n "$out" ] && [ "${out#\[}" != "$out" ] && printf '%s' "$out" | grep -q '"pkg"'; then
       printf '%s\n' "$out"
-      printf '%s\n' "$out" > "$cache" 2>/dev/null
+      if printf '%s\n' "$out" > "$tmp" 2>/dev/null && mv -f "$tmp" "$cache"; then
+        printf '2\n' > "$cache.version" 2>/dev/null
+      else
+        rm -f "$tmp"
+      fi
       return 0
     fi
   fi
@@ -808,11 +818,29 @@ cmd_list_apps() {
   # лучше голых имён пакетов от pm (оригинал, 0badd3d)
   if [ -s "$cache" ]; then cat "$cache"; return 0; fi
 
-  # Резервный вариант через pm (без названий и иконок)
+  # Резервный вариант через pm (без названий и иконок), с профилями
+  # пользователей: личный — 0, остальные — рабочие (оригинал, aadd63e)
   local PM=pm
   command -v pm >/dev/null 2>&1 || PM=/system/bin/pm
   if command -v "$PM" >/dev/null 2>&1; then
-    "$PM" list packages -3 2>/dev/null | sed 's/^package://' | sort
+    local users u p pkgs n=0 is_work u_name
+    users=$("$PM" list users 2>/dev/null | awk -F'[{:]' '/UserInfo/ { print $2 }')
+    [ -n "$users" ] || users=0
+    printf '[\n'
+    for u in $users; do
+      is_work=false; u_name="Личный"
+      [ "$u" -gt 0 ] 2>/dev/null && { is_work=true; u_name="Рабочий ($u)"; }
+      pkgs=$("$PM" list packages -3 --user "$u" 2>/dev/null | sed 's/^package://' | sort)
+      [ -z "$pkgs" ] && [ "$u" = "0" ] && pkgs=$("$PM" list packages -3 2>/dev/null | sed 's/^package://' | sort)
+      for p in $pkgs; do
+        [ -n "$p" ] || continue
+        [ "$n" -gt 0 ] && printf ',\n'
+        printf '  {"pkg":"%s","name":"%s","icon":"","system":false,"userId":%s,"userName":"%s","isWork":%s}' \
+          "$p" "$p" "$u" "$u_name" "$is_work"
+        n=$((n + 1))
+      done
+    done
+    printf '\n]\n'
   fi
 }
 

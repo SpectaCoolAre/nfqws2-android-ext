@@ -203,10 +203,13 @@ else
   else
     queue_suite "webui: rendered geometry" "$NODE_BIN" "$HERE/webui/test_layout.js"
     queue_suite "webui: tab paging" "$NODE_BIN" "$HERE/webui/test_swipe.js"
+    queue_suite "webui: tab paging (miuix)" env UI_DESIGN=miuix "$NODE_BIN" "$HERE/webui/test_swipe.js"
     queue_suite "webui: long presses" "$NODE_BIN" "$HERE/webui/test_longpress.js"
+    queue_suite "webui: HyperOS design (miuix)" "$NODE_BIN" "$HERE/webui/test_miuix.js"
     queue_suite "webui: uptime ticks evenly" "$NODE_BIN" "$HERE/webui/test_uptime.js"
     queue_suite "webui: easter egg game" "$NODE_BIN" "$HERE/webui/test_flappy.js"
     queue_suite "webui: landscape layouts" "$NODE_BIN" "$HERE/webui/test_landscape.js"
+    queue_suite "webui: landscape layouts (miuix)" env UI_DESIGN=miuix "$NODE_BIN" "$HERE/webui/test_landscape.js"
     queue_suite "webui: quick actions on tabs" "$NODE_BIN" "$HERE/webui/test_navquick.js"
     queue_suite "webui: settings before the first status" "$NODE_BIN" "$HERE/webui/test_settings_late.js"
     queue_suite "webui: smart mode screen" "$NODE_BIN" "$HERE/webui/test_smart.js"

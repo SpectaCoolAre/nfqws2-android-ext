@@ -14,6 +14,9 @@ renderNavBar('control');
 renderAppBar('control', false);
 renderLogChips();
 renderParams({});
+warmTabs();
+// поворот и смена размера окна меняют ширину страницы — невидимые вкладки за ней
+addEventListener('resize', () => { if(!transitionCleanup && !swipe.st) warmTabs(); });
 (async () => {
   await detectSpawn();
   // цвета системы — в фоне: первый раз это секунды, дальше ответ из кэша модуля

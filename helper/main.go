@@ -35,6 +35,7 @@ func main() {
 	verify := flag.Bool("verify", false, "-geoscan: проверить сертификат по адресу прокси (частая проверка)")
 	shared := flag.String("shared", "", "-geoscan: файл прошлой полной проверки — её общие адреса прокси (частая проверка)")
 	boot := flag.String("boot", "", "DNS сети (адрес:53) для -geoscan: эталон ответов и адреса серверов")
+	ref := flag.String("ref", "", "-geoscan: честные DNS для эталона ответов через запятую (адрес:53 или https://имя); DNS сети — запасной")
 	flag.Parse()
 	log.SetFlags(log.Ldate | log.Ltime)
 	log.SetPrefix("nfqws2-helper: ")
@@ -74,6 +75,7 @@ func main() {
 			w = 6 * time.Second
 		}
 		asnCache = *asnc
+		refServers = splitList(*ref)
 		if *shared != "" {
 			knownShare = loadShared(*shared)
 		}

@@ -448,7 +448,12 @@ function onLongPress(root, sel, fn){
     if(e.pointerType === 'mouse' && e.button !== 0) return;
     const el = sel ? e.target.closest(sel) : root;
     if(!el || !root.contains(el)) return;
-    if(e.pointerType !== 'mouse' && inGestureZone(e.clientX, e.clientY)) return;
+    // Только нижняя полоса жестов («домой», недавние). Боковые не считаем:
+    // кнопка журналов стоит у правого края, и удержание правой трети кнопки
+    // пропускалось — долгое нажатие срабатывало «через раз», по тому, куда
+    // пришёлся палец. Жест «назад» сбоку система забирает — приходит
+    // pointercancel, и таймер снимается
+    if(e.pointerType !== 'mouse' && inGestureZone(e.clientX, e.clientY, true)) return;
     x0 = e.clientX; y0 = e.clientY;
     const page = currentPage;
     tm = setTimeout(() => {
@@ -486,10 +491,13 @@ async function withBusy(a, ms){
 
 /* Перерисовка без лишнего мигания: содержимое меняется только если оно
    действительно другое, а новые строки проявляются, а не возникают. */
-function setHTML(el, html, animate){
+function setHTML(el, html, animate, keep){
   if(typeof el === 'string') el = $(el);
-  if(!el || el._html === html) return false;
-  el._html = html;
+  if(!el || (keep !== false && el._html === html)) return false;
+  // keep=false — разметка с картинками base64 (значки приложений): DOM их уже
+  // разобрал, а копия строки лежала бы рядом с теми же данными в pkgs
+  // (оригинал, e22521c)
+  el._html = keep === false ? null : html;
   el.innerHTML = html;
   if(animate !== false){ el.classList.remove('appear'); void el.offsetWidth; el.classList.add('appear'); }
   return true;
@@ -613,8 +621,53 @@ function renderAppBar(page, animate){
   $('app-bar').classList.toggle('top', !m.child);
   const tEl = $('app-title');
   tEl.textContent = m.child ? t(m.title) : 'nfqws2-android-ext';
+  // miuix: большой заголовок — название экрана (на «Состоянии» — модуля),
+  // маленький в шапке — тот же
+  mxTitles();
+  if(document.documentElement.dataset.design === 'miuix') tEl.textContent = mxTitleText(page);
   if(animate !== false){ tEl.classList.remove('swap'); void tEl.offsetWidth; tEl.classList.add('swap'); }
   fillBarActions(m.actions);
+}
+/* miuix: большой заголовок — первая строка каждой страницы. Он прокручивается
+   вместе со страницей (браузером, без отставания) и уезжает с ней при переходе.
+   В Material 3 скрыт. */
+const mxTitleText = page => page === 'control' ? 'nfqws2-android-ext' : t(PAGE_META[page].title);
+function mxTitles(){
+  document.querySelectorAll('.page[data-page]').forEach(p => {
+    if(!PAGE_META[p.dataset.page]) return;
+    let h = p.firstElementChild;
+    if(!h || !h.classList.contains('mx-title')){
+      h = document.createElement('div');
+      h.className = 'mx-title';
+      h.setAttribute('aria-hidden', 'true');
+      h.innerHTML = '<span class="mx-title-text"></span>';
+      p.prepend(h);
+    }
+    const tx = h.firstElementChild, txt = mxTitleText(p.dataset.page);
+    if(tx.textContent !== txt) tx.textContent = txt;
+  });
+  // логотип модуля (пасхалка): в HyperOS — справа от большого заголовка
+  // главной, в Material 3 — в шапке рядом с названием
+  const logo = $('brand-logo');
+  if(!logo) return;
+  if(document.documentElement.dataset.design === 'miuix'){
+    const h = document.querySelector('.page[data-page="control"] > .mx-title');
+    if(h && logo.parentElement !== h) h.append(logo);
+  } else if(logo.parentElement !== $('app-bar')) $('app-title').after(logo);
+}
+/* miuix: маленький заголовок стоит по центру строки шапки — поля по самой
+   широкой стороне с кнопками, чтобы он не наезжал на них */
+function mxBarSide(){
+  const bar = $('app-bar'), title = $('app-title');
+  if(document.documentElement.dataset.design !== 'miuix'){ bar.style.removeProperty('--bar-side'); return; }
+  const r = bar.getBoundingClientRect(), mid = r.left + r.width / 2;
+  let side = 16;
+  for(const el of bar.children){
+    if(el === title || !el.offsetWidth) continue;
+    const b = el.getBoundingClientRect();
+    side = Math.max(side, b.left < mid ? b.right - r.left : r.right - b.left);
+  }
+  bar.style.setProperty('--bar-side', Math.ceil(side + 8) + 'px');
 }
 /* Кнопки справа в верхней панели; экран может подменить их на время (выбор профилей DNS) */
 function fillBarActions(actions){
@@ -631,6 +684,7 @@ function fillBarActions(actions){
     if(a.disabled) b.disabled = true;
     box.append(b);
   });
+  mxBarSide();
 }
 function renderNavBar(page){
   document.querySelectorAll('.nav-dest').forEach(b => {
@@ -651,8 +705,10 @@ function showPage(page, mode, slide){
   const from = document.querySelector('.page.active');
   const to = document.querySelector('.page[data-page="' + page + '"]');
   if(!to || from === to) return;
+  unwarm(to);
   const animate = !matchMedia('(prefers-reduced-motion: reduce)').matches;
   if(mode === 'slide' && from && animate) return slidePages(from, to, slide);
+  if((mode === 'forward' || mode === 'back') && from && animate && isMx()) return mxNavPages(from, to, mode);
   if(mode === 'slide') mode = 'fade';
   if(from){
     if(animate){
@@ -666,7 +722,7 @@ function showPage(page, mode, slide){
   if(animate) to.classList.add('enter-' + mode);
   const y = mode === 'forward' ? 0 : (pageScroll[page] || 0);
   scrollToY(y);
-  $('app-bar').classList.toggle('scrolled', scrollPos() > 8);
+  barScroll();
   let timer = 0;
   const onEnd = e => { if(e.target === to && e.animationName === 'fade-in') cleanup(); };
   const cleanup = () => {
@@ -675,10 +731,69 @@ function showPage(page, mode, slide){
     if(from){ from.classList.remove('leaving', 'leave-' + mode); from.style.cssText = ''; }
     to.classList.remove('enter-' + mode);
     if(transitionCleanup === cleanup) transitionCleanup = null;
+    warmTabs();
   };
   transitionCleanup = cleanup;
   if(animate){ to.addEventListener('animationend', onEnd); timer = setTimeout(cleanup, 1200); }
   else cleanup();
+}
+/* ── HyperOS: переход в дочерний экран и обратно ─────────────────────────
+   Как MiuixDefault из miuix-nav: новый экран въезжает справа на всю ширину,
+   нижний уходит на четверть ширины влево, бледнеет до 90% и темнеет под
+   затемнением до 50%; назад — то же в обратную сторону. 500 мс по кривой
+   пружины miuix (response 0,8, damping 0,95: быстрая середина и долгий мягкий
+   хвост, без отскока). Кривая разложена в ключевые кадры — WAAPI ведёт их на
+   композиторе, и переход не ждёт главный поток. */
+const MX_NAV_MS = 500;
+const mxNavEase = (() => {
+  const om = 2 * Math.PI / .8, c = .95 * 4 * Math.PI / .8;
+  const w = Math.sqrt(4 * om * om - c * c) / 2, r = -c / 2, c2 = r / w;
+  const f = t => Math.exp(r * t) * (-Math.cos(w * t) + c2 * Math.sin(w * t)) + 1;
+  const pts = [];
+  for(let i = 0; i <= 40; i++) pts.push(i === 40 ? 1 : f(i / 40));
+  return pts;
+})();
+function mxFrames(make, reverse){
+  const n = mxNavEase.length - 1;
+  return mxNavEase.map((e, i) => Object.assign(make(reverse ? 1 - e : e), {offset: i / n}));
+}
+function mxNavPages(from, to, mode){
+  const W = innerWidth, fwd = mode === 'forward';
+  const r = from.getBoundingClientRect();
+  from.style.cssText = 'position:fixed;top:' + r.top + 'px;left:' + r.left + 'px;width:' + r.width + 'px';
+  from.classList.add('leaving');
+  from.classList.remove('active');
+  to.classList.add('active');
+  scrollToY(fwd ? 0 : (pageScroll[to.dataset.page] || 0));
+  barScroll();
+  // верхний слой — новый экран (вперёд) или уходящий (назад); под ним затемнение
+  const top = fwd ? to : from, under = fwd ? from : to;
+  top.classList.add('mx-surface');
+  top.style.zIndex = 3;
+  to.style.position = 'relative';
+  if(!fwd) to.style.zIndex = 1;
+  const dim = document.createElement('div');
+  dim.className = 'mx-dim';
+  $('content').append(dim);
+  const timing = {duration: MX_NAV_MS, fill: 'forwards'};
+  // e — доля пути вперёд: 0 — нижний экран открыт, 1 — накрыт
+  const anims = [
+    top.animate(mxFrames(e => ({transform: 'translateX(' + Math.round((1 - e) * W) + 'px)'}), !fwd), timing),
+    under.animate(mxFrames(e => ({transform: 'translateX(' + (-.25 * W * e).toFixed(1) + 'px)', opacity: 1 - .1 * e}), !fwd), timing),
+    dim.animate(mxFrames(e => ({opacity: .5 * e}), !fwd), timing)
+  ];
+  const cleanup = () => {
+    anims.forEach(a => a.cancel());
+    dim.remove();
+    from.classList.remove('leaving', 'mx-surface');
+    from.style.cssText = '';
+    to.classList.remove('mx-surface');
+    to.style.position = to.style.zIndex = '';
+    if(transitionCleanup === cleanup) transitionCleanup = null;
+    warmTabs();
+  };
+  transitionCleanup = cleanup;
+  anims[0].onfinish = cleanup;
 }
 /* ── Вкладки листаются по горизонтали, как в Telegram ─────────────────────
    Порядок — как в нижней панели. Уходящая страница закрепляется fixed на
@@ -687,6 +802,26 @@ function showPage(page, mode, slide){
    страниц), v — скорость отпускания: от неё зависит длительность доводки. */
 const TOP_PAGES = ['control', 'lists', 'settings', 'config'];
 const SLIDE_EASE = 'cubic-bezier(.2, .8, .2, 1)';
+/* Вкладки, кроме открытой, не выключаются (display: none), а держатся
+   разложенными и невидимыми (.warm). Иначе соседняя вкладка в первом кадре
+   свайпа или перелистывания раскладывалась заново целиком, и на телефоне
+   страница трогалась рывком: уходящая уже ехала, а новая появлялась с
+   задержкой. Невидимая разложенная страница появляется сразу — сдвигается
+   только её слой. Ширина — как у открытой, чтобы раскладка совпадала. */
+function warmTabs(){
+  const act = document.querySelector('.page.active');
+  if(!act) return;
+  const b = pageBox(act);
+  TOP_PAGES.forEach(pg => {
+    const el = document.querySelector('.page[data-page="' + pg + '"]');
+    if(!el || el === act || el.classList.contains('peek') || el.classList.contains('leaving')) return;
+    el.classList.add('warm');
+    el.style.cssText = 'top:' + b.top + 'px;left:' + b.left + 'px;width:' + b.width + 'px';
+  });
+}
+function unwarm(el){
+  if(el && el.classList.contains('warm')){ el.classList.remove('warm'); el.style.cssText = ''; }
+}
 function pageBox(el){
   const r = el.getBoundingClientRect();
   return {top: r.top, left: r.left, width: r.width};
@@ -707,7 +842,7 @@ function slidePages(from, to, opt){
   from.classList.remove('active');
   to.classList.add('active');
   scrollToY(pageScroll[to.dataset.page] || 0);
-  $('app-bar').classList.toggle('scrolled', scrollPos() > 8);
+  barScroll();
   const ms = slideDuration(W - Math.abs(dx), opt.v);
   const timing = {duration: ms, easing: SLIDE_EASE, fill: 'forwards'};
   const a1 = from.animate([{transform: 'translateX(' + dx + 'px)'}, {transform: 'translateX(' + (-dir * W) + 'px)'}], timing);
@@ -717,6 +852,7 @@ function slidePages(from, to, opt){
     from.classList.remove('leaving');
     from.style.cssText = '';
     if(transitionCleanup === cleanup) transitionCleanup = null;
+    warmTabs();
   };
   transitionCleanup = cleanup;
   a2.onfinish = cleanup;
@@ -762,10 +898,11 @@ function swipeAllowed(){
 }
 function swipePeek(dir){
   const i = TOP_PAGES.indexOf(currentPage) + dir;
-  if(swipe.peek){ swipe.peek.classList.remove('peek'); swipe.peek.style.cssText = ''; swipe.peek = null; }
+  if(swipe.peek){ swipe.peek.classList.remove('peek'); swipe.peek.style.cssText = ''; swipe.peek = null; warmTabs(); }
   swipe.peekDir = dir;
   if(i < 0 || i >= TOP_PAGES.length) return;
   const el = document.querySelector('.page[data-page="' + TOP_PAGES[i] + '"]');
+  el.classList.remove('warm');
   const b = swipe.box, top = b.top + scrollPos() - (pageScroll[TOP_PAGES[i]] || 0);
   el.style.cssText = 'top:' + top + 'px;left:' + b.left + 'px;width:' + b.width + 'px';
   el.classList.add('peek');
@@ -800,7 +937,7 @@ function swipeEnd(commit, v){
   if(peek){
     const a = peek.animate([{transform: 'translateX(' + (dx + dir * innerWidth) + 'px)'},
                             {transform: 'translateX(' + dir * innerWidth + 'px)'}], timing);
-    a.onfinish = () => { if(swipe.peek !== peek){ peek.classList.remove('peek'); peek.style.cssText = ''; } };
+    a.onfinish = () => { if(swipe.peek !== peek){ peek.classList.remove('peek'); peek.style.cssText = ''; warmTabs(); } };
   }
 }
 document.addEventListener('pointerdown', e => {
@@ -823,6 +960,10 @@ document.addEventListener('pointermove', e => {
     if(!swipeHasPage(dx < 0 ? 1 : -1)){ swipe.st = 0; return; }
     swipe.st = 2;
     swipe.from = document.querySelector('.page.active');
+    // страница могла быть оттянута у края или ещё доигрывать отскок: снять
+    // сразу, иначе их анимация держит страницу, пока соседняя уже въезжает
+    stretchDrop();
+    swipe.from.getAnimations().forEach(a => a.cancel());
     swipe.box = pageBox(swipe.from);
     swipe.slop = Math.sign(dx) * 16;
     swipe.peekDir = 0;
@@ -891,7 +1032,12 @@ function navigate(page, slide){
   renderAppBar(page, mode !== 'slide');
   showPage(page, mode, slide);
   const target = page;
-  afterTransition(() => {
+  // Уже открытая вкладка обновляет данные после перелистывания: отрисовка
+  // занимала главный поток посреди сдвига, и на телефоне уходящая страница
+  // замирала — новая уже въезжала, а старая трогалась с задержкой
+  const settle = mode === 'slide' && pageInited.has(page) ?
+    fn => { const wait = () => transitionCleanup ? setTimeout(wait, 40) : fn(); requestAnimationFrame(wait); } : afterTransition;
+  settle(() => {
     if(currentPage !== target) return;
     // Экран мог быть короче до загрузки данных — тогда прокрутка упёрлась
     // в его конец; дотягиваем, если пользователь за это время не листал.
@@ -1031,7 +1177,7 @@ bindNavTap($('nav-settings'), () => navigate('settings'));
    слева/справа («назад»). Касание оттуда — жест системы, а не нажатие на
    то, что под пальцем. Нижняя зона — не меньше системного отступа снизу. */
 let insetProbe = null;
-function inGestureZone(x, y){
+function inGestureZone(x, y, bottomOnly){
   // var(--bottom-inset) — цепочка var()/env(): значение даёт только вычисленный размер
   if(!insetProbe){
     insetProbe = document.createElement('div');
@@ -1039,7 +1185,7 @@ function inGestureZone(x, y){
     document.body.append(insetProbe);
   }
   const inset = insetProbe.offsetHeight || 0;
-  return y > innerHeight - Math.max(32, inset + 8) || x < 24 || x > innerWidth - 24;
+  return y > innerHeight - Math.max(32, inset + 8) || (!bottomOnly && (x < 24 || x > innerWidth - 24));
 }
 
 /* ── Растяжение при упоре в край, как в Android 12+ ───────────────────────
@@ -1048,10 +1194,39 @@ function inGestureZone(x, y){
    (или в конце) прокрутки и продолжает тянуть — страница растягивается по
    вертикали от упора, с затуханием, отпустил — возвращается. Пока тянем
    мы, touchmove гасится, чтобы браузер не передал упор WebView. */
-const stretch = {el: null, pull: 0, y: 0};
+const stretch = {el: null, pull: 0, y: 0, anim: null};
+/* HyperOS: страница не растягивается, а сдвигается за пальцем с
+   сопротивлением и возвращается пружиной без отскока (как overScrollVertical
+   в miuix: критическое затухание, период 0,4 с). Сопротивление — туже, чем в
+   miuix (там палец у края ведёт страницу 1:1, на телефоне это ощущалось
+   слишком легко): с самого начала страница идёт за пальцем вдвое медленнее и
+   дальше всё туже — R·(1 − 1/(1 + x/2)), x — путь пальца в долях высоты
+   экрана, предел — треть экрана. */
+const isMx = () => document.documentElement.dataset.design === 'miuix';
+function mxOverscroll(p){
+  const R = innerHeight || 800, x = Math.abs(p) / R;
+  return Math.sign(p) * R * (1 - 1 / (1 + x / 2));
+}
+/* Кадры пружины для WAAPI: x0 — начальный сдвиг (px), v0 — скорость (px/с) */
+function mxSpringFrames(x0, v0){
+  const w = 2 * Math.PI / .4, n = 30, T = .5, out = [];
+  for(let i = 0; i < n; i++){
+    const t = T * i / n, x = (x0 + (v0 + w * x0) * t) * Math.exp(-w * t);
+    out.push({transform: 'translateY(' + x.toFixed(2) + 'px)'});
+  }
+  out.push({transform: 'none'});
+  return out;
+}
 function stretchApply(){
   const el = stretch.el, p = stretch.pull;
   if(!el) return;
+  if(stretch.anim){ stretch.anim.cancel(); stretch.anim = null; }
+  if(isMx()){
+    el.style.transformOrigin = '';
+    el.style.transform = 'translateY(' + mxOverscroll(p).toFixed(2) + 'px)';
+    if(currentPage === 'control' && !ptrBusy) p > 0 ? ptrShow(p) : ptrHide();
+    return;
+  }
   // отзывчивее у начала: 100 px — уже ~2,5%, предел — 9%
   const k = 1 + .09 * (1 - Math.exp(-Math.abs(p) / 300));
   // точка упора: верх страницы или нижний край экрана в её координатах
@@ -1091,6 +1266,20 @@ async function refreshStatusPage(){
     await Promise.all([fullStat(), initStrategySelector()]);
   } finally { ptrBusy = false; ptrHide(); }
 }
+/* Свайп вбок забрал жест: оттягивание снимается сразу, без анимации
+   возврата. Анимация возврата шла на той же странице и полсекунды
+   перекрывала её сдвиг за пальцем: соседняя вкладка уже въезжала, а текущая
+   стояла и трогалась с места только потом */
+function stretchDrop(){
+  const el = stretch.el;
+  if(stretch.anim){ stretch.anim.cancel(); stretch.anim = null; }
+  stretch.el = null; stretch.pull = 0;
+  if(el){
+    el.classList.remove('stretch', 'stretch-release');
+    el.style.transform = ''; el.style.transformOrigin = '';
+    if(currentPage === 'control' && !ptrBusy) ptrHide();
+  }
+}
 function stretchRelease(){
   const el = stretch.el, pulled = stretch.pull;
   if(el && currentPage === 'control' && !ptrBusy){
@@ -1098,6 +1287,14 @@ function stretchRelease(){
   }
   stretch.el = null; stretch.pull = 0;
   if(!el || !el.classList.contains('stretch')) return;
+  if(isMx()){
+    el.classList.remove('stretch');
+    el.style.transform = '';
+    const a = el.animate(mxSpringFrames(mxOverscroll(pulled), 0), {duration: 500});
+    stretch.anim = a;
+    a.onfinish = () => { if(stretch.anim === a) stretch.anim = null; };
+    return;
+  }
   el.classList.add('stretch-release');
   el.style.transform = '';
   const done = () => { el.classList.remove('stretch', 'stretch-release'); el.style.transformOrigin = ''; };
@@ -1119,7 +1316,7 @@ document.addEventListener('touchstart', e => {
 document.addEventListener('touchmove', e => {
   const el = stretch.el;
   if(!el || e.touches.length !== 1) return;
-  if(swipe.st === 2){ stretchRelease(); return; }        // страницу тянут вбок
+  if(swipe.st === 2){ stretchDrop(); return; }           // страницу тянут вбок
   if(textBusy()){ stretch.pull = 0; stretchRelease(); return; }   // выделяют текст: страница не тянется
   const y = e.touches[0].clientY, dy = y - stretch.y;
   stretch.y = y;
@@ -1127,12 +1324,20 @@ document.addEventListener('touchmove', e => {
   // край — с запасом в 2 px: прокрутка бывает дробной, и у самого верха
   // растяжение иногда не включалось
   const atTop = scrollPos() <= 2, atBottom = scrollPos() >= maxY - 2;
+  // Жест начался обычной прокруткой и дошёл до края, не отпуская палец: им
+  // уже ведёт браузер, и отменить касание нельзя. Оттягивать тогда нельзя:
+  // на обратном ходе браузер прокручивал страницу, а оттягивание ещё и
+  // возвращало её — страница ехала быстрее пальца. Такой жест упирается в
+  // край без оттягивания; оттягивается жест, начатый у края, а удар прокрутки
+  // с разгона о край — отскоком (stretchAbsorb)
+  if(stretch.pull === 0 && !e.cancelable) return;
   let p = stretch.pull;
   if(p > 0 || (p === 0 && dy > 0 && atTop)) p = Math.max(0, p + dy);
   else if(p < 0 || (p === 0 && dy < 0 && atBottom)) p = Math.min(0, p + dy);
   // упор тянем сами: браузер это касание не получает и не запускает
   // системное растяжение WebView (оно двигало шапку и навигацию)
   if(p !== 0 && e.cancelable) e.preventDefault();
+
   if(p === stretch.pull) return;
   stretch.pull = p;
   if(p === 0){
@@ -1157,6 +1362,14 @@ document.addEventListener('touchcancel', () => { fling.touching = 0; }, {passive
 function stretchAbsorb(fromTop, v){
   const el = document.querySelector('.page.active');
   if(!el || stretch.el || transitionCleanup || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if(isMx()){
+    // скорость влёта (px/мс) переходит в пружину, сильно ослабленная: отскок —
+    // не больше ~30 px. Сильнее — и короткая страница (настройки, где почти
+    // любая прокрутка доходит до края) прыгала на сотню пикселей
+    const v0 = (fromTop ? 1 : -1) * Math.min(4, Math.abs(v)) * 1000 / 3;
+    el.animate(mxSpringFrames(0, v0), {duration: 500});
+    return;
+  }
   const k = 1 + Math.min(.05, .012 + Math.abs(v) * .008);    // v — px/мс
   const oy = fromTop ? 0 : scroller.clientHeight - el.getBoundingClientRect().top;
   el.style.transformOrigin = '50% ' + oy + 'px';
@@ -1176,8 +1389,27 @@ scroller.addEventListener('scroll', () => {
 }, {passive: true});
 document.addEventListener('touchcancel', stretchRelease, {passive: true});
 
-/* elevation on scroll: surface → surface-container */
-scroller.addEventListener('scroll', () => $('app-bar').classList.toggle('scrolled', scrollPos() > 8), {passive: true});
+/* elevation on scroll: surface → surface-container. В дизайне miuix ещё и
+   проявляется маленький заголовок: когда большой (он в странице) наполовину
+   ушёл под шапку. Сам большой двигает прокрутка, здесь только класс. */
+let barFrame = 0;
+function barScroll(){
+  const y = scrollPos(), bar = $('app-bar');
+  bar.classList.toggle('scrolled', y > 8);
+  if(document.documentElement.dataset.design === 'miuix'){
+    // по прокрутке, а не по месту заголовка на экране: отскок у края сдвигает
+    // страницу, но не прокрутку, и шапка не должна от него сворачиваться
+    // (иначе были видны оба заголовка разом)
+    const h = document.querySelector('.page.active > .mx-title');
+    let top = 0;
+    for(let e = h; e && e !== scroller; e = e.offsetParent) top += e.offsetTop;
+    bar.classList.toggle('mx-collapsed', !h || !h.offsetHeight ||
+      top + h.offsetHeight / 2 < y + bar.offsetHeight);
+  }
+}
+scroller.addEventListener('scroll', () => {
+  if(!barFrame) barFrame = requestAnimationFrame(() => { barFrame = 0; barScroll(); });
+}, {passive: true});
 
 /* ── Modal bottom sheets: один scrim на все листы ──────────────────────── */
 let openSheetId = null, sheetReturnFocus = null;
@@ -1190,6 +1422,24 @@ function setBackgroundInert(on){
     if(el) el.inert = on;
   });
 }
+/* HyperOS: у листа крестик слева, заголовок по центру (как в листах Xiaomi).
+   Шапка собирается один раз при загрузке; в Material 3 обёртка прозрачна
+   (display: contents), а крестик скрыт — там закрывают ручкой и жестом */
+document.querySelectorAll('.sheet').forEach(sh => {
+  const title = sh.querySelector(':scope > .sheet-title');
+  if(!title) return;
+  const head = document.createElement('div');
+  head.className = 'mx-sheet-head';
+  title.before(head);
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'icon-btn state mx-sheet-close';
+  b.setAttribute('aria-label', 'Закрыть');
+  b.dataset.ta = 'aria-label';
+  b.innerHTML = icon('close', 's24');
+  b.onclick = () => closeSheet();
+  head.append(b, title);
+});
 function openSheet(id){
   if(openSheetId && openSheetId !== id) closeSheet();
   openSheetId = id;
