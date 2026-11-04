@@ -947,7 +947,12 @@ const VIEWPORTS = [
     await page.click('.menu .mi:has-text("user.list")'); await page.waitForTimeout(900);
     eq(true, await page.isVisible('#find-bar'), 'the list opens with the find bar');
     eq('"blocked.example"', await page.inputValue('#find-q'), 'searching for the exact entry');
-    await page.evaluate(() => closeSlideEditor(true)); await page.waitForTimeout(500);
+    // поиск включил сам модуль — «назад» закрывает список целиком, а не
+    // только строку поиска (иначе жест съедал запись истории, и следующий
+    // «назад» закрывал WebUI)
+    await page.evaluate(() => handleBack(true)); await page.waitForTimeout(500);
+    eq(false, await page.evaluate(() => !!editorCtx), 'back closes the list opened from the check in one go');
+    eq('test', await page.evaluate(() => currentPage), 'and returns to the check');
     await page.evaluate(() => openSlideEditor('list', 'exclude')); await page.waitForTimeout(700);
     eq(true, await page.isHidden('#find-bar'), 'another list opened later has no leftover search');
     await page.evaluate(() => closeSlideEditor(true)); await page.waitForTimeout(500);

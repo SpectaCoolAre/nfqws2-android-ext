@@ -204,6 +204,17 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   await hold('#logs-btn');
   eq(cl0 + 1, await calls("'clear-logs'"), 'then holding the icon clears the logs');
   truthy(/Журналы очищены/.test(await snack()), 'with a snackbar: ' + await snack());
+  // значок журнала DNS на внутренних экранах — то же долгое нажатие
+  for (const pg of ['dns', 'dnsgeo', 'dnsprofiles']) {
+    await page.evaluate(p => { $('prompt-container').classList.remove('show'); navigate(p); }, pg); await page.waitForTimeout(700);
+    const c0 = await calls("'clear-logs'");
+    await hold('#bar-actions button[aria-label="Журнал DNS"]');
+    eq(c0 + 1, await calls("'clear-logs'"), pg + ': holding the DNS log icon does the same');
+    eq(pg, await cur(), pg + ': and does not open the log');
+  }
+  await page.evaluate(() => $('prompt-container').classList.remove('show'));
+  await page.click('#bar-actions button[aria-label="Журнал DNS"]'); await page.waitForTimeout(700);
+  eq('logs', await cur(), 'a tap still opens the DNS log');
 
   eq(0, errors.length, 'no page errors' + (errors.length ? ': ' + errors.join('; ') : ''));
   await browser.close();

@@ -635,6 +635,17 @@ export_collect() { # <папка> <ключ>
   local f
   case "$2" in
     smartdata) [ -d "$SMART_DIR" ] && { mkdir -p "$1/smart"; cp -f "$SMART_DIR"/* "$1/smart"/ 2>/dev/null; } ;;
+    dns)
+      f=$(export_log_file dns); [ -n "$f" ] && [ -f "$f" ] && cp -f "$f" "$1"/ 2>/dev/null
+      # итоги проверок серверов обхода геоблока (полная, частая, закреплённые
+      # за сайтами серверы) и действующие маршруты: по ним видно, какой
+      # сервер отвечает за сайт и что меняется между проверками
+      mkdir -p "$1/dns"
+      [ -d "$DNS_GEO_SCAN_DIR" ] && cp -f "$DNS_GEO_SCAN_DIR"/*.tsv "$DNS_GEO_SCAN_DIR"/*.hot "$DNS_GEO_SCAN_DIR"/*.pin "$1/dns"/ 2>/dev/null
+      cp -f "$DNS_RUN_DIR/upstreams.txt" "$DNS_RUN_DIR/args" "$DNS_RUN_DIR/slot" "$DNS_RUN_DIR/ipv6" "$1/dns"/ 2>/dev/null
+      f=$({ iptables-save -t nat 2>/dev/null; ip6tables-save -t nat 2>/dev/null; ip6tables-save -t filter 2>/dev/null; } | grep -i "nfqws_dns")
+      [ -n "$f" ] && printf '%s\n' "$f" > "$1/dns/iptables-dns.txt"
+      rmdir "$1/dns" 2>/dev/null ;;
     diag)
       cp -f "$ARGS_FILE" "$1/last.args" 2>/dev/null
       cmd_doctor > "$1/doctor.txt" 2>&1

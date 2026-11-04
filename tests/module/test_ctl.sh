@@ -504,6 +504,13 @@ assert_match "$ctl_out" "^nfqws2-logs-.*\.tar	" "two of them — an archive"
 assert_contains "$(tar -tf "$(printf '%s' "$ctl_out" | cut -f2)")" "dns.log" "with what was chosen"
 assert_not_contains "$(tar -tf "$(printf '%s' "$ctl_out" | cut -f2)")" "doctor.txt" "and nothing else"
 assert_eq "" "$(tar -tf "$(printf '%s' "$ctl_out" | cut -f2)" | grep '^\./')" "entries are plain names: no «.» folder when a file manager opens the archive"
+# журнал DNS — вместе с итогами проверок серверов обхода и маршрутами: по ним
+# видно, какой сервер у сайта и что меняется между проверками
+mkdir -p "$DNS_GEO_SCAN_DIR"; printf '#time=1\n' > "$DNS_GEO_SCAN_DIR/wifi-test.tsv"; printf 'claude.ai dns.example\n' > "$DNS_GEO_SCAN_DIR/wifi-test.tsv.pin"
+ctl export-logs path dns
+assert_match "$ctl_out" "^nfqws2-logs-.*\.tar	" "with the geo server checks the DNS log goes into an archive"
+assert_contains "$(tar -tf "$(printf '%s' "$ctl_out" | cut -f2)")" "dns/wifi-test.tsv.pin" "with the checks and the servers pinned to sites"
+rm -rf "$DNS_GEO_SCAN_DIR"
 ctl export-logs path nosuch
 assert_rc 1 "$ctl_rc" "an unknown log is refused"
 rm -f "$LOG_DIR/nfqws2-debug.log" "$CONFDIR/logs/nfqws2-debug.log"

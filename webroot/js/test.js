@@ -736,6 +736,7 @@ async function dcOpenList(file, entry){
   if(!o) return;
   for(let i = 0; i < 300 && editorCtx === o && o.original === undefined; i++) await new Promise(r => setTimeout(r, 100));
   if(editorCtx !== o || o.original === undefined) return;
+  o.autoFind = true;
   toggleFind(true, true);
   $('find-q').value = '"' + entry + '"';
   findRun();

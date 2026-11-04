@@ -1121,7 +1121,11 @@ type route struct {
 // протокола); нет таких — те, у кого адрес прокси общий для меньшего числа
 // сайтов, при равенстве — быстрые. Серверы со своим адресом и общим не
 // смешиваются: dnsproxy берёт первый ответ, и общий прокси увёл бы игру не туда
-func planRoutes(res []scanResult, n, max int) []route {
+// wide[i] — домен из группы сайтов (-groups): у группы — один сервер на все
+// её домены, и выбирать его модулю — из всех, кто домен обходит, а не из
+// первых max и не только из тех, у кого для него свой адрес: иначе у части
+// доменов группы оставался один кандидат, и Gemini шёл через пять прокси
+func planRoutes(res []scanResult, n, max int, wide []bool) []route {
 	out := make([]route, n)
 	for i := 0; i < n; i++ {
 		var cand []int
@@ -1159,6 +1163,10 @@ func planRoutes(res []scanResult, n, max int) []route {
 			for b := a; b > 0 && less(cand[b], cand[b-1]); b-- {
 				cand[b], cand[b-1] = cand[b-1], cand[b]
 			}
+		}
+		if i < len(wide) && wide[i] {
+			out[i] = route{servers: cand, known: true}
+			continue
 		}
 		if res[cand[0]].share[i] == 1 {
 			k := 0
@@ -1204,6 +1212,36 @@ func formatInfo(res []scanResult) []string {
 		}
 	}
 	return out
+}
+
+// groupWide — какие из доменов входят в группы сайтов: файл — строки
+// «группа суффикс суффикс…», # — комментарий; домен — сам суффикс или его
+// поддомен
+func groupWide(file string, names []string) ([]bool, error) {
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+	var suf []string
+	for _, l := range strings.Split(string(b), "\n") {
+		if i := strings.IndexByte(l, '#'); i >= 0 {
+			l = l[:i]
+		}
+		f := strings.Fields(strings.ToLower(l))
+		if len(f) > 1 {
+			suf = append(suf, f[1:]...)
+		}
+	}
+	w := make([]bool, len(names))
+	for i, d := range names {
+		for _, x := range suf {
+			if d == x || strings.HasSuffix(d, "."+x) {
+				w[i] = true
+				break
+			}
+		}
+	}
+	return w, nil
 }
 
 func formatRoutes(res []scanResult, names []string, rt []route) []string {

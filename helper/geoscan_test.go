@@ -8,12 +8,14 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -212,7 +214,7 @@ func TestGeoScanRoutesEachDomainToFittingServers(t *testing.T) {
 	if res[0].share[2] != 3 || res[1].share[2] != 1 || res[1].share[0] != 2 || res[2].share[0] != 1 {
 		t.Fatalf("общие адреса: malw %v, comss %v, zapret %v", res[0].share, res[1].share, res[2].share)
 	}
-	got := strings.Join(formatRoutes(res, names, planRoutes(res, len(names), 3)), "|")
+	got := strings.Join(formatRoutes(res, names, planRoutes(res, len(names), 3, nil)), "|")
 	want := strings.Join([]string{
 		"=chatgpt.com\t" + zapret,           // свой адрес — только он
 		"=claude.ai\t" + comss + "," + malw, // общие: сначала тот, где сайтов меньше
@@ -280,7 +282,7 @@ func TestGeoScanDeadServer(t *testing.T) {
 	if l := formatScan(res[0]); !strings.Contains(l, "\tfail\t0\t0\t1\t0\t-\t") {
 		t.Fatalf("строка: %q", l)
 	}
-	if r := formatRoutes(res, []string{"a.example"}, planRoutes(res, 1, 3)); len(r) != 0 {
+	if r := formatRoutes(res, []string{"a.example"}, planRoutes(res, 1, 3, nil)); len(r) != 0 {
 		t.Fatalf("нет данных — нет маршрута: %q", r)
 	}
 }
@@ -368,7 +370,7 @@ func TestGeoScanHotUsesSharedAddressesOfTheFullCheck(t *testing.T) {
 	if res[0].share[0] != 3 || res[1].share[0] != 1 {
 		t.Fatalf("malw — общий (3), Comss — свой (1): %d %d", res[0].share[0], res[1].share[0])
 	}
-	if r := formatRoutes(res, hot, planRoutes(res, 1, 3)); len(r) != 1 || r[0] != "=gamea.clashofclans.com\t"+comss {
+	if r := formatRoutes(res, hot, planRoutes(res, 1, 3, nil)); len(r) != 1 || r[0] != "=gamea.clashofclans.com\t"+comss {
 		t.Fatalf("игра — к Comss: %q", r)
 	}
 }
@@ -380,7 +382,7 @@ func TestPlanRoutesPutsFlakyServersLast(t *testing.T) {
 		return scanResult{server: name, ok: true, ms: ms, marks: []byte("p"), share: []int{2}, tries: 3, okTry: okTry}
 	}
 	res := []scanResult{mk("fast-flaky", 10, 2), mk("slow-stable", 90, 3)}
-	if got := formatRoutes(res, []string{"a.example"}, planRoutes(res, 1, 3)); got[0] != "=a.example\tslow-stable,fast-flaky" {
+	if got := formatRoutes(res, []string{"a.example"}, planRoutes(res, 1, 3, nil)); got[0] != "=a.example\tslow-stable,fast-flaky" {
 		t.Fatalf("маршрут: %q", got)
 	}
 	if got := formatInfo(res); got[0] != "!fast-flaky\t2/3\t0" {
@@ -406,7 +408,7 @@ func TestVerifyRoutesDropsProxiesWithoutTheRealCertificate(t *testing.T) {
 	if string(res[0].marks) != "pp" || string(res[1].marks) != "cp" || res[1].cert != 1 {
 		t.Fatalf("метки: %q %q", res[0].marks, res[1].marks)
 	}
-	if r := formatRoutes(res, names, planRoutes(res, 2, 3)); r[0] != "=gemini.google.com\tdns-ai" {
+	if r := formatRoutes(res, names, planRoutes(res, 2, 3, nil)); r[0] != "=gemini.google.com\tdns-ai" {
 		t.Fatalf("Gemini — только к рабочему: %q", r)
 	}
 }
@@ -495,5 +497,29 @@ func TestGeoScanReferenceIsNotTheBypassingRouter(t *testing.T) {
 	refServers = []string{"127.0.0.1:1"}
 	if r := refAnswers(names, router, 2*time.Second); len(r[0]) != 1 || !r[0][0].Equal(ip("206.223.251.18")) {
 		t.Fatalf("запасной эталон: %v", r)
+	}
+}
+
+// Домен группы сайтов — ко всем, кто его обходит: и к серверам с общим
+// адресом прокси, хотя у одного для него свой, и больше max
+func TestPlanRoutesGroupDomainKeepsAllCandidates(t *testing.T) {
+	mk := func(name string, ms int64, share int) scanResult {
+		return scanResult{server: name, ok: true, ms: ms, marks: []byte("p"), share: []int{share}}
+	}
+	res := []scanResult{mk("wlrus", 80, 1), mk("magicdns", 120, 9), mk("malw", 170, 9), mk("dagami", 300, 9)}
+	names := []string{"signaler-pa.clients6.google.com"}
+	if r := formatRoutes(res, names, planRoutes(res, 1, 3, nil)); r[0] != "=signaler-pa.clients6.google.com\twlrus" {
+		t.Fatalf("без группы — только свой адрес: %q", r)
+	}
+	f := filepath.Join(t.TempDir(), "groups.list")
+	if err := os.WriteFile(f, []byte("# группы\ngoogle google.com googleapis.com google\nopenai chatgpt.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, err := groupWide(f, []string{"signaler-pa.clients6.google.com", "gemini.google", "notgoogle.com", "chatgpt.com"})
+	if err != nil || fmt.Sprint(w) != "[true true false true]" {
+		t.Fatalf("группы: %v %v", w, err)
+	}
+	if r := formatRoutes(res, names, planRoutes(res, 1, 3, w[:1])); r[0] != "=signaler-pa.clients6.google.com\twlrus,magicdns,malw,dagami" {
+		t.Fatalf("в группе — все: %q", r)
 	}
 }

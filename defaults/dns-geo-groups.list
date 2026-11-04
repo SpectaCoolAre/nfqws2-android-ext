@@ -1,0 +1,11 @@
+# Группы сайтов для обхода геоблока по DNS: у всех доменов группы — один
+# сервер обхода (один прокси, один адрес выхода). Сервис, который ходит на
+# несколько сайтов сразу (Gemini: gemini.google.com, *-pa.clients6.google.com,
+# *.googleapis.com, apis.google.com), иначе получал по прокси на сайт — разные
+# адреса в одной сессии, и Google отвечал геоблоком или «unusual traffic».
+# Строка: «группа суффикс суффикс…»; домен — сам суффикс или его поддомен.
+# Остальные сайты группируются по двум последним частям имени.
+google    google.com googleapis.com google goog withgoogle.com google.dev ai.studio gstatic.com googleusercontent.com
+openai    openai.com chatgpt.com chat.com oaistatic.com oaiusercontent.com sora.com
+anthropic anthropic.com claude.ai claude.com claudeusercontent.com claudemcpclient.com
+xai       x.ai grok.com grok.x.com

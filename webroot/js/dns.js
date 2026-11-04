@@ -283,7 +283,7 @@ function renderDnsGeo(){
   const n = +st.geo_domains || 0;
   rows.push(settingsRow({icon: 'list', title: 'Список сервисов', sub: t('geoblock.list · доменов: {0}', fmtCount(n)),
     on: "openSlideEditor('list', 'geoblock')", chevron: true}));
-  rows.push(settingsRow({icon: 'download', title: 'Обновить список', sub: t('itdoginfo и GeoHide, ваши домены останутся'), on: 'dnsGeoUpdate()'}));
+  rows.push(settingsRow({icon: 'download', title: 'Обновить список', sub: t('itdoginfo, v2fly и GeoHide, ваши домены останутся'), on: 'dnsGeoUpdate()'}));
   setHTML('dns-geo', rows.join(''), false);
 }
 /* Подробности проверки сервера — по нажатию: что с каждым сервисом-образцом */
@@ -554,11 +554,23 @@ let dnsLongFired = false, dnsLongCancel = () => {};
 
 function openDnsLog(){ logSource = 'dns'; store.set('nfq_log_src', 'dns'); navigate('logs'); }
 
+// Включение — секунды (dnsproxy, перехват): экран меняется сразу, как будто
+// уже включено, а повторное нажатие, пока команда идёт, не принимается —
+// раньше переключатель «не реагировал» 5 секунд, и второе нажатие выключало DNS
+let dnsSwitching = false;
 async function setDnsEnabled(on){
-  const r = await withBusy(['dns-set-enabled', on ? '1' : '0'], 40000);
-  if(r.code){ toast(errText(r, 'Не удалось сохранить')); $('dns-toggle').checked = !on; return; }
-  await loadDnsState();
+  if(dnsSwitching){ $('dns-toggle').checked = !on; return; }
+  dnsSwitching = true;
+  const was = dnsSt.status.enabled;
+  dnsSt.status.enabled = on ? '1' : '0';
   renderDns();
+  $('dns-main').classList.add('switching');
+  try {
+    const r = await withBusy(['dns-set-enabled', on ? '1' : '0'], 40000);
+    if(r.code){ toast(errText(r, 'Не удалось сохранить')); dnsSt.status.enabled = was; renderDns(); return; }
+    await loadDnsState();
+    renderDns();
+  } finally { dnsSwitching = false; $('dns-main').classList.remove('switching'); }
 }
 
 function pickDnsDefault(anchor){

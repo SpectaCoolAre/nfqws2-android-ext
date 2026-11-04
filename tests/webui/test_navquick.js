@@ -96,6 +96,15 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   eq(1, await page.$$eval('.menu', r => r.length), 'the menu stays open');
   await page.mouse.click(190, 200); await page.waitForTimeout(400);
   eq(0, await page.$$eval('.menu', r => r.length), 'a tap on empty space closes it');
+  // свайп мимо меню (click не даёт) — тоже закрывает, и с анимацией
+  await hold(nav('control'));
+  await page.waitForSelector('.menu:not(.closing)', { timeout: 3000 }).catch(() => {});
+  await page.waitForTimeout(400);
+  eq(1, await page.$$eval('.menu', r => r.length), 'opened again');
+  await page.mouse.move(190, 300); await page.mouse.down(); await page.waitForTimeout(30);
+  truthy(await page.evaluate(() => { const m = document.querySelector('.menu'); return !m || m.classList.contains('closing'); }), 'touching the screen anywhere starts closing it, with an animation');
+  await page.mouse.move(190, 120, { steps: 6 }); await page.mouse.up(); await page.waitForTimeout(400);
+  eq(0, await page.$$eval('.menu, .menu-back', r => r.length), 'a swipe past the menu closes it too');
   eq(false, await scrim(), 'and the blur goes');
   eq('control', await cur(), 'and nothing under the finger fires');
 

@@ -219,15 +219,18 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   eq('', await page.evaluate(() => document.querySelector('.page.active').style.transform), 'the page springs back on release');
   eq('control', await cur(), 'and the tab is the same');
 
-  sect('pull to refresh');
+  // «потяни, чтобы обновить» убрано: состояние и так обновляется само
+  sect('no pull to refresh');
   await page.evaluate(() => { window.__rc = 0; const o = window.ksu.exec; window.ksu.exec = function(c){ if (c.indexOf('net-recheck') >= 0) window.__rc++; return o.apply(this, arguments); }; });
-  await touch(line(190, 200, 190, 260, 8));
-  eq(0, await page.evaluate(() => __rc), 'a short pull on the status screen does not refresh');
-  let ptrMid = '';
-  await touch(line(190, 200, 190, 440, 12), { mid: async () => { ptrMid = await page.evaluate(() => [$('ptr').style.opacity, $('ptr').classList.contains('ready')].join()); } });
-  eq('1,true', ptrMid, 'a long pull shows the refresh mark, ready to fire');
-  eq(1, await page.evaluate(() => __rc), 'and releasing it asks the service to recheck network, VPN and DNS');
-  eq('0', await page.evaluate(() => $('ptr').style.opacity), 'the mark goes away when done');
+  await touch(line(190, 200, 190, 440, 12));
+  eq(0, await page.evaluate(() => __rc), 'a long pull on the status screen only bounces, it does not refresh');
+  eq(null, await page.evaluate(() => document.getElementById('ptr')), 'there is no refresh mark');
+  // палец лёг на то, что перерисовалось во время жеста (время работы,
+  // плитки): конец касания не должен теряться — иначе отскок на инерции не
+  // срабатывал больше никогда
+  await touch(line(190, 300, 190, 260, 6), { mid: async () => { await page.evaluate(() => {
+    const el = document.elementFromPoint(190, 260); const c = el.cloneNode(true); el.replaceWith(c); }); } });
+  eq(0, await page.evaluate(() => fling.touching), 'a touch that ends on a re-rendered element still counts as ended');
 
   sect('fling into an edge');
   // Системный отскок WebView отключён (двигал шапку и навигацию), поэтому
@@ -269,6 +272,20 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   eq('top', await flingRetry('top'), 'and one into the top bounces it too');
   await page.waitForTimeout(600);
   eq('', await flingInto('bottom', .1), 'a slow arrival at the edge does not bounce');
+  // Короткая страница: прокрутка упирается в край, пока палец ещё на экране,
+  // инерции после отпускания нет — отскок даёт скорость пальца в момент
+  // отпускания (палец двигал страницу к краю)
+  const release = v => page.evaluate(v => new Promise(done => { __abs.length = 0; fling.last = 0;
+    scrollToY(scroller.scrollHeight); setTimeout(() => {
+      finger.v = v; finger.t = performance.now();
+      document.dispatchEvent(new TouchEvent('touchend', { touches: [], bubbles: true }));
+      setTimeout(() => done(__abs.join()), 50); }, 120); }), v);
+  eq('bottom', await release(-1.2), 'a finger released at the end of a short page while pushing towards it bounces the page');
+  await page.waitForTimeout(600);
+  eq('', await release(.8), 'a finger moving away from the edge does not');
+  await page.waitForTimeout(600);
+  eq('', await release(-.1), 'nor a finger that barely moved');
+  await page.evaluate(() => scrollToY(0)); await page.waitForTimeout(600);
   eq(navF, await navGeo(), 'the navigation bar does not move');
 
   sect('child screens');
@@ -298,9 +315,10 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   await page.waitForTimeout(600);
 
   sect('a scroll that runs into the edge without lifting the finger');
-  // Жестом ведёт браузер (касание уже нельзя отменить): оттягивать нельзя —
-  // на обратном ходе браузер прокручивал страницу, а оттягивание ещё и
-  // возвращало её, и страница ехала быстрее пальца
+  // Жестом ведёт браузер (касание уже нельзя отменить): прокрутка у края
+  // непрерывно переходит в оттягивание, а обратный ход отпускает его пружиной —
+  // вести оттягивание за пальцем нельзя: браузер в то же время прокручивает
+  // страницу, и она ехала бы быстрее пальца
   await page.evaluate(() => { $('content').style.minHeight = '3000px'; scrollToY(scroller.scrollHeight - scroller.clientHeight - 60); });
   await page.waitForTimeout(300);
   const tr = [];
@@ -311,13 +329,17 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   for (const [x, y] of spts.slice(1)) {
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y }] });
     await page.waitForTimeout(20);
-    tr.push(await page.evaluate(() => [Math.round(new DOMMatrix(getComputedStyle(document.querySelector('.page.active')).transform).m42), Math.round(scroller.scrollTop)]));
+    tr.push(await page.evaluate(() => [Math.round(stretch.pull), Math.round(scroller.scrollTop)]));
   }
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   await page.waitForTimeout(600);
-  eq(0, Math.max(...tr.map(t => Math.abs(t[0]))), 'the page is not pulled past the edge by a gesture the browser leads');
-  const back = tr.slice(12).map(t => t[1]), steps = back.slice(1).map((v, i) => back[i] - v).filter(d => d);
-  truthy(steps.length > 4 && steps.every(d => d <= 16), 'on the way back the page goes with the finger, not faster: ' + steps.join(','));
+  const fwd = tr.slice(0, 12);
+  truthy(Math.min(...fwd.map(t => t[0])) < -20, 'a scroll that reaches the edge goes on into a pull, in one movement: ' + fwd.map(t => t[0]).join(','));
+  // обратный ход: оттягивание уходит пружиной, а не пальцем (в пределах
+  // анимации отпускания), прокрутка дальше — с пальцем, не быстрее
+  const back = tr.slice(16).map(t => t[1]), steps = back.slice(1).map((v, i) => back[i] - v).filter(d => d);
+  truthy(steps.every(d => d <= 16), 'on the way back the page goes with the finger, not faster: ' + steps.join(','));
+  eq(0, await page.evaluate(() => stretch.pull), 'and the pull is gone after release');
   await page.evaluate(() => { $('content').style.minHeight = ''; scrollToY(0); });
 
   sect('holding the logs icon anywhere on it');

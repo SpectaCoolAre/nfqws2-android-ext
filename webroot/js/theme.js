@@ -409,8 +409,35 @@ function applyTheme(skipUI){
   document.documentElement.setAttribute('data-design', design);
   const meta = document.querySelector('meta[name="theme-color"]');
   if(meta) meta.setAttribute('content', MX ? MX.bg : R.background);
+  // HyperOS: вид — обычный, расширенные текстуры, жидкое стекло (только
+  // поверх текстур) — и сияние на главной
+  const look = mxLook();
+  document.documentElement.setAttribute('data-mx-tex', look.tex ? '1' : '0');
+  document.documentElement.setAttribute('data-mx-glass', look.glass ? '1' : '0');
+  document.documentElement.setAttribute('data-mx-aurora', look.aurora ? '1' : '0');
   if(!skipUI) drawThemeUI();
 }
+const mxLook = () => {
+  const tex = store.get('mx_tex') !== 'false';
+  return {tex, glass: tex && store.get('mx_glass') === 'true', aurora: store.get('mx_aurora') !== 'false'};
+};
+function setMxLook(k, on){
+  store.set('mx_' + k, on ? 'true' : 'false');
+  applyTheme();
+}
+/* вид — одна из трёх заготовок: обычный, текстуры, стекло (стекло — поверх
+   текстур, как в HyperOS 4) */
+const mxLevel = () => { const l = mxLook(); return l.glass ? 'glass' : l.tex ? 'tex' : 'plain'; };
+function setMxLevel(v){
+  store.set('mx_tex', v === 'plain' ? 'false' : 'true');
+  store.set('mx_glass', v === 'glass' ? 'true' : 'false');
+  applyTheme();
+}
+const MX_LEVEL_DESC = {
+  plain: 'Плотные поверхности: панель навигации, уведомления и шапка без прозрачности',
+  tex: 'Расширенные текстуры: под панелью, уведомлениями, меню и диалогами фон размывается и берёт их цвет',
+  glass: 'Жидкое стекло, как в HyperOS 4: прозрачная толща с кантом и бликом, поверх текстур'
+};
 /* ── Лист темы ────────────────────────────────────────────────────────────
    Сверху живой предпросмотр на текущих ролях, ниже — режим, AMOLED, готовые
    акценты и свой цвет. Свой цвет выбирается «руками» на круге: угол — тон,
@@ -427,6 +454,16 @@ function drawThemeUI(){
   // тема и так на чёрном — AMOLED ей не нужен
   const mx = uiDesign() === 'miuix';
   ['containers-row', 'accent-block', 'amoled-row'].forEach(id => { if($(id)) $(id).hidden = mx; });
+  ['mx-look', 'mx-looks', 'mx-look-head', 'mx-look-desc'].forEach(id => { if($(id)) $(id).hidden = !mx; });
+  if($('mx-aurora-toggle')){
+    const lv = mxLevel();
+    if(document.querySelectorAll) document.querySelectorAll('#mx-looks .mx-look-opt').forEach(b => {
+      const on = b.dataset.look === lv;
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+    $('mx-look-desc').textContent = t(MX_LEVEL_DESC[lv]);
+    $('mx-aurora-toggle').checked = mxLook().aurora;
+  }
   setHTML('theme-mode', [['auto', 'Авто'], ['light', 'Светлая'], ['dark', 'Тёмная']].map(m =>
     '<button class="seg state' + (currentMode === m[0] ? ' on' : '') + '" aria-pressed="' + (currentMode === m[0]) +
     '" onclick="setThemeMode(' + jsArg(m[0]) + ')"><span class="check">' + icon('check', 's18') + '</span>' + esc(t(m[1])) + '</button>').join(''), false);

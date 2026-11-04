@@ -144,7 +144,8 @@ const VIEWPORTS = [
         // что-то шире своей колонки или экрана
         let over = '';
         pg.querySelectorAll('*').forEach(e => {
-          if (over || !e.getClientRects().length) return;
+          // пятна сияния HyperOS обрезаны своим слоем (overflow: hidden) — их края не в счёт
+          if (over || !e.getClientRects().length || (e.parentElement && e.parentElement.closest('.mx-aurora'))) return;
           const b = e.getBoundingClientRect();
           if (b.width && (b.right > innerWidth + 1 || b.left < -1)) over = (e.id || e.className || e.tagName) + ' ' + Math.round(b.left) + '..' + Math.round(b.right);
         });

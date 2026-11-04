@@ -249,6 +249,8 @@ function toggleFind(force, noFocus){
   bar.hidden = !on;
   $('panel-find-btn').setAttribute('aria-pressed', String(on));
   $('panel-find-btn').classList.toggle('selected', on);
+  if(editorCtx && !on) editorCtx.autoFind = false;
+  if(typeof scheduleSync === 'function') scheduleSync();
   if(on && !noFocus) setTimeout(() => $('find-q').focus(), 50);
   else findReset();
 }

@@ -100,7 +100,6 @@ html[data-design="miuix"] .app-bar .title { white-space: nowrap; overflow: hidde
   html[data-design="miuix"] .app-bar { background: var(--mx-bg); }
   html[data-design="miuix"] .app-bar .title { opacity: 1; transform: none; }
 }
-html[data-design="miuix"] .ptr { top: calc(var(--top-inset) + var(--appbar-height) + 4px); }
 
 /* ── Нажатие: затемнение, без волны и без «утапливания» (holdDownState) ── */
 html[data-design="miuix"] .ripple { display: none; }
@@ -550,3 +549,315 @@ html[data-design="miuix"] .page.mx-surface::before {
   background: var(--mx-bg);
 }
 .mx-dim { position: fixed; inset: 0; z-index: 2; background: #000; opacity: 0; pointer-events: none; }
+
+/* ══ Вид HyperOS: обычный · расширенные текстуры · жидкое стекло ══════════
+   Обычный — плотные поверхности: панель навигации, уведомления и шапка без
+   прозрачности. Расширенные текстуры (Advanced Textures HyperOS) — не просто
+   размытие: фон под поверхностью размывается, насыщается и чуть светлеет
+   (тёмная — темнеет), сверху — тонкая заливка цветом поверхности; так панель
+   «берёт» цвет того, что под ней. Канта и бликов нет — это признаки стекла. Жидкое стекло
+   (HyperOS 4) — поверх текстур, ниже — отдельный блок.
+   ════════════════════════════════════════════════════════════════════════ */
+html[data-design="miuix"] {
+  --mx-tex-blur: blur(30px) saturate(1.9) brightness(1.04);
+}
+html[data-design="miuix"][data-mode="dark"] {
+  --mx-tex-blur: blur(30px) saturate(1.7) brightness(.92);
+}
+/* обычный: всё плотное */
+html[data-design="miuix"][data-mx-tex="0"] .nav-bar {
+  background: var(--mx-card); -webkit-backdrop-filter: none; backdrop-filter: none; }
+html[data-design="miuix"][data-mx-tex="0"] .snackbar {
+  background: var(--mx-card); -webkit-backdrop-filter: none; backdrop-filter: none; }
+html[data-design="miuix"][data-mx-tex="0"] .app-bar.scrolled {
+  background: var(--mx-bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  /* текстуры: панель, уведомления, меню, диалоги и листы */
+  html[data-design="miuix"][data-mx-tex="1"] .nav-bar,
+  html[data-design="miuix"][data-mx-tex="1"] .snackbar {
+    background: color-mix(in srgb, var(--mx-card) 62%, transparent);
+    -webkit-backdrop-filter: var(--mx-tex-blur); backdrop-filter: var(--mx-tex-blur);
+    box-shadow: 0 0 0 .5px var(--mx-divider), 0 8px 28px rgb(0 0 0 / .12);
+  }
+  html[data-design="miuix"][data-mx-tex="1"] .menu {
+    background: color-mix(in srgb, var(--mx-dialog) 74%, transparent);
+    -webkit-backdrop-filter: var(--mx-tex-blur); backdrop-filter: var(--mx-tex-blur);
+    box-shadow: 0 0 0 .5px var(--mx-divider), 0 12px 40px rgb(0 0 0 / .18);
+  }
+  html[data-design="miuix"][data-mx-tex="1"] .dialog {
+    background: color-mix(in srgb, var(--mx-dialog) 80%, transparent);
+    -webkit-backdrop-filter: var(--mx-tex-blur); backdrop-filter: var(--mx-tex-blur);
+    box-shadow: none;
+  }
+  /* за диалогом и листом страница не просто темнеет, а расплывается */
+  html[data-design="miuix"][data-mx-tex="1"] .dialog-wrap .dialog-scrim,
+  html[data-design="miuix"][data-mx-tex="1"] .scrim {
+    -webkit-backdrop-filter: blur(6px) saturate(1.2); backdrop-filter: blur(6px) saturate(1.2); }
+  html[data-design="miuix"][data-mx-tex="1"] .app-bar.scrolled {
+    background: color-mix(in srgb, var(--mx-bg) 64%, transparent);
+    -webkit-backdrop-filter: var(--mx-tex-blur); backdrop-filter: var(--mx-tex-blur); }
+
+}
+
+/* ── Сияние на главной ────────────────────────────────────────────────────
+   Как экран «Об устройстве» HyperOS: верх страницы залит мягким светом,
+   который медленно перетекает, — четыре размытых пятна плывут и меняют
+   оттенок каждое в своём ритме (40–70 с), поэтому узор не повторяется
+   заметно. Тёмная тема — ночное небо: глубокий синий, свечение индиго и
+   васильковое; светлая — пастель: лаванда, розовый, голубой, персик. Книзу
+   сияние сходит в обычный фон. Без анимаций в системе — застывшее. */
+.mx-aurora { display: none; }
+html[data-design="miuix"][data-mx-aurora="1"] .page[data-page="control"]:not(.warm):not(.peek):not(.leaving) { position: relative; }
+/* сияние — под карточками своей страницы: страница — свой слой, сияние в нём
+   ниже всех (колонкам не нужен свой position: левая в альбомной — sticky) */
+html[data-design="miuix"][data-mx-aurora="1"] .page[data-page="control"] { isolation: isolate; }
+html[data-design="miuix"][data-mx-aurora="1"] .mx-aurora {
+  /* над страницей — запас в полэкрана цветом верха сияния (рамка сверху):
+     оттягивание вниз сдвигает страницу, и раньше открывался край сияния */
+  display: block; position: absolute; z-index: -1; pointer-events: none;
+  overflow-x: clip; overflow-y: visible; box-sizing: content-box;
+  left: calc(-1 * var(--screen-margin)); right: calc(-1 * var(--screen-margin));
+  top: calc(-1 * (var(--top-inset) + var(--appbar-height)) - 50vh);
+  height: min(760px, 88vh); border-top: 50vh solid var(--aur-top);
+  -webkit-mask: linear-gradient(#000, #000) top / 100% 50vh no-repeat,
+    linear-gradient(#000 52%, rgb(0 0 0 / .6) 72%, transparent) bottom / 100% min(760px, 88vh) no-repeat;
+  mask: linear-gradient(#000, #000) top / 100% 50vh no-repeat,
+    linear-gradient(#000 52%, rgb(0 0 0 / .6) 72%, transparent) bottom / 100% min(760px, 88vh) no-repeat;
+  background: var(--aur-base); background-clip: padding-box;
+  --aur-top: #ded8fa;
+  --aur-base: linear-gradient(170deg, #ded8fa, #f3dcef 55%, #dfe9fb);
+  --aur-1: #9e95f4; --aur-2: #f2a6d0; --aur-3: #9cc2f7; --aur-4: #f9c4ae;
+}
+html[data-design="miuix"][data-mode="dark"][data-mx-aurora="1"] .mx-aurora {
+  --aur-top: #07103a;
+  --aur-base: linear-gradient(175deg, #07103a, #0a1a5c 45%, #050b2a);
+  --aur-1: #3157ff; --aur-2: #5a33e0; --aur-3: #1f88ff; --aur-4: #7a4cf0;
+}
+/* пятно — радиальный градиент с мягким краем, а не размытый круг: так же
+   мягко, но без filter — браузеру нечего пересчитывать, кроме сдвига. Пятна
+   плывут на несколько пикселей в секунду, и сдвиг идёт ступенями (около пяти
+   в секунду): глазу не заметно, а кадров — в десятки раз меньше, телефон не
+   тратит на сияние батарею */
+/* пятно — радиальный градиент с мягким краем, а не размытый круг: так же
+   мягко, но без filter. Двигает пятна core.js (auroraTick): 20 раз в
+   секунду, все четыре за один кадр — сумма синусоид с разными периодами, так
+   что сияние всё время переливается и пульсирует, не повторяясь. Пока
+   главная не на экране — стоит */
+.mx-aurora i {
+  position: absolute; opacity: .85; will-change: transform, opacity;
+  background: radial-gradient(closest-side, var(--c), color-mix(in srgb, var(--c) 45%, transparent) 55%, transparent);
+}
+.mx-aurora .a1 { width: 110%; height: 70%; left: -38%; top: -8%; --c: var(--aur-1); }
+.mx-aurora .a2 { width: 100%; height: 64%; right: -40%; top: 0; --c: var(--aur-2); }
+.mx-aurora .a3 { width: 120%; height: 62%; left: -10%; top: 22%; --c: var(--aur-3); }
+.mx-aurora .a4 { width: 80%; height: 50%; left: 16%; top: -18%; --c: var(--aur-4); opacity: .6; }
+/* на сиянии: светлая — карточки белые, как у «Об устройстве»; тёмная —
+   полупрозрачные, а с текстурами — ещё и с размытием света под ними */
+html[data-design="miuix"][data-mode="dark"][data-mx-aurora="1"] .page[data-page="control"] :is(.hero, .smart-tile, .mode-card) {
+  background: color-mix(in srgb, var(--mx-card) 72%, transparent); }
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html[data-design="miuix"][data-mode="dark"][data-mx-aurora="1"][data-mx-tex="1"] .page[data-page="control"] :is(.hero, .smart-tile, .mode-card) {
+    background: color-mix(in srgb, var(--mx-card) 52%, transparent);
+    -webkit-backdrop-filter: blur(24px) saturate(1.5); backdrop-filter: blur(24px) saturate(1.5); }
+}
+
+/* ── Вид HyperOS в листе темы: три слайда-заготовки ───────────────────────
+   Главная модуля в миниатюре, как картинки-выборы в настройках HyperOS:
+   сияние фоном, кнопка журналов, карточка состояния со щитом, две плитки,
+   уведомление-пилюля со значком модуля и капсула навигации — в своём виде.
+   Размытие и стекло на них — настоящие; выбранный слайд — в синей рамке */
+.mx-looks, .mx-look, .mx-look-head, .mx-look-desc { display: none; }
+html[data-design="miuix"] .mx-look-head:not([hidden]) { display: block; }
+html[data-design="miuix"] .mx-looks:not([hidden]) { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+html[data-design="miuix"] .mx-look-desc:not([hidden]) { display: block; text-align: center; color: var(--mx-summary);
+  font-size: 13px; line-height: 18px; padding: 2px 12px 4px; min-height: 36px; }
+html[data-design="miuix"] .mx-look:not([hidden]) { display: block; background: var(--mx-sheet-card); border-radius: 16px; overflow: hidden; }
+html[data-design="miuix"] .mx-look .list-item { padding-left: 16px; padding-right: 16px; }
+.mx-look-opt { appearance: none; border: 0; padding: 5px 5px 2px; background: none; cursor: pointer; display: flex; flex-direction: column;
+  align-items: center; gap: 8px; color: var(--mx-on); font: inherit; border-radius: 18px; }
+.mxl-art {
+  position: relative; display: block; width: 100%; aspect-ratio: 3 / 4.6; border-radius: 16px; overflow: hidden; isolation: isolate;
+  /* обои HyperOS — объёмные синие лепестки с резкими кромками: на
+     однотонном градиенте размытие и стекло сливались с фоном и были не
+     видны; в тёмной теме — те же, приглушённые */
+  background: #cfe0ea url(../img/mx-look.jpg) center / cover;
+  box-shadow: 0 0 0 .5px var(--mx-divider); transition: box-shadow 200ms var(--standard), transform 220ms cubic-bezier(.3, 1.4, .5, 1);
+}
+html[data-mode="dark"] .mxl-art { background-color: #08121c; background-image: url(../img/mx-look-dark.jpg); }
+.mx-look-opt:active .mxl-art { transform: scale(.96); }
+.mx-look-opt[aria-checked="true"] .mxl-art { outline: 2.5px solid var(--md-sys-color-primary); outline-offset: 2px; }
+.mxl-name { font-size: 13px; line-height: 16px; color: var(--mx-summary); }
+.mx-look-opt[aria-checked="true"] .mxl-name { color: var(--md-sys-color-primary); font-weight: 600; }
+/* элементы — в долях слайда, чтобы слайд был любой ширины */
+.mxl-art .w { position: absolute; display: flex; align-items: center; box-sizing: border-box; color: #10131a; }
+html[data-mode="dark"] .mxl-art .w { color: #eef1f7; }
+.mxl-art .ln { display: block; height: 4px; border-radius: 2px; background: currentColor; opacity: .7; }
+.mxl-art .w-logs { right: 7%; top: 4%; width: 17%; aspect-ratio: 1; border-radius: 50%; justify-content: center; }
+.mxl-art .w-logs i { width: 42%; height: 46%; border-radius: 2px; border: 1.5px solid currentColor; box-sizing: border-box; opacity: .8; }
+.mxl-art .w-hero { left: 6%; right: 6%; top: 20%; height: 20%; border-radius: 12px; padding: 0 8%; gap: 7%; }
+.mxl-art .w-hero .ic { flex: none; width: 24%; aspect-ratio: 1; border-radius: 28%; background: #3482ff; }
+.mxl-art .w-hero .ln { position: absolute; left: 40%; width: 42%; top: 38%; }
+.mxl-art .w-hero .ln.s { top: 56%; width: 26%; opacity: .4; }
+.mxl-art .w-tile { left: 6%; width: 41%; top: 44%; height: 17%; border-radius: 12px; flex-direction: column; align-items: flex-start;
+  justify-content: center; gap: 14%; padding: 0 10%; }
+.mxl-art .w-tile.r { left: auto; right: 6%; }
+.mxl-art .w-tile .ln { width: 60%; opacity: .45; }
+.mxl-art .w-tile .ln.b { width: 75%; height: 6px; border-radius: 3px; opacity: .8; }
+.mxl-art .w-snack { left: 50%; transform: translateX(-50%); bottom: 18%; width: 64%; height: 9%; border-radius: 999px; padding: 0 6%; gap: 8%; }
+.mxl-art .w-snack .dot { flex: none; width: 15%; aspect-ratio: 1; border-radius: 50%; background: #3482ff; }
+.mxl-art .w-snack .ln { flex: 1; opacity: .55; }
+.mxl-art .w-nav { left: 9%; right: 9%; bottom: 4%; height: 11%; border-radius: 999px; padding: 2.5%; gap: 3%; }
+.mxl-art .w-nav i { flex: 1; height: 100%; border-radius: 999px; position: relative; }
+.mxl-art .w-nav i::after { content: ""; position: absolute; left: 50%; top: 50%; width: 30%; aspect-ratio: 1; transform: translate(-50%, -50%);
+  border-radius: 3px; border: 1.5px solid currentColor; box-sizing: border-box; opacity: .7; }
+.mxl-art .w-nav i.on { background: color-mix(in srgb, #3482ff 16%, transparent); color: #3482ff; }
+.mxl-art .w-nav i.on::after { opacity: 1; }
+/* обычный: плотные поверхности */
+.mx-look-opt[data-look="plain"] .w { background: #fff; box-shadow: 0 1px 4px rgb(0 0 0 / .10); }
+html[data-mode="dark"] .mx-look-opt[data-look="plain"] .w { background: #242424; }
+/* текстуры: сильное размытие, насыщенность, заливка цветом поверхности —
+   без канта и бликов (они — признак стекла) */
+.mx-look-opt[data-look="tex"] .w {
+  background: rgb(255 255 255 / .55); -webkit-backdrop-filter: blur(9px) saturate(1.9) brightness(1.04); backdrop-filter: blur(9px) saturate(1.9) brightness(1.04);
+  box-shadow: 0 3px 10px rgb(0 0 0 / .10); }
+html[data-mode="dark"] .mx-look-opt[data-look="tex"] .w { background: rgb(36 36 40 / .55);
+  -webkit-backdrop-filter: blur(9px) saturate(1.7) brightness(.85); backdrop-filter: blur(9px) saturate(1.7) brightness(.85);
+  box-shadow: 0 3px 10px rgb(0 0 0 / .35); }
+/* стекло: те же слои, что у панели навигации, — почти прозрачно, лёгкое
+   размытие, кант по контуру, свечение кромки, каустика снизу */
+.mx-look-opt[data-look="glass"] .w {
+  background: linear-gradient(180deg, rgb(255 255 255 / .26), rgb(255 255 255 / .05) 50%, rgb(255 255 255 / .14));
+  -webkit-backdrop-filter: blur(2.5px) saturate(1.4) brightness(1.06); backdrop-filter: blur(2.5px) saturate(1.4) brightness(1.06);
+  box-shadow: inset 0 0 6px rgb(255 255 255 / .4), inset 0 -6px 8px -7px rgb(255 255 255 / .95), 0 4px 12px rgb(0 0 0 / .14); }
+.mx-look-opt[data-look="glass"] .w::before { content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none;
+  background: linear-gradient(135deg, #fff, rgb(255 255 255 / .45) 22%, rgb(255 255 255 / .08) 45%, rgb(255 255 255 / .08) 58%, rgb(255 255 255 / .45) 80%, #fff);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
+html[data-mode="dark"] .mx-look-opt[data-look="glass"] .w {
+  background: linear-gradient(180deg, rgb(255 255 255 / .14), rgb(255 255 255 / .03) 50%, rgb(255 255 255 / .07));
+  -webkit-backdrop-filter: blur(2.5px) saturate(1.4) brightness(.9); backdrop-filter: blur(2.5px) saturate(1.4) brightness(.9);
+  box-shadow: inset 0 0 6px rgb(255 255 255 / .14), inset 0 -6px 8px -7px rgb(255 255 255 / .55), 0 4px 12px rgb(0 0 0 / .4); }
+html[data-mode="dark"] .mx-look-opt[data-look="glass"] .w::before {
+  background: linear-gradient(135deg, rgb(255 255 255 / .7), rgb(255 255 255 / .2) 22%, transparent 45%, transparent 58%, rgb(255 255 255 / .2) 80%, rgb(255 255 255 / .6)); }
+
+/* ── Главная: без шапки ──────────────────────────────────────────────────
+   Название модуля остаётся в странице и не сворачивается в шапку; шапка —
+   прозрачная, журналы — плавающая круглая кнопка (стекло или плотная, по
+   выбранному виду). Карточки, уехавшие под строку состояния, мягко гаснут */
+html[data-design="miuix"] .app-bar.home, html[data-design="miuix"] .app-bar.home.scrolled {
+  background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; pointer-events: none; }
+html[data-design="miuix"] .app-bar.home .title { opacity: 0; }
+html[data-design="miuix"] .app-bar.home #logs-btn {
+  pointer-events: auto; position: relative; width: 44px; height: 44px; margin: 4px 6px 0 auto; border-radius: 50%;
+  background: var(--mx-card); color: var(--mx-on);
+  box-shadow: 0 0 0 .5px var(--mx-divider), 0 4px 14px rgb(0 0 0 / .10);
+  transition: transform 220ms cubic-bezier(.3, 1.4, .5, 1);
+}
+html[data-design="miuix"] .app-bar.home #logs-btn:active { transform: scale(.92); }
+html[data-design="miuix"] .app-bar.home #logs-btn .icon { width: 22px; height: 22px; }
+/* размытие нарастает к краю: четыре слоя, у каждого своё размытие и маска —
+   полоса, где он действует; появляется и уходит плавно (opacity) */
+.mx-home-fade { display: none; }
+html[data-design="miuix"] .mx-home-fade {
+  display: block; position: fixed; left: 0; right: 0; top: 0; z-index: 24; pointer-events: none;
+  height: calc(var(--top-inset) + 28px); opacity: 0; transition: opacity 320ms var(--standard);
+}
+html[data-design="miuix"] body.mx-home-scrolled .mx-home-fade { opacity: 1; }
+/* у каждого слоя — свой композитный слой: без него WebView во время
+   прокрутки пальцем мог перестать перерисовывать размытие под маской */
+.mx-home-fade i { position: absolute; inset: 0; transform: translateZ(0); will-change: backdrop-filter; }
+.mx-home-fade i:nth-child(1) { -webkit-backdrop-filter: blur(1.5px); backdrop-filter: blur(1.5px);
+  -webkit-mask: linear-gradient(#000 60%, transparent); mask: linear-gradient(#000 60%, transparent); }
+.mx-home-fade i:nth-child(2) { -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+  -webkit-mask: linear-gradient(#000 42%, transparent 78%); mask: linear-gradient(#000 42%, transparent 78%); }
+.mx-home-fade i:nth-child(3) { -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  -webkit-mask: linear-gradient(#000 26%, transparent 58%); mask: linear-gradient(#000 26%, transparent 58%); }
+.mx-home-fade i:nth-child(4) { -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+  -webkit-mask: linear-gradient(#000 10%, transparent 38%); mask: linear-gradient(#000 10%, transparent 38%); }
+
+/* ══ Жидкое стекло ════════════════════════════════════════════════════════
+   По слоям Liquid-Glass-Android (QWEA0) и liquidglass (ybouane): лёгкое
+   размытие с насыщенностью 140%, почти без заливки; двухлепестковый кант —
+   свет сверху слева и отражённый снизу справа, тонкий, с плавным затуханием
+   по контуру (градиентная рамка маской, а не сплошная белая линия); у кромки —
+   внутреннее свечение толщи (френель), снизу — каустика, лёгкая дисперсия
+   (красный край слева, синий справа), мягкая тень; при нажатии — пружинит.
+   Настоящего преломления живого фона в WebView нет: библиотеки берут снимок
+   фона и гонят его через шейдер, а backdrop-filter: url() Android WebView не
+   поддерживает (на его месте была «дыра»). */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html[data-design="miuix"][data-mx-glass="1"] :is(.nav-bar, .snackbar, .menu, .app-bar.home #logs-btn, .progress-top:not([hidden])) {
+    --g-tint: rgb(255 255 255 / .16); --g-hi: rgb(255 255 255 / .9); --g-lo: rgb(255 255 255 / .38);
+    --g-glow: rgb(255 255 255 / .30); --g-shadow: rgb(0 0 0 / .14);
+    background: linear-gradient(180deg, rgb(255 255 255 / .22), rgb(255 255 255 / .05) 46%, rgb(255 255 255 / .12)), var(--g-tint);
+    -webkit-backdrop-filter: blur(4px) saturate(1.4) brightness(1.04); backdrop-filter: blur(4px) saturate(1.4) brightness(1.04);
+    box-shadow: inset 0 0 8px var(--g-glow), inset 0 -10px 14px -12px var(--g-hi),
+                inset 1px 0 0 rgb(255 90 90 / .07), inset -1px 0 0 rgb(90 160 255 / .09),
+                0 10px 28px var(--g-shadow), 0 1px 2px rgb(0 0 0 / .06);
+  }
+  html[data-design="miuix"][data-mode="dark"][data-mx-glass="1"] :is(.nav-bar, .snackbar, .menu, .app-bar.home #logs-btn, .progress-top:not([hidden])) {
+    --g-tint: rgb(255 255 255 / .05); --g-hi: rgb(255 255 255 / .5); --g-lo: rgb(255 255 255 / .16);
+    --g-glow: rgb(255 255 255 / .10); --g-shadow: rgb(0 0 0 / .45);
+    background: linear-gradient(180deg, rgb(255 255 255 / .10), rgb(255 255 255 / .02) 46%, rgb(255 255 255 / .05)), var(--g-tint);
+    -webkit-backdrop-filter: blur(4px) saturate(1.4) brightness(.88); backdrop-filter: blur(4px) saturate(1.4) brightness(.88);
+  }
+  /* меню — над текстом: заливки чуть больше, чтобы пункты читались */
+  html[data-design="miuix"][data-mx-glass="1"] .menu { --g-tint: color-mix(in srgb, var(--mx-dialog) 55%, transparent);
+    -webkit-backdrop-filter: blur(14px) saturate(1.4); backdrop-filter: blur(14px) saturate(1.4); }
+  html[data-design="miuix"][data-mode="dark"][data-mx-glass="1"] .menu { --g-tint: color-mix(in srgb, var(--mx-dialog) 60%, transparent); }
+  html[data-design="miuix"][data-mx-glass="1"] .snackbar { --g-tint: color-mix(in srgb, var(--mx-card) 35%, transparent); }
+}
+/* кант: рамка 1px, градиент вдоль контура, вырезанная маской по форме */
+html[data-design="miuix"][data-mx-glass="1"] :is(.nav-bar, .snackbar, .menu, .progress-top:not([hidden]))::after,
+html[data-design="miuix"][data-mx-glass="1"] .app-bar.home #logs-btn::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none; z-index: 2;
+  background: linear-gradient(135deg, var(--g-hi), var(--g-lo) 22%, transparent 45%, transparent 58%, var(--g-lo) 80%, var(--g-hi));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+}
+/* выбранный раздел — капля: светлее, со своим бликом сверху */
+html[data-design="miuix"][data-mx-glass="1"] .nav-dest::before {
+  background: linear-gradient(180deg, rgb(255 255 255 / .42), rgb(255 255 255 / .14));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / .75), inset 0 0 6px rgb(255 255 255 / .25), 0 2px 8px rgb(0 0 0 / .08);
+}
+html[data-design="miuix"][data-mode="dark"][data-mx-glass="1"] .nav-dest::before {
+  background: linear-gradient(180deg, rgb(255 255 255 / .16), rgb(255 255 255 / .05));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / .28), inset 0 0 6px rgb(255 255 255 / .08), 0 2px 8px rgb(0 0 0 / .3);
+}
+/* пружинит при нажатии, как pressScale .95 у Liquid-Glass-Android */
+html[data-design="miuix"][data-mx-glass="1"] .nav-dest:active { transform: scale(.95); }
+
+/* название модуля на главной — одной строкой: размер подгоняет core.js
+   (mxHomeTitleFit) под ширину, логотип — пропорционально */
+html[data-design="miuix"] .page[data-page="control"] > .mx-title { flex-wrap: nowrap; }
+html[data-design="miuix"] .page[data-page="control"] > .mx-title .mx-title-text {
+  white-space: nowrap; font-size: var(--home-fs, 32px); line-height: 1.25; min-width: 0; }
+html[data-design="miuix"] .page[data-page="control"] > .mx-title .brand-logo {
+  flex: none; width: calc(var(--home-fs, 32px) * 1.06); height: calc(var(--home-fs, 32px) * 1.06); }
+html[data-design="miuix"] .page[data-page="control"] > .mx-title .brand-logo svg {
+  width: calc(var(--home-fs, 32px) * .66); height: calc(var(--home-fs, 32px) * .66); }
+
+/* ── Индикатор загрузки: вместо полоски под шапкой (на главной шапки нет, на
+   других экранах она сливается с фоном, и полоска висела «в воздухе») —
+   плавающая круглая капсула сверху по центру с вращающейся дугой, как
+   InfiniteProgressIndicator miuix. Выезжает из-под строки состояния с
+   пружиной; поверхность — по виду: плотная, текстуры или стекло */
+html[data-design="miuix"] .progress-top:not([hidden]) {
+  top: calc(var(--top-inset) + 10px); left: 50%; right: auto; width: 44px; height: 44px; margin-left: -22px;
+  display: grid; place-items: center; border-radius: 50%; z-index: 46;
+  background: var(--mx-card); box-shadow: 0 0 0 .5px var(--mx-divider), 0 6px 20px rgb(0 0 0 / .14);
+  animation: mx-busy-in 380ms cubic-bezier(.3, 1.35, .5, 1) both;
+}
+html[data-design="miuix"] .progress-top .progress-linear { display: none; }
+html[data-design="miuix"] .progress-top::before {
+  content: ""; width: 20px; height: 20px; border-radius: 50%; box-sizing: border-box;
+  border: 2.5px solid color-mix(in srgb, var(--md-sys-color-primary) 18%, transparent); border-top-color: var(--md-sys-color-primary);
+  animation: mx-busy-spin .8s linear infinite;
+}
+@keyframes mx-busy-in { from { opacity: 0; transform: translateY(-60px) scale(.7); } to { opacity: 1; transform: none; } }
+@keyframes mx-busy-spin { to { transform: rotate(360deg); } }
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html[data-design="miuix"][data-mx-tex="1"]:not([data-mx-glass="1"]) .progress-top:not([hidden]) {
+    background: color-mix(in srgb, var(--mx-card) 62%, transparent);
+    -webkit-backdrop-filter: var(--mx-tex-blur); backdrop-filter: var(--mx-tex-blur); }
+}

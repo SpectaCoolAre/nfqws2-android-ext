@@ -5,6 +5,15 @@
 /* Словарь EN для t(): ключ — русская строка интерфейса как она написана в коде
    и в разметке (data-t / data-ta). Новую строку интерфейса добавляйте сюда же. */
 EN = {
+ "Вид HyperOS": "HyperOS look",
+ "Обычный": "Plain",
+ "Текстуры": "Textures",
+ "Стекло": "Glass",
+ "Плотные поверхности: панель навигации, уведомления и шапка без прозрачности": "Solid surfaces: the navigation bar, notifications and the top bar are not see-through",
+ "Расширенные текстуры: под панелью, уведомлениями, меню и диалогами фон размывается и берёт их цвет": "Advanced textures: behind the bar, notifications, menus and dialogs the background blurs and takes on their colour",
+ "Жидкое стекло, как в HyperOS 4: прозрачная толща с кантом и бликом, поверх текстур": "Liquid glass, as in HyperOS 4: a clear body with a rim and a highlight, on top of the textures",
+ "Сияние на главной": "Glow on the home screen",
+ "Живой градиент за карточками «Состояния»": "A living gradient behind the Status cards",
  "Если провайдер режет DoH и DoT — соединения с DNS-серверами идут через обход": "If the ISP cuts DoH and DoT, connections to DNS servers go through the bypass",
  "Сервисы с геоблоком пойдут через проверенные DNS с обходом, видео и CDN — на самый быстрый адрес. Профили продолжат работать.": "Geo-blocked services will go through checked bypass DNS, video and CDN to the fastest address. Profiles keep working.",
  "Обход геоблока и ускорение видео выключатся. Домены профилей — на их серверы, остальное — на DNS по умолчанию.": "The geo-block bypass and video speed-up turn off. Profile domains go to their servers, everything else to the default DNS.",
@@ -14,7 +23,7 @@ EN = {
  "не отвечает": "not answering",
  "{0} мс": "{0} ms",
  "geoblock.list · доменов: {0}": "geoblock.list · domains: {0}",
- "itdoginfo и GeoHide, ваши домены останутся": "itdoginfo and GeoHide, your domains stay",
+ "itdoginfo, v2fly и GeoHide, ваши домены останутся": "itdoginfo, v2fly and GeoHide, your domains stay",
  "Ответ за {0} мс по {1}": "Answered in {0} ms over {1}",
  "Проверено {0}": "Checked {0}",
  "Видео и CDN — самый быстрый адрес, повторы из кэша": "Video and CDN get the fastest address, repeats come from the cache",

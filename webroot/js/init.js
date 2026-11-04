@@ -22,7 +22,20 @@ addEventListener('resize', () => { if(!transitionCleanup && !swipe.st) warmTabs(
   // цвета системы — в фоне: первый раз это секунды, дальше ответ из кэша модуля
   if(systemTheme()) loadSystemTheme();
   await stat();
+  splashOut();
   initStrategySelector();
   loadLive();
   checkWhatsNew();
 })();
+
+/* Заставка уходит, когда «Состояние» получило первые данные и отрисовалось
+   (два кадра); служба долго не отвечает — всё равно через 4 с */
+function splashOut(){
+  const el = document.getElementById('splash');
+  if(!el || el.classList.contains('out')) return;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    el.classList.add('out');
+    setTimeout(() => el.remove(), 400);
+  }));
+}
+setTimeout(splashOut, 4000);

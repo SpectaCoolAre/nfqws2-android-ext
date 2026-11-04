@@ -47,6 +47,10 @@ DNS_CDN_LIST="$MODDIR/defaults/dns-cdn.list"
 # обход не идут.
 DNS_GEO_LIST="$LISTS_DIR/geoblock.list"
 DNS_GEO_URL="https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Categories/geoblock.lst"
+# Домены Gemini и других сервисов Google AI — из v2fly/domain-list-community
+# (google-deepmind): в geoblock от itdoginfo нет, например, geminiweb-pa.
+# clients6.google.com — запросов самого приложения Gemini. Не скачался — не беда
+DNS_GEO_URL2="https://raw.githubusercontent.com/v2fly/domain-list-community/master/data/google-deepmind"
 DNS_GEO_CAND="$MODDIR/defaults/dns-geo-servers.list"
 # Проверка DNS обхода геоблока идёт по всему списку (см. helper/geoscan.go):
 # где чей прокси и свой ли у домена адрес, видно только по самому домену
@@ -73,6 +77,7 @@ DNS_GEO_FALLBACK="https://dns.comss.one/dns-query"
 DNS_GEO_SCAN_COOL=300        # ручная проверка — не чаще раза в 5 минут
 DNS_GEO_UPD_COOL=1800        # обновление списка — раз в 30 минут
 DNS_GEO_NEVER="$MODDIR/defaults/dns-geo-never.list"
+DNS_GEO_GROUPS="$MODDIR/defaults/dns-geo-groups.list"   # сайты с одним сервером на все домены
 DNS_CHAIN=nfqws_dns          # nat OUTPUT: перехват в dnsproxy
 DNS_CHAIN6F=nfqws_dns6       # filter OUTPUT (IPv6 без nat): отказ, резолвер уйдёт на IPv4
 
@@ -165,43 +170,102 @@ dns_geo_routes() { # [save] -> «домен<TAB>сервер<TAB>протоко�
   local f h; f=$(dns_geo_scan_file); [ -s "$f" ] || return 0
   # частая проверка свежее полной — её маршруты для её доменов главнее
   h=""; [ -s "$f.hot" ] && [ "$f.hot" -nt "$f" ] && h="$f.hot"
+  # свежие ли данные этой сети (проверка не старше часа): по старым общий
+  # сервер группы не снимается — см. ниже
+  local fresh=0 ft
+  ft=$(sed -n '1s/^#time=\([0-9]*\).*/\1/p' "${h:-$f}" 2>/dev/null)
+  [ -n "$ft" ] && [ $(( $(date +%s) - ft )) -lt $(( DNS_GEO_HOT_EVERY * 2 )) ] && fresh=1
   # У домена — один сервер, у всех доменов сайта — по возможности один и тот
   # же (как с пулом: разные прокси в одной сессии — разные адреса выхода, и
-  # сайт видит подозрительный трафик). Сервер сайта закреплён (<файл>.pin),
-  # пока он годится хоть одному его домену; иначе — тот, что годится
-  # большинству. Домену, которому закреплённый не годится, — его первый.
+  # сайт видит подозрительный трафик). Сайт — две последние части имени или
+  # группа из dns-geo-groups.list (Gemini — это и google.com, и googleapis.com,
+  # и gemini.google). Сервер сайта — тот, что годится большинству его доменов,
+  # прежде всего тех, которыми пользуются (частая проверка): у Gemini —
+  # gemini.google.com, а не fitbit-pa.googleapis.com;
+  # закреплённый (<файл>.pin) держится, пока годится не меньше чем 90% от
+  # этого. Домену, которому выбранный не годится, — его первый. Группе — без
+  # исключений: все её домены из списка, и те, которых проверка не знает
+  # (добавлены после неё), — к её серверу. Так делает geodns на роутере, и с
+  # ним Gemini работает; с исключениями одна сессия Gemini шла через четыре
+  # прокси: geminiweb-pa — через пул, signaler-pa — через свой единственный.
+  # Сервер группы — общий для всех сетей (groups.pin): телефон то и дело
+  # переходит с Wi‑Fi на мобильную и обратно, и со своим сервером в каждой
+  # сети Gemini посреди чата получал другой адрес выхода — первый запрос
+  # проходил, следующий упирался в геоблок. Общий держится, пока в этой сети
+  # обходит все домены группы, которыми пользуются (без них — 90% от лучшего).
+  # По старым данным сети (её проверка старше часа) общий сервер держится,
+  # пока в ней отвечает: сразу после перехода с мобильной на Wi‑Fi маршруты
+  # строились по проверке Wi‑Fi многочасовой давности, где общего сервера среди
+  # обходящих Gemini не было, — сервер группы сменился, а через полминуты
+  # свежая проверка вернула прежний: Gemini дважды за полминуты менял адрес
+  # выхода и упирался в геоблок.
   # Отключённые вручную (DNS_GEO_OFF) не берутся
-  awk -F'\t' -v of="$DNS_GEO_OFF" -v pf="$f.pin" -v save="$1" '
-    function site(d,   n, a) { n = split(d, a, "."); return n < 2 ? d : a[n - 1] "." a[n] }
+  awk -F'\t' -v of="$DNS_GEO_OFF" -v pf="$f.pin" -v gpf="$DNS_GEO_SCAN_DIR/groups.pin" -v fresh="$fresh" -v base="$DNS_GEO_HOT_BASE" -v gf="$DNS_GEO_GROUPS" -v gl="$DNS_GEO_LIST" -v hf="$h" -v save="$1" '
+    function site(d,   n, a, x, i) {
+      for (x = d; ; x = substr(x, i + 1)) { if (x in grp) return "@" grp[x]; if ((i = index(x, ".")) == 0) break }
+      n = split(d, a, "."); return n < 2 ? d : a[n - 1] "." a[n] }
     BEGIN { while ((getline l < of) > 0) { gsub(/[[:space:]]/, "", l); if (l != "") off[l] = 1 }
-      while ((getline l < pf) > 0) { split(l, a, " "); if (a[1] != "") pin[a[1]] = a[2] } }
+      while ((getline l < pf) > 0) { split(l, a, " "); if (a[1] != "") pin[a[1]] = a[2] }
+      while ((getline l < gf) > 0) { sub(/#.*/, "", l); n = split(tolower(l), a, " "); for (i = 2; i <= n; i++) grp[a[i]] = a[1] }
+      while ((getline l < gpf) > 0) { split(l, a, " "); if (a[1] != "") gpin[a[1]] = a[2] }
+      # основные сервисы (gemini.google.com…) — «используемые» всегда, есть
+      # частая проверка или нет: иначе правило выбора сервера группы менялось
+      # с появлением её данных, и сервер прыгал
+      nb = split(base, bl, " "); for (i = 1; i <= nb; i++) basehot[bl[i]] = 1
+      n = 0 }
     !/^[#=+!?]/ && $2 == "ok" { pr[$1] = ($7 == "https" ? "https" : "tls"); next }
-    /^=/ { d = substr($1, 2); if (!(d in rt)) ord[++n] = d; rt[d] = $2 }
+    # частая проверка свежее: сервер, не ответивший в ней, сейчас недоступен —
+    # маршрут из полной проверки на него не ведёт (иначе домен получал ошибку)
+    !/^[#=+!?]/ && $2 == "fail" && FILENAME == hf { delete pr[$1]; next }
+    /^=/ { d = substr($1, 2); if (!(d in rt)) ord[++n] = d; rt[d] = $2; if (FILENAME == hf || (d in basehot)) hot[d] = 1 }
     END {
       for (k = 1; k <= n; k++) {
         d = ord[k]; if (rt[d] == "-") continue
         m = split(rt[d], hs, ","); nc[d] = 0
-        for (i = 1; i <= m; i++) if ((hs[i] in pr) && !(hs[i] in off)) { c[d, ++nc[d]] = hs[i]; s = site(d); if (!((s, hs[i]) in cnt)) so[s, ++ns[s]] = hs[i]; cnt[s, hs[i]]++ }
+        for (i = 1; i <= m; i++) if ((hs[i] in pr) && !(hs[i] in off)) { c[d, ++nc[d]] = hs[i]; s = site(d); if (!((s, hs[i]) in cnt)) so[s, ++ns[s]] = hs[i]; cnt[s, hs[i]] += (d in hot) ? 1000 : 1 }
+        if (d in hot) hotn[site(d)]++
       }
       for (s in ns) {
         best = ""
-        if ((s in pin) && ((s, pin[s]) in cnt)) best = pin[s]
-        else for (i = 1; i <= ns[s]; i++) if (best == "" || cnt[s, so[s, i]] > cnt[s, best]) best = so[s, i]
+        for (i = 1; i <= ns[s]; i++) if (best == "" || cnt[s, so[s, i]] > cnt[s, best]) best = so[s, i]
+        if ((s in pin) && ((s, pin[s]) in cnt) && cnt[s, pin[s]] * 10 >= cnt[s, best] * 9) best = pin[s]
+        g = (s in gpin) ? gpin[s] : ""
+        if (substr(s, 1, 1) == "@" && g != "" && ((s, g) in cnt) &&
+            (hotn[s] ? cnt[s, g] >= hotn[s] * 1000 : cnt[s, g] * 10 >= cnt[s, best] * 9)) best = g
+        else if (substr(s, 1, 1) == "@" && g != "" && !fresh && (g in pr) && !(g in off)) best = g
         ch[s] = best
       }
       for (k = 1; k <= n; k++) {
-        d = ord[k]
+        d = ord[k]; s = site(d)
         if (rt[d] == "-") { print d "\t-"; continue }
+        if (substr(s, 1, 1) == "@" && ch[s] != "") { print d "\t" ch[s] "\t" pr[ch[s]]; continue }
         if (!nc[d]) continue
-        x = c[d, 1]; s = site(d)
+        x = c[d, 1]
         for (i = 1; i <= nc[d]; i++) if (c[d, i] == ch[s]) x = ch[s]
         print d "\t" x "\t" pr[x]
+      }
+      while ((getline l < gl) > 0) {
+        sub(/[[:space:]]*#.*/, "", l); gsub(/[[:space:]]/, "", l); d = tolower(l)
+        if (d == "" || (d in rt) || (d in done)) continue
+        done[d] = 1; s = site(d)
+        if (substr(s, 1, 1) == "@" && ch[s] != "") print d "\t" ch[s] "\t" pr[ch[s]]
       }
       if (save == "save") {
         if ("*" in pin) print "* " pin["*"] > pf
         for (s in ch) if (ch[s] != "") print s, ch[s] > pf
+        for (s in ch) if (substr(s, 1, 1) == "@" && ch[s] != "") gpin[s] = ch[s]
+        for (s in gpin) if (gpin[s] != "") print s, gpin[s] > gpf
       }
     }' "$f" $h
+}
+# Что сменилось в маршрутах против прежних (файл): «: домен старый → новый, …»,
+# первые пять и сколько ещё
+dns_geo_routes_diff() {
+  dns_geo_routes | awk -F'\t' -v bf="$1" '
+    BEGIN { while ((getline l < bf) > 0) { split(l, a, "\t"); old[a[1]] = a[2] } }
+    { o = ($1 in old) ? old[$1] : "нет"; if (o != $2) { k++; if (k <= 5) out = out (k > 1 ? ", " : ": ") $1 " " o " → " $2 }; seen[$1] = 1 }
+    END { for (d in old) if (!(d in seen)) { k++; if (k <= 5) out = out (k > 1 ? ", " : ": ") d " " old[d] " → нет" }
+      if (k > 5) out = out " и ещё " (k - 5); printf "%s", out }'
 }
 # Закрепить выбор: сервер пула («*») и сервер каждого сайта
 dns_geo_pin_save() {
@@ -291,7 +355,8 @@ dns_geo_scan() { # [full|hot]
   boot=$(dns_net_servers | tr ',' '\n' | awk '/^[0-9]+(\.[0-9]+)(\.[0-9]+)(\.[0-9]+)$/ { print; exit }')
   boot="${boot:-77.88.8.8}:53"
   cand=$(tr -d '\r' < "$DNS_GEO_CAND" | sed 's/[[:space:]]*#.*//; s/[[:space:]]//g' | awk NF | tr '\n' ',' | sed 's/,$//')
-  f=$(dns_geo_scan_file); before=$(dns_geo_pick | tr '\n' ' ')$(dns_geo_routes | tr '\n\t' '  ')
+  f=$(dns_geo_scan_file); dns_geo_routes > "$DNS_RUN_DIR/geo-routes.before" 2>/dev/null
+  before=$(dns_geo_pick | tr '\n' ' ')$(tr '\n\t' '  ' < "$DNS_RUN_DIR/geo-routes.before")
   # частая — без полной не бывает: общие адреса прокси она берёт из неё
   [ "$mode" = hot ] && ! grep -q '	ok	' "$f" 2>/dev/null && mode=full
   # домены: полная — весь список, домены профилей обхода геоблока (их домены
@@ -305,10 +370,10 @@ dns_geo_scan() { # [full|hot]
     if [ "$mode" = hot ]; then
       # частая — и по факту: настоящий ли сертификат сайта по адресу прокси
       "$HELPER_BIN" -geoscan "$cand" -samples "@$DNS_RUN_DIR/geoscan.list" -boot "$boot" -ref "$DNS_GEO_REF" -wait 20s \
-        -max "$DNS_GEO_POOL" -asncache "$DNS_GEO_SCAN_DIR/asn.cache" -shared "$f" -verify 2>/dev/null
+        -max "$DNS_GEO_POOL" -groups "$DNS_GEO_GROUPS" -asncache "$DNS_GEO_SCAN_DIR/asn.cache" -shared "$f" -verify 2>/dev/null
     else
       "$HELPER_BIN" -geoscan "$cand" -samples "@$DNS_RUN_DIR/geoscan.list" -boot "$boot" -ref "$DNS_GEO_REF" -wait 40s \
-        -max "$DNS_GEO_POOL" -asncache "$DNS_GEO_SCAN_DIR/asn.cache" 2>/dev/null
+        -max "$DNS_GEO_POOL" -groups "$DNS_GEO_GROUPS" -asncache "$DNS_GEO_SCAN_DIR/asn.cache" 2>/dev/null
     fi
   } > "$out"
   rm -f "$DNS_RUN_DIR/geoscan.list"
@@ -320,7 +385,7 @@ dns_geo_scan() { # [full|hot]
     after=$(dns_geo_pick | tr '\n' ' ')
     n=$(grep -c '^=' "$f.hot" 2>/dev/null)
     if [ "$before" != "$after$(dns_geo_routes | tr '\n\t' '  ')" ]; then
-      dns_log "частая проверка DNS обхода геоблока (${n:-0} доменов, которыми пользуются): маршруты изменились — применяю"
+      dns_log "частая проверка DNS обхода геоблока (${n:-0} доменов, которыми пользуются): маршруты изменились — применяю$(dns_geo_routes_diff "$DNS_RUN_DIR/geo-routes.before")"
       dns_apply_now
     fi
     return 0
@@ -384,8 +449,8 @@ dns_geo_scan_bg() { # [full|hot]
   ( dns_geo_scan "${1:-full}" >/dev/null 2>&1 & ) 2>/dev/null
 }
 
-# Обновить список геоблока: свежий geoblock из itdoginfo и домены пресета
-# GeoHide добавляются к тому, что уже есть, — свои домены пользователя
+# Обновить список геоблока: свежий geoblock из itdoginfo, домены Google AI из
+# v2fly и домены пресета GeoHide добавляются к тому, что уже есть, — свои домены пользователя
 # остаются. Код 1 — не скачалось (старый список не тронут). -> число доменов
 dns_geo_update() {
   local tmp="$DNS_GEO_LIST.dl" n
@@ -394,6 +459,12 @@ dns_geo_update() {
     grep -E '^[a-z0-9.-]+\.[a-z0-9-]+$' > "$tmp.ok"
   rm -f "$tmp"
   [ "$(grep -c . "$tmp.ok" 2>/dev/null)" -ge 50 ] || { rm -f "$tmp.ok"; return 1; }
+  # формат v2fly: «full:домен», «домен @метка»; include:, regexp:, keyword: — мимо
+  if hosts_download "$DNS_GEO_URL2" "$tmp"; then
+    tr -d '\r' < "$tmp" | tr 'A-Z' 'a-z' | sed 's/[[:space:]]*#.*//; s/[[:space:]]@.*//; s/^[[:space:]]*//; s/[[:space:]]*$//; s/^full://; s/^domain://' |
+      grep -E '^[a-z0-9.-]+\.[a-z0-9-]+$' >> "$tmp.ok"
+  fi
+  rm -f "$tmp"
   {
     grep '^#' "$DNS_GEO_LIST" 2>/dev/null
     { grep -v '^#' "$DNS_GEO_LIST" 2>/dev/null; cat "$tmp.ok"
@@ -899,12 +970,41 @@ function tsec(t,   a) { split(t, a, ":"); return a[1] * 3600 + a[2] * 60 + int(a
 }'
 
 
-dns_proxy_start() {
-  local pid i listen=0
+# Две «половины» портов: 15353/15354 и 15363/15364. Конфиг собирается с
+# основными портами (по нему сравнивается «тот же или изменился»), а
+# запускается копия с портами текущей половины. Смена сети и конфига
+# поднимает новый dnsproxy на свободной половине, переводит перехват на него
+# и только потом гасит прежний (dns_proxy_swap): DNS не пропадает. Раньше
+# прежний останавливался до запуска нового, и 1,3–1,6 с запросы шли в
+# закрытый порт — приложения, переподключавшиеся после смены сети, писали
+# «нет интернета»
+dns_slot() { local s=0; [ -f "$DNS_RUN_DIR/slot" ] && IFS= read -r s < "$DNS_RUN_DIR/slot"; [ "$s" = 1 ] && echo 1 || echo 0; }
+dns_port_of() { echo $((DNS_PORT + 10 * $1)); }
+dns_cdn_port_of() { echo $((DNS_CDN_PORT + 10 * $1)); }
+dns_port_now() { dns_port_of "$(dns_slot)"; }
+dns_cdn_port_now() { dns_cdn_port_of "$(dns_slot)"; }
+# Файлы запуска половины <n>: аргументы и списки серверов с её портами
+dns_slot_files() { # <n>
+  local n="$1" mp cp
+  mp=$(dns_port_of "$n"); cp=$(dns_cdn_port_of "$n")
+  sed "s/\]127\.0\.0\.1:$DNS_CDN_PORT\$/]127.0.0.1:$cp/" "$DNS_RUN_DIR/upstreams.txt" > "$DNS_RUN_DIR/upstreams.run$n.txt" 2>/dev/null
+  awk -v mp="$mp" -v up="$DNS_RUN_DIR/upstreams.txt" -v run="$DNS_RUN_DIR/upstreams.run$n.txt" '
+    pp { print mp; pp = 0; next } $0 == "-p" { pp = 1 } $0 == up { print run; next } { print }' \
+    "$DNS_RUN_DIR/args" > "$DNS_RUN_DIR/args.run$n" 2>/dev/null
+  if [ -f "$DNS_RUN_DIR/cdn.args" ]; then
+    awk -v cp="$cp" 'pp { print cp; pp = 0; next } $0 == "-p" { pp = 1 } { print }' \
+      "$DNS_RUN_DIR/cdn.args" > "$DNS_RUN_DIR/cdn.args.run$n"
+  else rm -f "$DNS_RUN_DIR/cdn.args.run$n"; fi
+}
+dns_listening() { grep -qi ":$(printf '%04X' "$1") " /proc/net/udp /proc/net/udp6 2>/dev/null; }
+
+dns_proxy_start() { # [половина] [keep — прежние процессы не трогать]
+  local pid i listen=0 n="${1:-$(dns_slot)}" keep="$2"
   [ -x "$DNS_BIN" ] || chmod 0755 "$DNS_BIN" 2>/dev/null
   [ -x "$DNS_BIN" ] || { dns_fail "нет исполняемого $DNS_BIN"; return 1; }
   rotate_file "$DNS_LOG" $(( ${LOG_MAX_KB:-512} * 1024 ))
   dns_kill_strays
+  dns_slot_files "$n"
   # Вывод dnsproxy — через фильтр (FIFO, чтобы $! остался PID самого
   # dnsproxy). Фильтр завершается сам, когда dnsproxy закрывает FIFO.
   # Фильтр защищён так же, как dnsproxy: запущенный из WebUI, он иначе
@@ -923,16 +1023,16 @@ dns_proxy_start() {
 '
     exec 0</dev/null >>"$out" 2>&1
     SSL_CERT_DIR=$(dns_cert_dirs); export SSL_CERT_DIR
-    exec "$DNS_BIN" $(cat "$DNS_RUN_DIR/args")
+    exec "$DNS_BIN" $(cat "$DNS_RUN_DIR/args.run$n")
   ) &
   pid=$!
   echo "$pid" > "$DNS_PIDFILE"
   # Готов, когда слушает порт: /proc/net/udp, порт в шестнадцатеричном виде
   i=0
-  local port=$DNS_PORT
+  local port; port=$(dns_port_of "$n")
   while [ "$i" -lt 20 ]; do
     dns_alive "$pid" || break
-    grep -qi ":$(printf '%04X' "$port") " /proc/net/udp /proc/net/udp6 2>/dev/null && { listen=1; break; }
+    dns_listening "$port" && { listen=1; break; }
     sleep 0.2; i=$((i + 1))
   done
   if ! dns_alive "$pid"; then
@@ -947,29 +1047,31 @@ dns_proxy_start() {
   cp -f "$DNS_RUN_DIR/upstreams.txt" "$DNS_RUN_DIR/running.upstreams" 2>/dev/null
   cp -f "$DNS_RUN_DIR/args" "$DNS_RUN_DIR/running.args" 2>/dev/null
   read -r i _ < /proc/uptime && echo "${i%.*}" > "$DNS_RUN_DIR/started_at"
-  dns_cdn_start
+  dns_cdn_start "$n" "$keep"
   return 0
 }
 
 # CDN-экземпляр умного DNS. Не поднялся — не беда: основной всё равно
 # отвечает, домены CDN тогда идут на его запасные серверы
-dns_cdn_start() {
-  local pid i
-  dns_cdn_stop
+dns_cdn_start() { # [половина] [keep — прежний CDN-экземпляр не трогать]
+  local pid i n="${1:-$(dns_slot)}" port
+  [ "$2" = keep ] || dns_cdn_stop
   [ -f "$DNS_RUN_DIR/cdn.args" ] || return 0
+  [ -f "$DNS_RUN_DIR/cdn.args.run$n" ] || dns_slot_files "$n"
+  port=$(dns_cdn_port_of "$n")
   (
     set -f
     IFS='
 '
     exec 0</dev/null >>"$DNS_LOG" 2>&1
-    exec "$DNS_BIN" $(cat "$DNS_RUN_DIR/cdn.args")
+    exec "$DNS_BIN" $(cat "$DNS_RUN_DIR/cdn.args.run$n")
   ) &
   pid=$!
   echo "$pid" > "$DNS_CDN_PIDFILE"
   i=0
   while [ "$i" -lt 10 ]; do
     dns_alive "$pid" || break
-    grep -qi ":$(printf '%04X' "$DNS_CDN_PORT") " /proc/net/udp 2>/dev/null && break
+    dns_listening "$port" && break
     sleep 0.2; i=$((i + 1))
   done
   if ! dns_alive "$pid"; then
@@ -980,7 +1082,7 @@ dns_cdn_start() {
   protect_process "$pid"
   cp -f "$DNS_RUN_DIR/cdn.args" "$DNS_RUN_DIR/running.cdn.args" 2>/dev/null
   cp -f "$DNS_RUN_DIR/cdn.upstreams.txt" "$DNS_RUN_DIR/running.cdn.upstreams" 2>/dev/null
-  dns_log "умный DNS: видео и CDN — самый быстрый адрес (PID $pid, порт $DNS_CDN_PORT)"
+  dns_log "умный DNS: видео и CDN — самый быстрый адрес (PID $pid, порт $port)"
 }
 dns_cdn_stop() {
   local pid
@@ -1007,6 +1109,28 @@ dns_proxy_stop() {
   rm -f "$DNS_PIDFILE" "$DNS_RUN_DIR/running.upstreams" "$DNS_RUN_DIR/running.args"
   dns_cdn_stop
 }
+# Перезапуск без пропуска DNS: новый dnsproxy (и CDN-экземпляр) — на
+# свободной половине портов, перехват переводится на него, прежние гаснут
+# через полсекунды (успевают ответить на запросы, что уже в пути). Новый не
+# поднялся — остаётся прежний, перехват не трогается
+dns_proxy_swap() {
+  local old new opid ocpid p
+  old=$(dns_slot); new=$((1 - old))
+  opid=$(dns_pid); ocpid=$(dns_cdn_pid)
+  if ! dns_proxy_start "$new" keep; then
+    [ -n "$opid" ] && echo "$opid" > "$DNS_PIDFILE"
+    [ -n "$ocpid" ] && echo "$ocpid" > "$DNS_CDN_PIDFILE"
+    return 1
+  fi
+  echo "$new" > "$DNS_RUN_DIR/slot"
+  dns_redirect_port "$(dns_port_of "$new")" || dns_rules_add
+  sleep 0.5
+  for p in $opid $ocpid; do
+    kill -TERM "$p" 2>/dev/null; sleep 0.2; dns_alive "$p" && kill -KILL "$p" 2>/dev/null
+  done
+  [ -n "$opid" ] && dns_log "прежний dnsproxy (PID $opid) остановлен — перехват уже на новом, порт $(dns_port_of "$new")"
+  return 0
+}
 
 # ---------------------------------------------------------------- перехват
 # В nat OUTPUT: непомеченные пакеты (не от netd, в том числе сам dnsproxy) —
@@ -1028,8 +1152,8 @@ _dns_chain_nat() { # <iptables|ip6tables>
   $C -w -t nat -F $DNS_CHAIN 2>/dev/null &&
   _dns_skip_vpn "$C" nat $DNS_CHAIN &&
   $C -w -t nat -A $DNS_CHAIN -m mark --mark 0x0/0xffff -j RETURN &&
-  $C -w -t nat -A $DNS_CHAIN -p udp --dport 53 -j REDIRECT --to-ports $DNS_PORT &&
-  $C -w -t nat -A $DNS_CHAIN -p tcp --dport 53 -j REDIRECT --to-ports $DNS_PORT &&
+  $C -w -t nat -A $DNS_CHAIN -p udp --dport 53 -j REDIRECT --to-ports "$(dns_port_now)" &&
+  $C -w -t nat -A $DNS_CHAIN -p tcp --dport 53 -j REDIRECT --to-ports "$(dns_port_now)" &&
   { $C -w -t nat -C OUTPUT -j $DNS_CHAIN 2>/dev/null || $C -w -t nat -I OUTPUT 1 -j $DNS_CHAIN; }
 }
 _dns_unchain() { # <iptables|ip6tables> <таблица> <цепочка>
@@ -1076,6 +1200,27 @@ dns_rules_del() {
 }
 
 dns_rules_ok() { iptables -w -t nat -C OUTPUT -j $DNS_CHAIN 2>/dev/null; }
+# Перевести перехват на порт <p>, не снимая его: новое правило — на место
+# прежнего (перед ним), затем прежнее удаляется. Цепочки нет — ошибка
+dns_redirect_port() { # <порт>
+  local C pr n old cmds="iptables"
+  [ "$(cat "$DNS_RUN_DIR/ipv6" 2>/dev/null)" = redirect ] && cmds="iptables ip6tables"
+  for C in $cmds; do
+    for pr in udp tcp; do
+      # номер правила REDIRECT этого протокола среди правил цепочки
+      n=$($C -w -t nat -S $DNS_CHAIN 2>/dev/null | awk -v pr="$pr" '
+        /^-[NP] / { next } { i++ } /REDIRECT/ && index($0, "-p " pr " ") { print i; exit }')
+      old=$($C -w -t nat -S $DNS_CHAIN 2>/dev/null | awk -v pr="$pr" '
+        /REDIRECT/ && index($0, "-p " pr " ") { if (match($0, /--to-ports [0-9]+/)) print substr($0, RSTART + 11, RLENGTH - 11); exit }')
+      [ -n "$n" ] && [ -n "$old" ] || return 1
+      [ "$old" = "$1" ] && continue
+      $C -w -t nat -I $DNS_CHAIN "$n" -p "$pr" --dport 53 -j REDIRECT --to-ports "$1" || return 1
+      $C -w -t nat -D $DNS_CHAIN -p "$pr" --dport 53 -j REDIRECT --to-ports "$old" 2>/dev/null ||
+        $C -w -t nat -D $DNS_CHAIN -p "$pr" -m "$pr" --dport 53 -j REDIRECT --to-ports "$old" 2>/dev/null
+    done
+  done
+  return 0
+}
 
 # ---------------------------------------------------------------- жизненный цикл
 # Загрузка: всё в $DNS_RUN_DIR — от прошлой загрузки. Старый PID мог достаться
@@ -1153,8 +1298,12 @@ _dns_start() { # <причина> [force — перезапуск dnsproxy и п
     # запросы получают отказ и повторяются, но к DNS оператора не уходят
     dns_log "$why: сеть или VPN сменились — перезапуск dnsproxy"
     dns_describe
-    dns_proxy_stop
-    if ! dns_proxy_start; then dns_rules_del; return 1; fi
+    if ! dns_proxy_swap; then
+      # новый не поднялся: прежний ещё отвечает, но к старой сети — по-старому
+      dns_proxy_stop
+      if ! dns_proxy_start; then dns_rules_del; return 1; fi
+      dns_redirect_port "$(dns_port_now)" || dns_rules_add
+    fi
     rm -f "$DNS_RUN_DIR/error"
     return 0
   fi
@@ -1171,6 +1320,11 @@ _dns_start() { # <причина> [force — перезапуск dnsproxy и п
   if dns_pid >/dev/null; then dns_log "$why: конфиг изменился — перезапуск dnsproxy"
   else dns_log "$why: запуск dnsproxy"; fi
   dns_describe
+  # уже работает и перехватывает — замена без пропуска DNS
+  if dns_pid >/dev/null && dns_rules_ok && dns_proxy_swap; then
+    rm -f "$DNS_RUN_DIR/error"
+    return 0
+  fi
   dns_proxy_stop
   if ! dns_proxy_start; then dns_rules_del; return 1; fi
   if ! dns_rules_add; then
@@ -1221,9 +1375,10 @@ _dns_stop() {
 # зависший dnsproxy. Два раза подряд без ответа (watchdog спрашивает раз в
 # минуту) — перезапуск. Без помощника проверки нет
 dns_probe_check() {
-  local ports="127.0.0.1:$DNS_PORT" n=0
+  local ports n=0
   [ -x "$HELPER_BIN" ] || return 0
-  [ -f "$DNS_RUN_DIR/cdn.args" ] && ports="$ports,127.0.0.1:$DNS_CDN_PORT"
+  ports="127.0.0.1:$(dns_port_now)"
+  [ -f "$DNS_RUN_DIR/cdn.args" ] && ports="$ports,127.0.0.1:$(dns_cdn_port_now)"
   if "$HELPER_BIN" -probe "$ports" >/dev/null 2>"$DNS_RUN_DIR/probe.err"; then
     rm -f "$DNS_RUN_DIR/probe_fail" "$DNS_RUN_DIR/probe.err"
     return 0

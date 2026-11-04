@@ -208,7 +208,17 @@ function openMenu(anchor, items, opts){
   }
   const back = document.createElement('div');
   back.className = 'menu-back';
-  back.addEventListener('click', e => { e.preventDefault(); close(); });
+  // любое касание мимо меню — нажатие, свайп, прокрутка — закрывает его сразу,
+  // а не только click (свайп click не даёт). Подложка уходит, когда палец
+  // поднят: иначе то же касание нажало бы кнопку под меню
+  let backHeld = false;
+  const dropBack = () => { backHeld = false; back.remove(); };
+  back.addEventListener('pointerdown', e => { backHeld = true; close(); });
+  // отпускание пальца, которым меню открыли долгим нажатием, тоже приходит
+  // сюда — подложка уходит только после касания, начатого на ней
+  ['pointerup', 'pointercancel'].forEach(ev => back.addEventListener(ev, () => { if(backHeld) setTimeout(dropBack, 0); }));
+  back.addEventListener('click', e => { e.preventDefault(); close(); dropBack(); });
+  back.addEventListener('wheel', () => { close(); dropBack(); }, {passive: true});
   $('layer').append(back, menu);
   const r = anchor.getBoundingClientRect(), mw = menu.offsetWidth, mh = menu.offsetHeight;
   let top = r.bottom + 4;
@@ -242,9 +252,9 @@ function openMenu(anchor, items, opts){
     if(closed) return; closed = true;
     if(scrim) scrim.classList.remove('show');
     removeEventListener('keydown', onKey, true);
-    back.remove();
+    if(!backHeld) back.remove(); else setTimeout(dropBack, 700);
     menu.classList.add('closing');
-    setTimeout(() => menu.remove(), 110);
+    setTimeout(() => menu.remove(), 200);
     anchor.setAttribute('aria-expanded', 'false');
     if(openMenuEntry === entry) openMenuEntry = null;
     scheduleSync();
@@ -602,9 +612,11 @@ const PAGE_META = {
   diag:     {title: 'Диагностика', child: true, parent: 'settings', init: () => diagInit(),
              actions: [{icon: 'refresh', label: 'Проверить снова', fn: () => diagInit()}]},
   dns:      {title: 'DNS профили', child: true, parent: 'settings', init: () => dnsInit(),
-             actions: [{icon: 'logs', label: 'Журнал DNS', fn: () => openDnsLog()}]},
-  dnsgeo:   {title: 'Обход геоблока', child: true, parent: 'dns', init: () => dnsInit()},
-  dnsprofiles: {title: 'Профили DNS', child: true, parent: 'dns', init: () => dnsInit()},
+             actions: [{icon: 'logs', label: 'Журнал DNS', fn: () => openDnsLog(), long: () => logsLongAction()}]},
+  dnsgeo:   {title: 'Обход геоблока', child: true, parent: 'dns', init: () => dnsInit(),
+             actions: [{icon: 'logs', label: 'Журнал DNS', fn: () => openDnsLog(), long: () => logsLongAction()}]},
+  dnsprofiles: {title: 'Профили DNS', child: true, parent: 'dns', init: () => dnsInit(),
+             actions: [{icon: 'logs', label: 'Журнал DNS', fn: () => openDnsLog(), long: () => logsLongAction()}]},
   dnsprof:  {title: 'Профиль DNS', child: true, parent: 'dnsprofiles', init: () => dnsProfInit()},
   hosts:    {title: 'Редактор hosts', child: true, parent: 'settings', init: () => hostsInit(),
              actions: [{icon: 'refresh', label: 'Обновить состояние', fn: () => hostsInit()}]}
@@ -619,6 +631,11 @@ function renderAppBar(page, animate){
   // Верхний уровень — название модуля слева, как у Telegram: раздел и так
   // подписан в нижней панели. Дочерние экраны — свой заголовок у стрелки
   $('app-bar').classList.toggle('top', !m.child);
+  // HyperOS, главная: шапки нет — название остаётся в странице, журналы —
+  // плавающая круглая кнопка
+  $('app-bar').classList.toggle('home', page === 'control');
+  // сияние главной — сразу с того кадра, где остановилось, без ожидания
+  if(page === 'control' && typeof auroraKick === 'function') setTimeout(auroraKick, 0);
   const tEl = $('app-title');
   tEl.textContent = m.child ? t(m.title) : 'nfqws2-android-ext';
   // miuix: большой заголовок — название экрана (на «Состоянии» — модуля),
@@ -653,8 +670,27 @@ function mxTitles(){
   if(document.documentElement.dataset.design === 'miuix'){
     const h = document.querySelector('.page[data-page="control"] > .mx-title');
     if(h && logo.parentElement !== h) h.append(logo);
+    mxHomeTitleFit();
   } else if(logo.parentElement !== $('app-bar')) $('app-title').after(logo);
 }
+/* Название модуля на главной — всегда в одну строку вместе с логотипом:
+   не влезает — шрифт уменьшается под ширину (до 22 px), а не переносится
+   на вторую строку («nfqws2-android-» / «ext»). Логотип — по размеру шрифта */
+function mxHomeTitleFit(){
+  const h = document.querySelector('.page[data-page="control"] > .mx-title');
+  if(!h || !h.offsetWidth) return;
+  const tx = h.querySelector('.mx-title-text');
+  if(!tx) return;
+  h.style.setProperty('--home-fs', '32px');
+  const cs = getComputedStyle(h), pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+  const logo = h.querySelector('.brand-logo'), gap = parseFloat(cs.columnGap) || 12;
+  const avail = h.clientWidth - pad - (logo ? logo.offsetWidth + gap : 0) - 2;
+  const need = tx.scrollWidth;
+  const fs = need > avail ? Math.max(22, Math.floor(32 * avail / need * 10) / 10) : 32;
+  h.style.setProperty('--home-fs', fs + 'px');
+}
+if(typeof addEventListener === 'function') addEventListener('resize', () => { if(typeof mxHomeTitleFit === 'function') mxHomeTitleFit(); });
+if(typeof document !== 'undefined' && document.fonts && document.fonts.ready) document.fonts.ready.then(() => mxHomeTitleFit());
 /* miuix: маленький заголовок стоит по центру строки шапки — поля по самой
    широкой стороне с кнопками, чтобы он не наезжал на них */
 function mxBarSide(){
@@ -680,7 +716,10 @@ function fillBarActions(actions){
     b.title = t(a.label);
     b.setAttribute('aria-label', t(a.label));
     b.innerHTML = icon(a.icon, 's24');
+    // значок журнала на внутренних экранах — как кнопка журналов на главных:
+    // долгое нажатие — то же действие (экспорт или очистка)
     b.onclick = a.fn;
+    if(a.long) onLongPress(b, null, a.long);
     if(a.disabled) b.disabled = true;
     box.append(b);
   });
@@ -1224,7 +1263,6 @@ function stretchApply(){
   if(isMx()){
     el.style.transformOrigin = '';
     el.style.transform = 'translateY(' + mxOverscroll(p).toFixed(2) + 'px)';
-    if(currentPage === 'control' && !ptrBusy) p > 0 ? ptrShow(p) : ptrHide();
     return;
   }
   // отзывчивее у начала: 100 px — уже ~2,5%, предел — 9%
@@ -1233,38 +1271,6 @@ function stretchApply(){
   const oy = p > 0 ? 0 : scroller.clientHeight - el.getBoundingClientRect().top;
   el.style.transformOrigin = '50% ' + oy + 'px';
   el.style.transform = 'scaleY(' + k + ')';
-  if(currentPage === 'control' && !ptrBusy) p > 0 ? ptrShow(p) : ptrHide();
-}
-/* «Состояние»: оттянуть от верха дальше порога и отпустить — обновить.
-   Служба заново смотрит на сеть, VPN и DNS (net-recheck), потом страница
-   перечитывает статус — на случай, если смену сети что-то пропустило */
-const PTR_PULL = 110;
-let ptrBusy = false;
-function ptrShow(p){
-  const el = $('ptr'), k = Math.min(1, p / PTR_PULL);
-  el.classList.remove('hide');
-  el.style.opacity = k;
-  el.style.transform = 'translateY(' + Math.round(k * 24) + 'px) rotate(' + Math.round(k * 270) + 'deg) scale(' + (.6 + .4 * k) + ')';
-  el.classList.toggle('ready', k >= 1);
-}
-function ptrHide(){
-  const el = $('ptr');
-  el.classList.add('hide');
-  el.classList.remove('ready', 'spin');
-  el.style.opacity = 0;
-  el.style.transform = '';
-}
-async function refreshStatusPage(){
-  if(ptrBusy) return;
-  ptrBusy = true;
-  const el = $('ptr');
-  el.classList.add('spin');
-  el.style.transform = 'translateY(24px)';
-  try {
-    await ctlx(['net-recheck'], 30000);
-    statSig = null;
-    await Promise.all([fullStat(), initStrategySelector()]);
-  } finally { ptrBusy = false; ptrHide(); }
 }
 /* Свайп вбок забрал жест: оттягивание снимается сразу, без анимации
    возврата. Анимация возврата шла на той же странице и полсекунды
@@ -1277,14 +1283,10 @@ function stretchDrop(){
   if(el){
     el.classList.remove('stretch', 'stretch-release');
     el.style.transform = ''; el.style.transformOrigin = '';
-    if(currentPage === 'control' && !ptrBusy) ptrHide();
   }
 }
 function stretchRelease(){
   const el = stretch.el, pulled = stretch.pull;
-  if(el && currentPage === 'control' && !ptrBusy){
-    if(pulled >= PTR_PULL) refreshStatusPage(); else ptrHide();
-  }
   stretch.el = null; stretch.pull = 0;
   if(!el || !el.classList.contains('stretch')) return;
   if(isMx()){
@@ -1325,12 +1327,13 @@ document.addEventListener('touchmove', e => {
   // растяжение иногда не включалось
   const atTop = scrollPos() <= 2, atBottom = scrollPos() >= maxY - 2;
   // Жест начался обычной прокруткой и дошёл до края, не отпуская палец: им
-  // уже ведёт браузер, и отменить касание нельзя. Оттягивать тогда нельзя:
-  // на обратном ходе браузер прокручивал страницу, а оттягивание ещё и
-  // возвращало её — страница ехала быстрее пальца. Такой жест упирается в
-  // край без оттягивания; оттягивается жест, начатый у края, а удар прокрутки
-  // с разгона о край — отскоком (stretchAbsorb)
-  if(stretch.pull === 0 && !e.cancelable) return;
+  // ведёт браузер, и отменить касание нельзя. Прокрутка у края всё равно
+  // переходит в оттягивание — непрерывно, одним движением. Обратный ход такого
+  // жеста отпускает оттягивание пружиной: вести его за пальцем нельзя —
+  // браузер в то же время прокручивает страницу, и она ехала бы быстрее пальца
+  if(!e.cancelable && stretch.pull !== 0 && (stretch.pull > 0 ? dy < 0 : dy > 0)){
+    stretchRelease(); stretch.el = el; stretch.y = y; return;
+  }
   let p = stretch.pull;
   if(p > 0 || (p === 0 && dy > 0 && atTop)) p = Math.max(0, p + dy);
   else if(p < 0 || (p === 0 && dy < 0 && atBottom)) p = Math.min(0, p + dy);
@@ -1342,7 +1345,6 @@ document.addEventListener('touchmove', e => {
   stretch.pull = p;
   if(p === 0){
     el.classList.remove('stretch'); el.style.transform = ''; el.style.transformOrigin = '';
-    if(currentPage === 'control' && !ptrBusy) ptrHide();
     return;
   }
   el.classList.add('stretch');
@@ -1355,9 +1357,46 @@ document.addEventListener('touchend', e => { if(!e.touches.length) stretchReleas
    отпущен, — страница коротко растягивается от края пропорционально
    скорости и возвращается (как EdgeEffect.onAbsorb в Android). Системный
    отскок WebView отключён (он двигал шапку и навигацию), это его замена. */
-const fling = {top: 0, t: 0, v: 0, touching: 0, last: 0};
-document.addEventListener('touchstart', e => { fling.touching = e.touches.length; }, {passive: true, capture: true});
-document.addEventListener('touchend', e => { fling.touching = e.touches.length; }, {passive: true, capture: true});
+const fling = {top: 0, t: 0, v: 0, touching: 0, last: 0, peak: 0, peakT: 0};
+document.addEventListener('touchstart', e => {
+  fling.touching = e.touches.length;
+  // Палец лёг на то, что за время жеста перерисуется («Состояние» обновляет
+  // время работы и плитки каждую секунду): touchend тогда приходит
+  // отсоединённому узлу и до document не доходит — модуль «держал палец»
+  // вечно, и отскок на инерции не срабатывал никогда. Конец касания слушаем
+  // и на самом узле: ему событие приходит всегда
+  const tg = e.target;
+  if(tg && tg.addEventListener){
+    const end = ev => {
+      tg.removeEventListener('touchend', end); tg.removeEventListener('touchcancel', end);
+      if(!tg.isConnected){ fling.touching = ev.touches ? ev.touches.length : 0; if(!fling.touching) stretchRelease(); }
+    };
+    tg.addEventListener('touchend', end, {passive: true});
+    tg.addEventListener('touchcancel', end, {passive: true});
+  }
+}, {passive: true, capture: true});
+document.addEventListener('touchend', e => {
+  fling.touching = e.touches.length;
+  // Короткая страница («Состояние», «Настройки»): прокрутка упирается в край,
+  // пока палец ещё на экране, и инерции после отпускания нет — значит, не было
+  // и отскока (в «Списках» прокрутка долетала до края уже без пальца). Палец
+  // отпущен у края и двигал страницу к нему — отскок со скоростью пальца.
+  // Оттягивание (жест начат у края) отпускается своей пружиной
+  if(e.touches.length || stretch.pull || performance.now() - finger.t > 80) return;
+  const max = scroller.scrollHeight - scroller.clientHeight, top = scrollPos(), now = performance.now();
+  if(now - fling.last < 500) return;
+  if(top <= 2 && finger.v > .3){ fling.last = now; stretchAbsorb(true, -finger.v); }
+  else if(top >= max - 2 && finger.v < -.3){ fling.last = now; stretchAbsorb(false, -finger.v); }
+}, {passive: true, capture: true});
+/* скорость пальца (px/мс, вниз — плюс) по последним движениям */
+const finger = {y: 0, t: 0, v: 0};
+document.addEventListener('touchstart', e => { if(e.touches.length === 1){ finger.y = e.touches[0].clientY; finger.t = performance.now(); finger.v = 0; } }, {passive: true, capture: true});
+document.addEventListener('touchmove', e => {
+  if(e.touches.length !== 1) return;
+  const now = performance.now(), y = e.touches[0].clientY, dt = now - finger.t;
+  if(dt > 0) finger.v = dt < 100 ? .4 * finger.v + .6 * (y - finger.y) / dt : (y - finger.y) / dt;
+  finger.y = y; finger.t = now;
+}, {passive: true, capture: true});
 document.addEventListener('touchcancel', () => { fling.touching = 0; }, {passive: true, capture: true});
 function stretchAbsorb(fromTop, v){
   const el = document.querySelector('.page.active');
@@ -1366,7 +1405,10 @@ function stretchAbsorb(fromTop, v){
     // скорость влёта (px/мс) переходит в пружину, сильно ослабленная: отскок —
     // не больше ~30 px. Сильнее — и короткая страница (настройки, где почти
     // любая прокрутка доходит до края) прыгала на сотню пикселей
-    const v0 = (fromTop ? 1 : -1) * Math.min(4, Math.abs(v)) * 1000 / 3;
+    // Прежде скорость делилась на 3: к краю прокрутка подлетает уже
+    // замедлившись (меньше 1 px/мс), и отскок выходил в 3–8 px — его не было
+    // видно. Теперь: 0,5 px/мс — ~14 px, 1 — ~26 px, предел — ~64 px
+    const v0 = (fromTop ? 1 : -1) * Math.min(2.5, Math.abs(v)) * 1100;
     el.animate(mxSpringFrames(0, v0), {duration: 500});
     return;
   }
@@ -1379,13 +1421,28 @@ function stretchAbsorb(fromTop, v){
 }
 scroller.addEventListener('scroll', () => {
   const now = performance.now(), top = scrollPos(), dt = now - fling.t;
-  if(dt > 0 && dt < 100) fling.v = .5 * fling.v + .5 * (top - fling.top) / dt;
-  else fling.v = 0;
-  fling.top = top; fling.t = now;
+  // скачок прокрутки (восстановление места, scrollTo) — не бросок: больше
+  // 8 px/мс палец не даёт, такую скорость не берём. Скорость — по отрезку не
+  // короче 12 мс: под нагрузкой события приходят и через 1–2 мс, и по такому
+  // отрезку медленная прокрутка выглядела броском
+  const inst = dt > 0 ? (top - fling.top) / dt : 0;
+  const measure = dt >= 12 || dt <= 0;
+  if(measure){
+    if(dt > 0 && dt < 100 && Math.abs(inst) <= 8) fling.v = .5 * fling.v + .5 * inst;
+    else fling.v = 0;
+  }
+  // у самого края браузер гасит инерцию в последнем кадре, и скорость
+  // «влёта» по нему почти нулевая — берём наибольшую за последние 120 мс
+  if(measure){
+    if(Math.abs(inst) > 8) fling.peak = 0;
+    else if(Math.abs(fling.v) > Math.abs(fling.peak) || now - fling.peakT > 120){ fling.peak = fling.v; fling.peakT = now; }
+    fling.top = top; fling.t = now;
+  }
   if(fling.touching || now - fling.last < 500) return;
   const max = scroller.scrollHeight - scroller.clientHeight;
-  if(top <= 0 && fling.v < -.3){ fling.last = now; stretchAbsorb(true, fling.v); }
-  else if(top >= max - 1 && fling.v > .3){ fling.last = now; stretchAbsorb(false, fling.v); }
+  const v = Math.abs(fling.peak) > Math.abs(fling.v) ? fling.peak : fling.v;
+  if(top <= 0 && v < -.3){ fling.last = now; stretchAbsorb(true, v); }
+  else if(top >= max - 1 && v > .3){ fling.last = now; stretchAbsorb(false, v); }
 }, {passive: true});
 document.addEventListener('touchcancel', stretchRelease, {passive: true});
 
@@ -1396,7 +1453,12 @@ let barFrame = 0;
 function barScroll(){
   const y = scrollPos(), bar = $('app-bar');
   bar.classList.toggle('scrolled', y > 8);
-  if(document.documentElement.dataset.design === 'miuix'){
+  if(document.documentElement.dataset.design === 'miuix' && bar.classList.contains('home')){
+    bar.classList.remove('scrolled', 'mx-collapsed');
+    // под строкой состояния — мягкое затухание, когда карточки уезжают под неё
+    document.body.classList.toggle('mx-home-scrolled', y > 8);
+  } else if(document.documentElement.dataset.design === 'miuix'){
+    document.body.classList.remove('mx-home-scrolled');
     // по прокрутке, а не по месту заголовка на экране: отскок у края сдвигает
     // страницу, но не прокрутку, и шапка не должна от него сворачиваться
     // (иначе были видны оба заголовка разом)
@@ -1473,7 +1535,9 @@ function handleBack(allowExit){
   if(openMenuEntry){ closeMenu(); return true; }
   if($('dialog-wrap').classList.contains('open')){ dialogResolve(false); return true; }
   if($('editor-panel').classList.contains('open')){
-    if(!$('find-bar').hidden){ toggleFind(false); return true; }
+    // поиск, включённый самим модулем (список открыт из проверки домена), —
+    // часть экрана: «назад» закрывает список целиком
+    if(!$('find-bar').hidden && !(editorCtx && editorCtx.autoFind)){ toggleFind(false); return true; }
     closeSlideEditor(); return true;
   }
   if(openSheetId){ closeSheet(); return true; }
@@ -1512,6 +1576,10 @@ function uiLayers(){
   if(openSheetId) n++;
   if(dnsSel && currentPage === 'dnsprofiles') n++;
   if(editorCtx) n++;
+  // строка поиска, открытая самим пользователем, — свой слой: «назад»
+  // закрывает сначала её, и на это нужна своя запись в истории (иначе жест
+  // съедал запасную, и следующий «назад» мог закрыть WebUI целиком)
+  if(editorCtx && !editorCtx.autoFind && !$('find-bar').hidden) n++;
   if($('dialog-wrap').classList.contains('open')) n++;
   if(openMenuEntry) n++;
   if(typeof flappy !== 'undefined' && flappy.open) n++;
@@ -1672,3 +1740,52 @@ function initSheetSwipe(sheet){
   sheet.addEventListener('touchcancel', end);
 }
 document.querySelectorAll('.sheet.list-sheet').forEach(initSheetSwipe);
+
+/* ── Сияние на главной (HyperOS) ──────────────────────────────────────────
+   Четыре мягких пятна (.mx-aurora i) плывут, растут и вспыхивают: смещение,
+   масштаб и яркость каждого — сумма двух синусоид с несоизмеримыми
+   периодами: пятна медленно дрейфуют (19–27 с — ~30 px/с, без рывков), а
+   вспыхивают и гаснут быстрее (5–8 с) — это и есть пульс северного сияния;
+   узор не повторяется. Обновление — 20 раз в секунду и сразу всех пятен (один кадр
+   композиции, а не четыре вразнобой, как было с CSS-анимациями); глазу при
+   таком медленном ходе это плавно. Стоит, пока главная не видна, окно
+   свёрнуто или в системе отключены анимации */
+const AURORA = [
+  {ax: 14, ay: 9,  px: 21, py: 26, s: .14, ps: 11, o: [.62, .32], po: 5.5},
+  {ax: 15, ay: 11, px: 24, py: 19, s: .12, ps: 13, o: [.6, .34],  po: 7},
+  {ax: 12, ay: 13, px: 27, py: 22, s: .16, ps: 9.5, o: [.6, .32], po: 6.2},
+  {ax: 20, ay: 18, px: 19, py: 23, s: .2,  ps: 14, o: [.42, .3],  po: 8}
+];
+let auroraTm = 0;
+// своё время сияния: идёт только пока его видно (главная на экране, окно не
+// свёрнуто) — после возвращения анимация продолжается с того же кадра, а не
+// прыгает туда, куда «ушли» часы, пока её не было видно
+let auroraClock = 0, auroraLast = 0;
+function auroraTick(){
+  auroraTm = 0;
+  const root = document.documentElement;
+  const on = root.dataset.design === 'miuix' && root.dataset.mxAurora === '1' && !document.hidden &&
+    typeof currentPage !== 'undefined' && currentPage === 'control' && !matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if(!on){ auroraLast = 0; return; }
+  const now = Date.now();
+  if(auroraLast) auroraClock += Math.min(now - auroraLast, 100);
+  auroraLast = now;
+  const t = auroraClock / 1000, TAU = 2 * Math.PI;
+  document.querySelectorAll('.mx-aurora i').forEach((el, i) => {
+    const a = AURORA[i]; if(!a) return;
+    const x = a.ax * Math.sin(TAU * t / a.px + i) + a.ax * .3 * Math.sin(TAU * t / (a.px * .5) + 2 * i);
+    const y = a.ay * Math.sin(TAU * t / a.py + 1.7 * i) + a.ay * .3 * Math.cos(TAU * t / (a.py * .5) + i);
+    const k = 1 + a.s * Math.sin(TAU * t / a.ps + .5 * i);
+    const o = a.o[0] + a.o[1] * Math.sin(TAU * t / a.po + 1.3 * i) * (.7 + .3 * Math.sin(TAU * t / (a.po * 2.3)));
+    el.style.transform = 'translate(' + x.toFixed(2) + '%,' + y.toFixed(2) + '%) scale(' + k.toFixed(3) + ')';
+    el.style.opacity = Math.max(.15, Math.min(1, o)).toFixed(3);
+  });
+  auroraTm = setTimeout(auroraTick, 50);
+}
+function auroraKick(){ if(!auroraTm) auroraTick(); }
+if(typeof MutationObserver === 'function' && typeof matchMedia === 'function'){
+  document.addEventListener('visibilitychange', auroraKick);
+  new MutationObserver(auroraKick).observe(document.documentElement, {attributes: true, attributeFilter: ['data-mx-aurora', 'data-design']});
+  setInterval(auroraKick, 1000);   // смена вкладки: главная снова на экране
+  auroraKick();
+}

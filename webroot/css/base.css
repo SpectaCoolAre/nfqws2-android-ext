@@ -133,21 +133,6 @@ html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
   -webkit-overflow-scrolling: touch;
 }
 .page.stretch { will-change: transform; }
-/* Значок «оттянуть, чтобы обновить» на «Состоянии»: проявляется и
-   поворачивается по мере оттягивания, за порогом — в цвет акцента,
-   после отпускания крутится, пока идёт проверка */
-.ptr {
-  position: fixed; left: 50%; top: calc(var(--top-inset) + var(--appbar-height) + 4px); z-index: 24;
-  width: 40px; height: 40px; margin-left: -20px; border-radius: 50%;
-  display: grid; place-items: center; pointer-events: none; opacity: 0;
-  background: var(--md-sys-color-surface-container-high); color: var(--md-sys-color-on-surface-variant);
-  box-shadow: 0 1px 3px rgb(0 0 0 / .2);
-}
-.ptr.ready { color: var(--md-sys-color-primary); }
-.ptr.spin { opacity: 1 !important; color: var(--md-sys-color-primary); }
-.ptr.spin .icon { animation: ptr-spin .8s linear infinite; }
-.ptr.hide { transition: opacity var(--dur-short) var(--standard), transform var(--dur-short) var(--standard); }
-@keyframes ptr-spin { to { transform: rotate(360deg); } }
 .page.stretch-release { transition: transform var(--dur-medium) var(--emphasized-decelerate); }
 /* Как в приложении: подписи, пункты и пояснения не выделяются долгим
    нажатием. Выделяется только то, что имеет смысл копировать: поля ввода,
@@ -1014,7 +999,11 @@ body.kb-open .snackbar { bottom: 16px; }
 .sheet-drag:focus-visible .handle { outline: 3px solid var(--md-sys-color-secondary); outline-offset: 4px; }
 
 /* ── Меню: исчезает за 100ms, а не пропадает мгновенно ──────────────────── */
-.menu.closing { animation: fade-out 100ms var(--emphasized-accelerate) forwards; pointer-events: none; }
+/* закрытие — то же появление наоборот: сжимается к якорю и гаснет */
+.menu.closing { animation: menu-out 180ms var(--emphasized-accelerate) forwards; pointer-events: none; }
+.menu.up.closing { animation-name: menu-out-up; }
+@keyframes menu-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(.9) translateY(-6px); } }
+@keyframes menu-out-up { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(.9) translateY(6px); } }
 
 /* ── Switch: при нажатии ручка увеличивается до 28dp ────────────────────── */
 .switch:active::before { width: 28px; height: 28px; left: 0; }

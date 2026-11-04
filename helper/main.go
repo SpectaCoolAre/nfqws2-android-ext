@@ -6,7 +6,7 @@
 //	nfqws2-helper -probe 127.0.0.1:15353[,127.0.0.1:15356]
 //	nfqws2-helper -sniprobe youtube.com -ip 142.250.74.14
 //	nfqws2-helper -ttltrace -ip 142.250.74.14 -blocked quic_youtube.bin -open quic_google.bin
-//	nfqws2-helper -geoscan dns.comss.one,… -samples @geoblock.list -boot 213.87.142.94:53 [-asncache файл] [-shared файл]
+//	nfqws2-helper -geoscan dns.comss.one,… -samples @geoblock.list -boot 213.87.142.94:53 [-asncache файл] [-shared файл] [-groups файл]
 package main
 
 import (
@@ -35,6 +35,7 @@ func main() {
 	verify := flag.Bool("verify", false, "-geoscan: проверить сертификат по адресу прокси (частая проверка)")
 	shared := flag.String("shared", "", "-geoscan: файл прошлой полной проверки — её общие адреса прокси (частая проверка)")
 	boot := flag.String("boot", "", "DNS сети (адрес:53) для -geoscan: эталон ответов и адреса серверов")
+	groups := flag.String("groups", "", "-geoscan: файл групп сайтов — их доменам все кандидаты (см. planRoutes)")
 	ref := flag.String("ref", "", "-geoscan: честные DNS для эталона ответов через запятую (адрес:53 или https://имя); DNS сети — запасной")
 	flag.Parse()
 	log.SetFlags(log.Ldate | log.Ltime)
@@ -94,7 +95,13 @@ func main() {
 		if lastWhoami != "" {
 			fmt.Println(lastWhoami)
 		}
-		for _, l := range formatRoutes(res, ss, planRoutes(res, len(ss), *maxRoute)) {
+		var wide []bool
+		if *groups != "" {
+			if wide, err = groupWide(*groups, ss); err != nil {
+				log.Printf("-groups: %v", err)
+			}
+		}
+		for _, l := range formatRoutes(res, ss, planRoutes(res, len(ss), *maxRoute, wide)) {
 			fmt.Println(l)
 		}
 	default:

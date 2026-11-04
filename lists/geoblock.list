@@ -18,6 +18,9 @@ affinity.studio
 ai-chat.bsg.brave.com
 ai.com
 ai.google.dev
+ai.studio
+aicode.googleapis.com
+aida.googleapis.com
 aircanada.com
 aisandbox-pa.googleapis.com
 aistudio.google.com
@@ -25,6 +28,7 @@ aitestkitchen.withgoogle.com
 akc.org
 alkalicore-pa.clients6.google.com
 alkalimakersuite-pa.clients6.google.com
+alkalimining-pa.googleapis.com
 all3dp.com
 alphacoders.com
 alza.hu
@@ -36,7 +40,10 @@ andrevi.ch
 ansys.com
 anthropic.com
 anthropic.qualtrics.com
+antigravity-pa.googleapis.com
+antigravity-unleash.goog
 antigravity.google
+antigravity.googleapis.com
 api-sg-central.trae.ai
 api.cdnlibs.org
 api.fitbit.com
@@ -56,6 +63,9 @@ api5.cursor.sh
 apis.google.com
 app.zerossl.com
 appcatalyst.pa.googleapis.com
+appsgenaiserver-pa.clients.google.com
+appsgenaiserver-pa.clients6.google.com
+appsgenaiserver-pa.googleapis.com
 arc.net
 arduino.cc
 arkoselabs.com
@@ -138,6 +148,8 @@ claudemcpclient.com
 clevelandclinic.org
 clickup.com
 clip.opus.pro
+cloudaicompanion.googleapis.com
+cloudcode-pa.googleapis.com
 cms-images.mmst.eu
 code.gist.build
 codeium.com
@@ -240,6 +252,7 @@ flir.com
 flir.eu
 flourish.studio
 flow.google
+flow.google.com
 flowmusic.app
 fluke.com
 flukenetworks.com
@@ -278,6 +291,9 @@ geforcenow.com
 geller-pa.googleapis.com
 gemini.google
 gemini.google.com
+gemini.gstatic.com
+geminiweb-pa.clients.google.com
+geminiweb-pa.clients6.google.com
 generativeai.google
 generativelanguage.googleapis.com
 genspark.ai
@@ -358,6 +374,7 @@ kmail-lists.com
 knowledge.broadcom.com
 labs.google
 labs.google.com
+labstailwind.pa.googleapis.com
 lambdalabs.com
 langdock.com
 last.fm
@@ -462,6 +479,7 @@ notebook.google.com
 notebooklm-pa.googleapis.com
 notebooklm.google
 notebooklm.google.com
+notebooklm.googleapis.com
 notion-emojis.s3-us-west-2.amazonaws.com
 notion-static.com
 notion.com

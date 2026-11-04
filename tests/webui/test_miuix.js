@@ -79,6 +79,85 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   eq('rgb(52, 130, 255)', await css('#theme-design .seg.on', 'backgroundColor'), 'the chosen segment is filled with the accent');
   await page.evaluate(() => closeSheet()); await page.waitForTimeout(400);
 
+  sect('HyperOS look: plain, advanced textures, liquid glass, glow');
+  await page.evaluate(() => { navigate('settings'); openSheet('monet-modal'); }); await page.waitForTimeout(600);
+  eq(['Обычный', 'Текстуры', 'Стекло'], await page.$$eval('#mx-looks .mx-look-opt .mxl-name', l => l.map(e => e.textContent.trim())), 'three looks to choose from, as picture slides');
+  eq('tex', await page.$eval('#mx-looks [aria-checked="true"]', e => e.dataset.look), 'by default: advanced textures');
+  truthy(await page.evaluate(() => $('mx-aurora-toggle').checked), 'and the glow on the home screen');
+  truthy(/blur/.test(await css('.nav-bar', 'backdropFilter')), 'textures: the navigation bar blurs what is under it');
+  truthy(/blur/.test(await css('.mx-look-opt[data-look="tex"] .w-nav', 'backdropFilter')), 'the textures slide shows real blur under its navigation capsule');
+  eq(6, await page.$$eval('.mx-look-opt[data-look="tex"] .mxl-art .w', l => l.length), 'each slide is the module home in miniature: logs button, status card, two tiles, notification, navigation');
+  eq('none', await css('.nav-bar', 'content', '::after'), 'textures: no glass rim — only the blur');
+  eq('none', await css('.mx-look-opt[data-look="tex"] .w-nav', 'content', '::before'), 'and none on the textures slide either');
+  truthy((await css('.mx-look-opt[data-look="glass"] .w-nav', 'backdropFilter')).includes('blur'), 'the glass slide blurs a little');
+  eq('1px', await css('.mx-look-opt[data-look="glass"] .w-nav', 'padding', '::before'), 'and draws the glass rim');
+  truthy((await css('.mx-look-opt .mxl-art', 'backgroundImage')).includes('mx-look.jpg'), 'slides sit on a detailed HyperOS wallpaper, so blur and glass show');
+  await page.click('#mx-looks [data-look="plain"]'); await page.waitForTimeout(300);
+  eq(['0', '0'], await page.evaluate(() => [document.documentElement.dataset.mxTex, document.documentElement.dataset.mxGlass]), 'the plain slide switches textures and glass off');
+  eq('none', await css('.nav-bar', 'backdropFilter'), 'plain: the navigation bar is solid, no blur');
+  eq('rgb(255, 255, 255)', await css('.nav-bar', 'backgroundColor'), 'and opaque');
+  eq('plain', await page.$eval('#mx-looks [aria-checked="true"]', e => e.dataset.look), 'the chosen slide is marked');
+  await page.click('#mx-looks [data-look="glass"]'); await page.waitForTimeout(300);
+  eq(['1', '1'], await page.evaluate(() => [document.documentElement.dataset.mxTex, document.documentElement.dataset.mxGlass]), 'glass comes on top of textures');
+  const gl = await css('.nav-bar', 'backdropFilter');
+  truthy(/blur/.test(gl) && !/url\(/.test(gl), 'glass: a light blur, no SVG filter (Android WebView shows a hole for it): ' + gl);
+  eq('1px', await css('.nav-bar', 'padding', '::after'), 'with a rim drawn along the outline');
+  truthy(/Жидкое стекло/.test(await page.textContent('#mx-look-desc')), 'the chosen look is explained under the slides');
+  await page.click('#mx-looks [data-look="tex"]'); await page.waitForTimeout(300);
+  await page.evaluate(() => closeSheet()); await page.waitForTimeout(400);
+  await page.evaluate(() => navigate('control')); await page.waitForTimeout(700);
+  eq('block', await css('.page[data-page="control"] .mx-aurora', 'display'), 'the home screen has the living glow');
+  const m1 = await page.$eval('.mx-aurora .a1', e => e.style.transform + '|' + e.style.opacity);
+  await page.waitForTimeout(600);
+  const m2 = await page.$eval('.mx-aurora .a1', e => e.style.transform + '|' + e.style.opacity);
+  truthy(m1 && m1 !== m2 && /translate/.test(m2), 'and it moves and pulses: ' + m1 + ' → ' + m2);
+  await page.evaluate(() => navigate('lists')); await page.waitForTimeout(1300);
+  const s1 = await page.$eval('.mx-aurora .a1', e => e.style.transform);
+  await page.waitForTimeout(500);
+  eq(s1, await page.$eval('.mx-aurora .a1', e => e.style.transform), 'while the home screen is not shown, it stands still');
+  await page.waitForTimeout(1500);
+  await page.evaluate(() => navigate('control')); await page.waitForTimeout(120);
+  const nums = t => (t.match(/-?[\d.]+/g) || []).map(Number);
+  const s2 = await page.$eval('.mx-aurora .a1', e => e.style.transform);
+  const jump = Math.max(...nums(s1).map((v, i) => Math.abs(v - nums(s2)[i])));
+  truthy(jump < 3, 'back on the home screen it goes on from the same frame, without a jump: ' + s1 + ' → ' + s2);
+  await page.waitForTimeout(300);
+  truthy(await page.$eval('.mx-aurora .a1', e => e.style.transform) !== s2, 'and moves on at once, without a pause');
+  await page.waitForTimeout(600);
+  eq('static', await page.evaluate(() => getComputedStyle(document.querySelector('.page[data-page="lists"]')).position === 'fixed' ? 'static' : getComputedStyle(document.querySelector('.page[data-page="lists"]')).position), 'other tabs keep their own layout');
+  await page.evaluate(() => setMxLook('aurora', false)); await page.waitForTimeout(200);
+  eq('none', await css('.page[data-page="control"] .mx-aurora', 'display'), 'the glow can be switched off');
+  await page.evaluate(() => setMxLook('aurora', true));
+
+  sect('home title in one line');
+  for (const w of [340, 400]) {
+    await page.setViewportSize({ width: w, height: 860 }); await page.waitForTimeout(400);
+    const g = await page.evaluate(() => { const h = document.querySelector('.page[data-page="control"] > .mx-title'), tx = h.querySelector('.mx-title-text'), lg = h.querySelector('.brand-logo');
+      const a = tx.getBoundingClientRect(), b = lg.getBoundingClientRect();
+      return { lines: Math.round(a.height / parseFloat(getComputedStyle(tx).lineHeight)), fs: parseFloat(getComputedStyle(tx).fontSize), sameRow: Math.abs((a.top + a.bottom) / 2 - (b.top + b.bottom) / 2) < 8, fits: b.right <= innerWidth };
+    });
+    eq({ lines: 1, sameRow: true, fits: true }, { lines: g.lines, sameRow: g.sameRow, fits: g.fits }, w + ' px: the module name stays on one line with its logo (font ' + g.fs + ' px)');
+  }
+  await page.setViewportSize({ width: 400, height: 860 }); await page.waitForTimeout(300);
+
+  sect('opening splash and the busy indicator');
+  eq(null, await page.$('#splash'), 'the opening splash is gone once the status screen is ready');
+  await page.evaluate(() => busy(true, false)); await page.waitForTimeout(1300);
+  const pb = await page.$eval('#progress-top', e => { const r = e.getBoundingClientRect(), cs = getComputedStyle(e); return { w: Math.round(r.width), h: Math.round(r.height), round: cs.borderRadius, centre: Math.round(r.left + r.width / 2), bar: getComputedStyle(e.querySelector('.progress-linear')).display }; });
+  eq({ w: 44, h: 44, round: '50%', centre: 200, bar: 'none' }, pb, 'HyperOS: a round floating capsule with a spinner at the top centre instead of a line in the air');
+  await page.evaluate(() => busy(false, false)); await page.waitForTimeout(200);
+  eq(true, await page.$eval('#progress-top', e => e.hidden), 'and it goes when done');
+
+  sect('home: progressive blur under the status bar');
+  eq(null, await page.$('#sb-scrim'), 'no status bar scrim: the system colours its icons itself');
+  await page.evaluate(() => navigate('control')); await page.waitForTimeout(600);
+  eq('0', await css('.mx-home-fade', 'opacity'), 'at the top of the home screen nothing is blurred');
+  await page.evaluate(() => { $('content').style.minHeight = '2000px'; scrollToY(200); }); await page.waitForTimeout(700);
+  eq('1', await css('.mx-home-fade', 'opacity'), 'scrolled — cards going under the status bar blur, fading in');
+  eq(['blur(1.5px)', 'blur(4px)', 'blur(8px)', 'blur(16px)'], await page.$$eval('.mx-home-fade i', l => l.map(e => getComputedStyle(e).backdropFilter)), 'the blur grows towards the edge, layer by layer');
+  truthy(/opacity/.test(await css('.mx-home-fade', 'transition')), 'it comes and goes smoothly');
+  await page.evaluate(() => { scrollToY(0); $('content').style.minHeight = ''; }); await page.waitForTimeout(400);
+
   sect('the settings index');
   eq('rgb(247, 247, 247)', await css('body', 'backgroundColor'), 'the page is #F7F7F7');
   eq('rgba(0, 0, 0, 0)', await css('#settings-body .list', 'backgroundColor'), 'rows lie on the background, not on cards');
@@ -204,7 +283,11 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   const peak = await page.evaluate(() => new Promise(res => { const el = document.querySelector('.page.active'); stretchAbsorb(true, 8);
     let m = 0; const t0 = performance.now(); (function f(){ const tr = new DOMMatrix(getComputedStyle(el).transform); m = Math.max(m, Math.abs(tr.m42));
       if (performance.now() - t0 < 500) requestAnimationFrame(f); else res(Math.round(m)); })(); }));
-  truthy(peak > 0 && peak <= 40, 'a fling into the edge bounces softly: ' + peak + ' px at most');
+  truthy(peak > 0 && peak <= 70, 'a hard fling into the edge bounces, but not by a hundred pixels: ' + peak + ' px at most');
+  const slow = await page.evaluate(() => new Promise(res => { const el = document.querySelector('.page.active'); stretchAbsorb(true, .6);
+    let m = 0; const t0 = performance.now(); (function f(){ const tr = new DOMMatrix(getComputedStyle(el).transform); m = Math.max(m, Math.abs(tr.m42));
+      if (performance.now() - t0 < 500) requestAnimationFrame(f); else res(Math.round(m)); })(); }));
+  truthy(slow >= 10, 'a scroll that reaches the edge already slowing down still bounces visibly: ' + slow + ' px');
   await page.evaluate(() => toast('Список приложений обновлён')); await page.waitForTimeout(700);
   const sn = await page.evaluate(() => { const e = $('prompt-container'), c = getComputedStyle(e);
     return { r: c.borderTopLeftRadius, w: e.getBoundingClientRect().width, blur: /blur/.test(c.backdropFilter || c.webkitBackdropFilter || ''), ic: getComputedStyle(e.querySelector('.snack-ic')).display }; });

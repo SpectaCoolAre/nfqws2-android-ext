@@ -106,7 +106,7 @@ window.__presets = ${JSON.stringify(PRESETS)};
     else if (cmd.indexOf("'dns-") >= 0) { const a = args(cmd); const r = dns(a.slice(a.findIndex(x => x.startsWith('dns-'))));
       rc = r[0]; out = r[1] || ''; err = r[2] || ''; }
     // __dnsSlow: медленный ответ dns-state — проверка слепка экрана
-    var slow = cmd.indexOf("'dns-state'") >= 0 && window.__dnsSlow;
+    var slow = (cmd.indexOf("'dns-state'") >= 0 && window.__dnsSlow) || (cmd.indexOf("'dns-set-enabled'") >= 0 && window.__dnsSetSlow);
     setTimeout(function(){ if (window[id]) window[id](rc, out, err); }, slow ? 1500 : 0);
     return 'job';
   }};
@@ -201,7 +201,16 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     sect(`${mode}: switching on`);
     // Пресеты в профили кладёт модуль при первом запуске (test_dns.sh); у заглушки их нет
     truthy((await page.textContent('#dns-nav .list-item:has-text("Профили")')).includes('Профилей пока нет'), 'the profiles line sums them up');
-    await page.click('#dns-main'); await idle();
+    // включение — секунды: экран меняется сразу, второе нажатие не выключает
+    await page.evaluate(() => { window.__dnsSetSlow = 1; });
+    await page.click('#dns-main'); await page.waitForTimeout(150);
+    const sw = await page.evaluate(() => ({ on: $('dns-main').classList.contains('on'), checked: $('dns-toggle').checked, body: !$('dns-body').classList.contains('is-disabled') }));
+    eq({ on: true, checked: true, body: true }, sw, 'the switch shows «on» at once, before the module answers');
+    await page.click('#dns-main'); await page.waitForTimeout(100);
+    eq(true, await page.evaluate(() => $('dns-toggle').checked), 'a second tap while it switches is ignored');
+    await page.evaluate(() => { window.__dnsSetSlow = 0; });
+    await page.waitForTimeout(1700); await idle();
+    eq(1, await page.evaluate(() => window.__dns.calls.filter(c => c.startsWith('dns-set-enabled')).length), 'only one command is sent');
     eq(true, await page.evaluate(() => window.__dns.enabled), 'the main switch turns the feature on');
     eq(false, await page.evaluate(() => $('dns-body').classList.contains('is-disabled')), 'and enables the body');
     truthy((await page.textContent('#dns-general')).includes('Не активно'), 'the state says nothing is applied yet');
