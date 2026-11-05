@@ -290,6 +290,15 @@ if [ -x "${NFQWS2_TEST_BIN:-}" ]; then
     --lua-init=@zapret-auto.lua --lua-init=@zapret-smart.lua "--lua-init=SMART_TEST_HOME='$H'" --lua-init=@"$TESTS_DIR/lua/test_smart.lua" 2>&1)
   assert_contains "$out" "PASS" "tests/lua/test_smart.lua passes"
   printf '%s\n' "$out" | grep -E '^   FAIL' || true
+elif command -v luajit >/dev/null 2>&1; then
+  # без nfqws2 — в обычном LuaJIT: то немногое, что nfqws2 даёт скриптам
+  # (битовые операции, журнал, часы), — в tests/lua/luajit-prelude.lua
+  section "the orchestrator itself (LuaJIT, no nfqws2 binary)"
+  H="$SANDBOX/smarthome"; mkdir -p "$H/state" "$H/smart" "$H/logs"
+  out=$(cd "$REPO_DIR/lua" && luajit -e "dofile('$TESTS_DIR/lua/luajit-prelude.lua')" -e "SMART_TEST_HOME='$H'" \
+    -e "dofile('zapret-lib.lua') dofile('zapret-antidpi.lua') dofile('zapret-auto.lua') dofile('zapret-smart.lua') dofile('$TESTS_DIR/lua/test_smart.lua')" 2>&1)
+  assert_contains "$out" "PASS" "tests/lua/test_smart.lua passes"
+  printf '%s\n' "$out" | grep -E '^   FAIL|^luajit:' || true
 fi
 
 harness_finish

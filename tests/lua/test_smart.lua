@@ -774,6 +774,47 @@ tcptable({ aliveline(q1.port, "0101A8C0"), aliveline(q2.port, "0201A8C0"), alive
 check(next(rec("q1.example").err) == nil and next(rec("q2.example").err) == nil, "silent servers everywhere at once are the network, not DPI: no errors")
 tcptable({})
 
+section("a variant that just worked on the same servers is tried first by a site that never opened")
+-- SoundCloud на CloudFront: API (graph.soundcloud.com) открывался на варианте,
+-- а картинки и музыка (i1/al.sndcdn.com) на тех же адресах (одна /24) — свой
+-- сайт без единой удачи, и перебор до этого варианта так и не дошёл
+local function ipconn(h, ip) local c = conn(h); c.ip = ip; return c end
+local function ipok(h, ip) local c = ipconn(h, ip); local v = packet(c, { slot = "cdn" }); packet(c, { incoming = true, seq = 18000, slot = "cdn" }); return v end
+local function ipfail(h, ip) local c = ipconn(h, ip); local v = packet(c, { slot = "cdn" }); for i = 1, 3 do packet(c, { retrans = true, slot = "cdn" }) end; return v end
+later(400)
+local api, media = "api-like.example", "media-like.example"
+for _, v in ipairs({ 1, 1, 2, 2 }) do later(); ipfail(api, "18.165.122.6") end
+check(rec(api, "cdn").cur == 3, "the API site found its variant by search: 3")
+later(); check(ipok(api, "18.165.122.48") == 3, "and opens on it")
+later(); check(ipfail(media, "18.165.122.19") == 1, "a new site on the same servers (/24) starts as any new site: the start does not change")
+later(); ipfail(media, "18.165.122.19")
+check(rec(media, "cdn").cur == 3, "but it never opened, and after two errors it goes to the variant that works on its servers (3): " .. rec(media, "cdn").cur)
+-- сайт, что ещё ни разу не открылся, на смене варианта — тоже к нему, а не
+-- к следующему по номеру
+-- в сети лучшие — 1 и 2 (на других серверах они открывают всё), а на
+-- серверах SoundCloud работает только 3
+for k = 1, 40 do
+	local h = "net-" .. k .. ".example"
+	later(1); packet(ipconn(h, "99.0." .. k .. ".1"), { slot = "cdn" }); rec(h, "cdn").cur = (k % 2) + 1
+	ipok(h, "99.0." .. k .. ".1")
+end
+later(); local lead = ipok("fresh.example", "77.7.7.7")
+check(lead == 1 or lead == 2, "1 and 2 are now the best in the network: new sites elsewhere start on them: " .. tostring(lead))
+local img = "img-like.example"
+later(); ipfail(img, "10.1.1.5")
+local imgv = rec(img, "cdn").cur
+check(imgv == 1 or imgv == 2, "a site on other servers starts on the network's best and fails: " .. imgv)
+later(); ipok(api, "10.1.1.9")
+later(); ipfail(img, "10.1.1.5")
+check(rec(img, "cdn").cur == 3, "after its second error it goes to the variant that just worked on its servers (3), not by the network's statistics: " .. rec(img, "cdn").cur)
+-- сайт, что сам уже работал, выбирает по своей истории, как прежде
+local own = "own-like.example"
+later(); ipok(own, "10.2.2.1"); later(); ipok(own, "10.2.2.1")
+local ownv = rec(own, "cdn").cur
+check(ownv == 1 or ownv == 2, "a site that works on its own variant keeps it")
+later(); ipok(api, "10.2.2.7")
+check(rec(own, "cdn").cur == ownv, "a neighbour's success does not move it")
+
 section("slots are separate")
 check(okconn("b.example", "quic") == 1, "the same site in another slot starts fresh")
 

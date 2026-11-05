@@ -122,6 +122,16 @@ local MUT_MAX = 32          -- подстроек на набор вариант
 local MUT_DEPTH = 3         -- изменённых параметров в одной подстройке, не больше
 local MUT_EVERY = 30        -- сек: новая подстройка в наборе — не чаще
 local TUNE_GAP = 600        -- сек: подстраивать вариант одного сайта — не чаще
+-- Соседи по серверам: у сервиса на CDN несколько сайтов на одних адресах
+-- (SoundCloud на CloudFront: API — soundcloud.com, картинки и музыка —
+-- sndcdn.com). Вариант, что только что открыл один из них, — следующий, что
+-- пробует сайт, ещё ни разу не открывшийся на этих адресах (та же /24 или
+-- /48): по общей статистике сети перебор до него мог не дойти вовсе
+-- (sndcdn.com перебрал два десятка вариантов, кроме того, что открывал
+-- soundcloud.com). Стартовый вариант нового сайта это не меняет: на одних
+-- /24 у Cloudflare — тысячи чужих сайтов
+local NEAR_TIME = 3600      -- сек: столько помним удачу варианта на адресах
+local NEAR_MAX = 4096       -- адресных блоков на набор вариантов, не больше
 -- Медленное соединение: сервер отвечает, но данные идут еле-еле (замедление
 -- ТСПУ, как у raw.githubusercontent.com). Скорость — по продвижению данных
 -- между пакетами сервера, медиана: пауза сервера перед ответом — одна, а
@@ -555,6 +565,7 @@ local function check_net()
 	local prev = SM.net
 	SM.net = net
 	SM.rate, SM.raten = nil, 0   -- обычная скорость — у каждой сети своя
+	SM.near = {}                 -- и соседи по серверам
 	if load_net(net) then
 		DLOG("smart: network '" .. net .. "': loaded")
 		SJ("сеть " .. net .. ": выученное загружено")
@@ -685,8 +696,49 @@ local function slow_sample(cs, p)
 	return nil
 end
 
+-- блок адресов сервера: IPv4 — /24, IPv6 — /48 (первые три группы)
+local function ip_block(ip)
+	if not ip then return nil end
+	local b4 = ip:match("^(%d+%.%d+%.%d+)%.%d+$")
+	if b4 then return b4 end
+	local g1, g2, g3 = ip:match("^(%x+):(%x+):(%x+):")
+	return g1 and (g1 .. ":" .. g2 .. ":" .. g3) or nil
+end
+local function near_put(slot, ip, v, t)
+	local b = ip_block(ip)
+	if not b then return end
+	SM.near = SM.near or {}
+	local ns = SM.near[slot]
+	if not ns then ns = { n = 0, m = {} }; SM.near[slot] = ns end
+	if not ns.m[b] then
+		ns.n = ns.n + 1
+		if ns.n > NEAR_MAX then
+			ns.n = 0
+			for k, x in pairs(ns.m) do if t - x.t > NEAR_TIME then ns.m[k] = nil else ns.n = ns.n + 1 end end
+			if ns.n >= NEAR_MAX then ns.m, ns.n = {}, 0 end
+			ns.n = ns.n + 1
+		end
+	end
+	ns.m[b] = { v = v, t = t }
+end
+-- вариант, что недавно открыл какой-то сайт на этих адресах (если он ещё в наборе)
+local function near_get(slot, ip, n, t)
+	local b = ip_block(ip)
+	local ns = b and SM.near and SM.near[slot]
+	local x = ns and ns.m[b]
+	if not x or t - x.t > NEAR_TIME then return nil end
+	local base = base_of(slot, x.v)
+	if base > n or not allowed(slot, base) then return nil end
+	if x.v > MUT_BASE and not mutant(slot, x.v) then return nil end
+	return x.v
+end
+
 local function on_ok(slot, r, v, t, c)
 	count(r, slot, "ok", v, 1, t)
+	-- запоминаем только «особый» вариант: не лучший в сети (с лучшего новые
+	-- сайты и так начинают). На одних /24 у Cloudflare — тысячи чужих сайтов,
+	-- и общий вариант сети не должен из-за соседства подменяться чем попало
+	if c and c.ip and v ~= c.pass and c.n and v ~= leader(slot, c.n, c.first or 1, c.pass) then near_put(slot, c.ip, v, t) end
 	r.everok = true
 	if c then c.okt = c.okt or t end
 	if v == r.cur then win_push(r, c, 1); r.cooln[v] = 0 end
@@ -793,6 +845,16 @@ local function on_err(slot, key, r, v, n, t, pass, mid, c)
 			if not bs then SM.mutt[slot] = t end
 			DLOG("smart: " .. key .. ": tuning variant " .. base .. " as " .. nxt .. " (" .. ch_str(SM.mut[slot][nxt].ch) .. ")")
 			SJ(key .. ": " .. vname(slot, v) .. " сбоит — " .. (bs and "берём удачную подстройку: " or "пробуем подстройку: ") .. vname(slot, nxt))
+		end
+	end
+	-- сайт ни разу не открывался, а на его адресах только что открылся другой
+	-- сайт — сначала его вариант (если этот сайт на нём ещё не ломался)
+	if not nxt and not r.everok then
+		local nv = near_get(slot, c and c.ip, n, t)
+		if nv and nv ~= v and nv ~= pass and (r.err[nv] or 0) < 1 and not ((r.cool[nv] or 0) > t) then
+			nxt = nv
+			SJ(key .. ": " .. vname(slot, v) .. " → " .. vname(slot, nv) .. " — он только что открыл соседний сайт на тех же адресах")
+			tuned = true
 		end
 	end
 	nxt = nxt or next_strategy(slot, r, n, t, pass)
@@ -1110,7 +1172,7 @@ function smart(ctx, desync)
 	if crec and not crec.smart then
 		-- новое соединение идёт на текущем варианте сайта; его итог засчитается
 		-- этому варианту, даже если сайт к тому времени перейдёт на другой
-		crec.smart = { maxin = 0, tin = t, v = r.cur, key = key, slot = slot, n = n, pass = pass, t = t }
+		crec.smart = { maxin = 0, tin = t, v = r.cur, key = key, slot = slot, n = n, pass = pass, t = t, first = tonumber(desync.arg.first) or 1 }
 		-- прежнее соединение к этому сайту замерло на 14–17 КБ и браузер скоро
 		-- открыл новое — это обрыв по объёму. Ответ, который просто уложился в
 		-- эти размеры, так не выглядит: новое соединение сразу после него не нужно
