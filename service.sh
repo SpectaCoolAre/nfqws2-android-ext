@@ -118,6 +118,18 @@ _start() {
     return 1
   fi
 
+  # nfqws2, запущенный модулем, но потерянный (его нет в PID-файле): держит
+  # очередь NFQUEUE, и новый не запустится («nfq_create_queue(): Operation not
+  # permitted»). Свой — по --pidfile модуля в командной строке: nfqws2 других
+  # модулей не трогаем
+  local op
+  for op in $(pidof nfqws2 2>/dev/null); do
+    tr '\0' ' ' < "/proc/$op/cmdline" 2>/dev/null | grep -qF -- "--pidfile=$PIDFILE" || continue
+    log_msg "Найден потерянный nfqws2 (PID $op) — держит очередь $NFQUEUE_NUM, останавливаю"
+    kill -KILL "$op" 2>/dev/null
+    wait_for_process "$op" down 8
+  done
+
   cd "$MODDIR/bin" || return 1
   set -f
 
@@ -791,6 +803,22 @@ case "$1" in
   *)
     # Метка «загрузочный запуск закончен» — её ждёт boot-completed.sh
     rm -f "$STATE_DIR/boot_done"
+    # Повторный загрузочный запуск без перезагрузки ядра (перезапуск Android:
+    # «мягкая перезагрузка» LSPosed/Vector, падение system_server) — процессы
+    # модуля живы, и PID в файлах — их. Сбросив файлы, служба теряла живой
+    # nfqws2: он держал очередь NFQUEUE, и каждый новый запуск падал с
+    # «nfq_create_queue(): Operation not permitted» (Honor, MagicOS 11).
+    # Ядро то же — тот же boot_id: сначала остановить всё прежнее
+    bid=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)
+    if [ -n "$bid" ] && [ "$bid" = "$(cat "$STATE_DIR/boot_id" 2>/dev/null)" ]; then
+      log_msg "Повторная загрузка Android без перезагрузки ядра — останавливаю прежние процессы модуля"
+      for pf in "$WD_PIDFILE" "$WN_PIDFILE" "$WL_PIDFILE" "$PF_PIDFILE"; do
+        p=$(cat "$pf" 2>/dev/null); case "$p" in ''|*[!0-9]*) ;; *) kill -KILL "$p" 2>/dev/null ;; esac
+      done
+      stop >/dev/null 2>&1
+      dns_stop >/dev/null 2>&1
+    fi
+    [ -n "$bid" ] && echo "$bid" > "$STATE_DIR/boot_id"
     # Состояние прошлой загрузки: каталог на /data переживает перезагрузку, а
     # номера PID — нет. Старый PID мог достаться чужому процессу, и тогда
     # служба «уже запущена», наблюдатель «уже работает», а stop убил бы чужое.

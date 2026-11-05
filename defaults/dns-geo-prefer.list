@@ -1,0 +1,7 @@
+# Предпочтительные серверы обхода геоблока для группы сайтов (dns-geo-groups.list):
+# «группа сервер сервер…». Пока хоть один из них обходит основные домены
+# группы, сервер группы выбирается только среди них; не обходит никто —
+# среди всех. Для Google — набор geodns на роутере: с ним Gemini работает
+# стабильно, а прокси других серверов (d.webshiftvpn.ru, dns.dagami.ru)
+# проверку DNS и сертификата проходили, но Gemini через них отвечал геоблоком
+google router.comss.one dns.comss.one dns.magicdns.ru dns.zapret.moe dns.malw.link dns.dns-ai.ru dns.bezmezhau.com

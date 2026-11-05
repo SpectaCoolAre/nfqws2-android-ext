@@ -84,7 +84,8 @@ window.__presets = ${JSON.stringify(PRESETS)};
         st.def = a[1]; return [0, 'OK'];
       case 'dns-save-b64': try { st.profiles[a[1]] = norm(dec(a[2])); return [0, 'OK']; } catch (e) { return [1, '', String(e)]; }
       case 'dns-profile-enable': st.profiles[a[1]] = st.profiles[a[1]].replace(/ENABLED=\\d/, 'ENABLED=' + a[2]); return [0, 'OK'];
-      case 'dns-geo-scan': return [0, 'dns.fast.example'];
+      case 'dns-geo-scan': return [0, '1767225600'];
+      case 'dns-geo-scan-wait': return [0, 'dns.fast.example'];
       case 'dns-geo-off': st.geoOff = a[2] === '1' ? a[1] : ''; return [0, 'OK'];
       case 'dns-geo-update': st.geoN = 731; st.geoAt = 1767225600; return [0, '731'];
       case 'dns-delete': a.slice(1).forEach(id => { delete st.profiles[id]; if (st.def === id) st.def = 'net'; }); return [0, 'OK'];
@@ -245,6 +246,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     truthy(await page.evaluate(() => window.__dns.calls.includes('dns-geo-off dns.ai.example 0')), 'and back on');
     await page.click('#dns-geo .clickable:has-text("Проверить DNS сейчас")'); await idle(); await page.waitForTimeout(300);
     truthy(await page.evaluate(() => window.__dns.calls.includes('dns-geo-scan')), 'the check can be run at once');
+    truthy(await page.evaluate(() => window.__dns.calls.includes('dns-geo-scan-wait 1767225600')), 'it runs in the background and the screen waits for its result by the request time');
     truthy(geoTxt.includes('geoblock.list · доменов: 722'), 'the service list shows its size');
     await page.click('#dns-geo .clickable:has-text("Обновить список")'); await idle(); await page.waitForTimeout(400);
     truthy(await page.evaluate(() => window.__dns.calls.includes('dns-geo-update')), 'the update button downloads a fresh list');

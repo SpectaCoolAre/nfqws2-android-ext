@@ -107,6 +107,24 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   eq(0, await page.$$eval('.menu, .menu-back', r => r.length), 'a swipe past the menu closes it too');
   eq(false, await scrim(), 'and the blur goes');
   eq('control', await cur(), 'and nothing under the finger fires');
+  // Android: click касания (GestureTap) приходит отдельным событием после
+  // pointerup и попадает в то, что под пальцем в этот момент. Подложка,
+  // убранная сразу после pointerup, пропускала его — касание мимо меню по
+  // соседней вкладке открывало её
+  await hold(nav('settings'));
+  await page.waitForTimeout(300);
+  eq(1, await page.$$eval('.menu', r => r.length), 'the menu is open over the tabs');
+  const [lx, ly] = await center(nav('lists'));
+  await page.evaluate(([x, y]) => new Promise(res => {
+    const t = document.elementFromPoint(x, y);
+    const o = {bubbles: true, cancelable: true, pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: x, clientY: y};
+    t.dispatchEvent(new PointerEvent('pointerdown', o));
+    t.dispatchEvent(new PointerEvent('pointerup', o));
+    setTimeout(() => { document.elementFromPoint(x, y).dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, clientX: x, clientY: y})); res(); }, 30);
+  }), [lx, ly]);
+  await page.waitForTimeout(700);
+  eq('control', await cur(), 'a tap past the menu on another tab only closes it: the late click of the touch does not reach the tab');
+  eq(0, await page.$$eval('.menu, .menu-back', r => r.length), 'and the menu and its layer are gone');
 
   sect('Состояние');
   await page.evaluate(() => navigate('lists')); await page.waitForTimeout(600);

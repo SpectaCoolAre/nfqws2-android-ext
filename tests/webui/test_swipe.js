@@ -340,6 +340,34 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   const back = tr.slice(16).map(t => t[1]), steps = back.slice(1).map((v, i) => back[i] - v).filter(d => d);
   truthy(steps.every(d => d <= 16), 'on the way back the page goes with the finger, not faster: ' + steps.join(','));
   eq(0, await page.evaluate(() => stretch.pull), 'and the pull is gone after release');
+  // Быстрый жест: между событиями палец проходит 70 px, и на стыке часть
+  // пути ещё прокручивает страницу. В оттягивание идёт только остаток —
+  // раньше шёл весь путь, и у края страница разом прыгала (рывок с ускорением)
+  await page.evaluate(() => scrollToY(scroller.scrollHeight - scroller.clientHeight - 50));
+  await page.waitForTimeout(300);
+  const qp = [];
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 200, y: 480 }] });
+  for (let i = 1; i <= 6; i++) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 200, y: 480 - i * 70 }] });
+    await page.waitForTimeout(20);
+    qp.push(await page.evaluate(() => Math.round(stretch.pull)));
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await page.waitForTimeout(600);
+  const first = qp.find(v => v !== 0);
+  truthy(first !== undefined && Math.abs(first) < 70, 'a quick scroll into the edge: the pull starts from what the scroll left over, not the whole step: ' + qp.join(','));
+  // одна анимация отскока у страницы: удар инерции о край, пока ещё идёт
+  // пружина возврата, не накладывает второй отскок поверх (рывки)
+  const overlap = await page.evaluate(() => new Promise(done => {
+    const el = document.querySelector('.page.active');
+    stretch.el = el; stretch.pull = -120; el.classList.add('stretch'); stretchApply();
+    stretchRelease();
+    const n0 = el.getAnimations().length;
+    stretchAbsorb(false, 2);
+    done([n0, el.getAnimations().length]);
+  }));
+  eq(overlap[0], overlap[1], 'a fling bounce during the release spring does not stack a second animation: ' + overlap.join(' → '));
+  await page.waitForTimeout(600);
   await page.evaluate(() => { $('content').style.minHeight = ''; scrollToY(0); });
 
   sect('holding the logs icon anywhere on it');

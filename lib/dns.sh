@@ -78,6 +78,7 @@ DNS_GEO_SCAN_COOL=300        # ручная проверка — не чаще �
 DNS_GEO_UPD_COOL=1800        # обновление списка — раз в 30 минут
 DNS_GEO_NEVER="$MODDIR/defaults/dns-geo-never.list"
 DNS_GEO_GROUPS="$MODDIR/defaults/dns-geo-groups.list"   # сайты с одним сервером на все домены
+DNS_GEO_PREFER="$MODDIR/defaults/dns-geo-prefer.list"   # предпочтительные серверы групп
 DNS_CHAIN=nfqws_dns          # nat OUTPUT: перехват в dnsproxy
 DNS_CHAIN6F=nfqws_dns6       # filter OUTPUT (IPv6 без nat): отказ, резолвер уйдёт на IPv4
 
@@ -199,8 +200,10 @@ dns_geo_routes() { # [save] -> «домен<TAB>сервер<TAB>протоко�
   # обходящих Gemini не было, — сервер группы сменился, а через полминуты
   # свежая проверка вернула прежний: Gemini дважды за полминуты менял адрес
   # выхода и упирался в геоблок.
+  # У группы могут быть предпочтительные серверы (dns-geo-prefer.list): пока
+  # хоть один из них обходит её основные домены, выбор — только среди них.
   # Отключённые вручную (DNS_GEO_OFF) не берутся
-  awk -F'\t' -v of="$DNS_GEO_OFF" -v pf="$f.pin" -v gpf="$DNS_GEO_SCAN_DIR/groups.pin" -v fresh="$fresh" -v base="$DNS_GEO_HOT_BASE" -v gf="$DNS_GEO_GROUPS" -v gl="$DNS_GEO_LIST" -v hf="$h" -v save="$1" '
+  awk -F'\t' -v prf="$DNS_GEO_PREFER" -v of="$DNS_GEO_OFF" -v pf="$f.pin" -v gpf="$DNS_GEO_SCAN_DIR/groups.pin" -v rf="$f.rel" -v fresh="$fresh" -v base="$DNS_GEO_HOT_BASE" -v gf="$DNS_GEO_GROUPS" -v gl="$DNS_GEO_LIST" -v hf="$h" -v save="$1" '
     function site(d,   n, a, x, i) {
       for (x = d; ; x = substr(x, i + 1)) { if (x in grp) return "@" grp[x]; if ((i = index(x, ".")) == 0) break }
       n = split(d, a, "."); return n < 2 ? d : a[n - 1] "." a[n] }
@@ -208,10 +211,12 @@ dns_geo_routes() { # [save] -> «домен<TAB>сервер<TAB>протоко�
       while ((getline l < pf) > 0) { split(l, a, " "); if (a[1] != "") pin[a[1]] = a[2] }
       while ((getline l < gf) > 0) { sub(/#.*/, "", l); n = split(tolower(l), a, " "); for (i = 2; i <= n; i++) grp[a[i]] = a[1] }
       while ((getline l < gpf) > 0) { split(l, a, " "); if (a[1] != "") gpin[a[1]] = a[2] }
+      while ((getline l < prf) > 0) { sub(/#.*/, "", l); n = split(tolower(l), a, " "); for (i = 2; i <= n; i++) pref["@" a[1], a[i]] = i; if (n > 1) hasp["@" a[1]] = 1 }
       # основные сервисы (gemini.google.com…) — «используемые» всегда, есть
       # частая проверка или нет: иначе правило выбора сервера группы менялось
       # с появлением её данных, и сервер прыгал
       nb = split(base, bl, " "); for (i = 1; i <= nb; i++) basehot[bl[i]] = 1
+      while ((getline l < rf) > 0) { split(l, a, "\t"); if (a[1] != "") { rsc[a[1], a[2]] = a[3] + 0; rst[a[1], a[2]] = a[4] + 0 } }
       n = 0 }
     !/^[#=+!?]/ && $2 == "ok" { pr[$1] = ($7 == "https" ? "https" : "tls"); next }
     # частая проверка свежее: сервер, не ответивший в ней, сейчас недоступен —
@@ -226,13 +231,33 @@ dns_geo_routes() { # [save] -> «домен<TAB>сервер<TAB>протоко�
         if (d in hot) hotn[site(d)]++
       }
       for (s in ns) {
+        # предпочтительные: годится ли хоть один (основным доменам — все,
+        # без частой проверки — хоть что-то обходит); да — только они
+        po = 0
+        if (s in hasp) for (i = 1; i <= ns[s]; i++) { h = so[s, i]
+          if (((s, h) in pref) && (hotn[s] ? cnt[s, h] >= hotn[s] * 1000 : cnt[s, h] > 0)) po = 1 }
         best = ""
-        for (i = 1; i <= ns[s]; i++) if (best == "" || cnt[s, so[s, i]] > cnt[s, best]) best = so[s, i]
-        if ((s in pin) && ((s, pin[s]) in cnt) && cnt[s, pin[s]] * 10 >= cnt[s, best] * 9) best = pin[s]
+        for (i = 1; i <= ns[s]; i++) { h = so[s, i]; if (po && !((s, h) in pref)) continue
+          if (best == "" || cnt[s, h] > cnt[s, best]) best = h }
+        # группа: из обходящих основные домены (вес ≥ 1000 за каждый) — самый
+        # надёжный по истории проверок этой сети; без истории — 0,5
+        if (substr(s, 1, 1) == "@" && hotn[s]) {
+          rb = ""
+          for (i = 1; i <= ns[s]; i++) { h = so[s, i]; if (cnt[s, h] < hotn[s] * 1000 || (po && !((s, h) in pref))) continue
+            r = ((s, h) in rsc) ? rsc[s, h] : .5
+            if (rb == "" || r > rr + .001 || (r > rr - .001 && cnt[s, h] > cnt[s, rb])) { rb = h; rr = r } }
+          if (rb != "") best = rb
+        }
+        if ((s in pin) && ((s, pin[s]) in cnt) && cnt[s, pin[s]] * 10 >= cnt[s, best] * 9 && (!po || ((s, pin[s]) in pref))) best = pin[s]
         g = (s in gpin) ? gpin[s] : ""
+        # закреплённый не из предпочтительных уступает им, как только они годятся
+        if (po && g != "" && !((s, g) in pref)) g = ""
         if (substr(s, 1, 1) == "@" && g != "" && ((s, g) in cnt) &&
             (hotn[s] ? cnt[s, g] >= hotn[s] * 1000 : cnt[s, g] * 10 >= cnt[s, best] * 9)) best = g
         else if (substr(s, 1, 1) == "@" && g != "" && !fresh && (g in pr) && !(g in off)) best = g
+        # одна неудачная проверка — не повод менять адрес выхода: общий сервер
+        # группы снимается, только если не обходил её две проверки подряд
+        else if (substr(s, 1, 1) == "@" && g != "" && (g in pr) && !(g in off) && ((s, g) in rst) && rst[s, g] < 2) best = g
         ch[s] = best
       }
       for (k = 1; k <= n; k++) {
@@ -266,6 +291,37 @@ dns_geo_routes_diff() {
     { o = ($1 in old) ? old[$1] : "нет"; if (o != $2) { k++; if (k <= 5) out = out (k > 1 ? ", " : ": ") $1 " " o " → " $2 }; seen[$1] = 1 }
     END { for (d in old) if (!(d in seen)) { k++; if (k <= 5) out = out (k > 1 ? ", " : ": ") d " " old[d] " → нет" }
       if (k > 5) out = out " и ещё " (k - 5); printf "%s", out }'
+}
+# Надёжность серверов для групп сайтов (<файл>.rel): после каждой проверки —
+# для каждой группы и каждого сервера, обходил ли он в этой проверке все
+# основные домены группы, которыми пользуются (частая проверка — её домены
+# группы, полная — основные сервисы DNS_GEO_HOT_BASE). Строка: «группа сервер
+# надёжность серия»: надёжность — скользящая доля удач (каждая проверка —
+# четверть веса), серия — сколько проверок подряд не обходил. По ней сервер
+# группы выбирается самый стабильный, а не самый быстрый, и не снимается
+# из-за одной неудачной проверки: за день на мобильной сервер Google менялся
+# шесть раз — серверы то отвечают, то нет, — и Gemini каждый раз получал
+# новый адрес выхода
+dns_geo_rel_update() { # <файл проверки> <hot|full>
+  local f r; f=$(dns_geo_scan_file); r="$f.rel"
+  [ -s "$1" ] || return 0
+  awk -F'\t' -v gf="$DNS_GEO_GROUPS" -v base="$DNS_GEO_HOT_BASE" -v mode="$2" -v rf="$r" '
+    function site(d,   x, i) { for (x = d; ; x = substr(x, i + 1)) { if (x in grp) return "@" grp[x]; if ((i = index(x, ".")) == 0) break } return "" }
+    BEGIN { while ((getline l < gf) > 0) { sub(/#.*/, "", l); n = split(tolower(l), a, " "); for (i = 2; i <= n; i++) grp[a[i]] = a[1] }
+      nb = split(base, bl, " "); for (i = 1; i <= nb; i++) basehot[bl[i]] = 1
+      while ((getline l < rf) > 0) { split(l, a, "\t"); if (a[1] != "") { sc[a[1], a[2]] = a[3]; st[a[1], a[2]] = a[4]; key[a[1] SUBSEP a[2]] = 1 } } }
+    !/^[#=+!?]/ && NF > 2 { srv[$1] = 1; next }
+    /^=/ { d = substr($1, 2); s = site(d); if (s == "" || $2 == "-") next
+      if (mode == "full" && !(d in basehot)) next
+      used[s]++; m = split($2, hs, ","); for (i = 1; i <= m; i++) hit[s, hs[i]]++ }
+    END {
+      for (s in used) for (h in srv) {
+        ok = (hit[s, h] == used[s]) ? 1 : 0
+        old = ((s, h) in sc) ? sc[s, h] : .5
+        sc[s, h] = old * .75 + ok * .25; st[s, h] = ok ? 0 : st[s, h] + 1; key[s SUBSEP h] = 1
+      }
+      for (k in key) { split(k, a, SUBSEP); printf "%s\t%s\t%.3f\t%d\n", a[1], a[2], sc[a[1], a[2]], st[a[1], a[2]] > rf }
+    }' "$1"
 }
 # Закрепить выбор: сервер пула («*») и сервер каждого сайта
 dns_geo_pin_save() {
@@ -379,7 +435,7 @@ dns_geo_scan() { # [full|hot]
   rm -f "$DNS_RUN_DIR/geoscan.list"
   # частая: ответов нет — итог прежний, она повторится в свой срок
   if [ "$mode" = hot ]; then
-    if grep -q '	ok	' "$out"; then mv -f "$out" "$f.hot"; else rm -f "$out"; fi
+    if grep -q '	ok	' "$out"; then mv -f "$out" "$f.hot"; dns_geo_rel_update "$f.hot" hot; else rm -f "$out"; fi
     rmdir "$lock" 2>/dev/null
     dns_geo_pin_save
     after=$(dns_geo_pick | tr '\n' ' ')
@@ -401,11 +457,13 @@ dns_geo_scan() { # [full|hot]
       rm -f "$f.tmp"
       rmdir "$lock" 2>/dev/null
       dns_log "проверка DNS обхода геоблока: ни один сервер не ответил (сеть, видимо, ещё не готова) — остаётся прежний итог, повтор скоро"
+      echo "$(date +%s) none" > "$DNS_RUN_DIR/geoscan.result"
       return 0
     fi
     mv -f "$f.tmp" "$f"
   fi
   rmdir "$lock" 2>/dev/null
+  grep -q '	ok	' "$f" 2>/dev/null && dns_geo_rel_update "$f" full
   dns_geo_pin_save
   after=$(dns_geo_pick | tr '\n' ' ')
   # сводка маршрутов: сколько доменов у какого сервера, сколько — в DNS сети
@@ -414,7 +472,43 @@ dns_geo_scan() { # [full|hot]
   n=$(grep -c -v '^[#=+!?]' "$f" 2>/dev/null); ok=$(grep -c '	ok	' "$f" 2>/dev/null)
   dns_log "проверка DNS обхода геоблока: ответили ${ok:-0} из ${n:-0}; пул — ${after:-пусто (остаётся Comss)}${routes:+; по доменам: $routes}"
   [ "$before" != "$after$(dns_geo_routes | tr '\n\t' '  ')" ] && dns_apply_now
+  echo "$(date +%s) ok" > "$DNS_RUN_DIR/geoscan.result"
   return 0
+}
+# Ручная проверка (кнопка): идёт до пары минут, дольше, чем WebUI ждёт ответа
+# команды, — поэтому в фоне. Идёт другая (частая, по расписанию) — полная
+# после неё. -> время запроса: по нему dns-geo-scan-wait ждёт итог
+dns_geo_scan_req() {
+  local now lock="$DNS_RUN_DIR/geoscan.lock"
+  mkdir -p "$DNS_RUN_DIR"; now=$(date +%s)
+  echo "$now" > "$DNS_RUN_DIR/geoscan.req"; rm -f "$DNS_RUN_DIR/geoscan.result"
+  ( ( n=0
+    while [ -d "$lock" ] && [ "$n" -lt 150 ]; do sleep 1; n=$((n + 1)); done
+    dns_geo_scan full >/dev/null 2>&1
+    # проверка не дошла до итога (замок не снят, помощник упал) — ждущему
+    # всё равно нужен ответ
+    [ "$(cut -d' ' -f1 "$DNS_RUN_DIR/geoscan.result" 2>/dev/null)" -ge "$now" ] 2>/dev/null ||
+      echo "$(date +%s) fail" > "$DNS_RUN_DIR/geoscan.result"
+  ) </dev/null >/dev/null 2>&1 & ) 2>/dev/null
+  echo "$now"
+}
+# Дождаться итога ручной проверки: <время запроса>. Код 0 — пул (текст для
+# тоста), 1 — ни один сервер не ответил, 2 — не дождались
+dns_geo_scan_wait() {
+  local n=0 t r
+  while [ "$n" -lt 175 ]; do
+    t=; r=; [ -f "$DNS_RUN_DIR/geoscan.result" ] && read -r t r < "$DNS_RUN_DIR/geoscan.result"
+    if [ "${t:-0}" -ge "${1:-0}" ] 2>/dev/null; then
+      case "$r" in
+        ok) dns_geo_label; return 0 ;;
+        none) echo "$(M 'Ни один сервер не ответил — оставлен прежний выбор' 'No server answered — the previous choice stays'): $(dns_geo_label)" >&2; return 1 ;;
+        *) M 'Проверка не завершилась — подробности в журнале DNS' 'The check did not finish — see the DNS log' >&2; echo >&2; return 1 ;;
+      esac
+    fi
+    sleep 1; n=$((n + 1))
+  done
+  M 'Проверка ещё идёт — итог появится на экране позже' 'The check is still running — the result will show up later' >&2; echo >&2
+  return 2
 }
 # Кулдаун: <время прошлого раза, unix> <секунд>. Рано — сообщение и код 1
 dns_cool() {
@@ -1482,7 +1576,7 @@ dns_state() {
   # доменов без настоящего сертификата (частая проверка свежее — её данные)
   f=$(dns_geo_scan_file)
   # отключённые вручную серверы: geo_off=a b
-  echo "geo_off=$(tr '\n' ' ' < "$DNS_GEO_OFF" 2>/dev/null | sed 's/ $//')"
+  echo "geo_off=$(tr '\n' ' ' 2>/dev/null < "$DNS_GEO_OFF" | sed 's/ $//')"
   # перехват обычного DNS сетью (whoami.akamai.net): geo_intercept=1
   # и кто ответил на каждый: geo_who_<net|google|cloudflare>=адрес/AS
   awk -F'\t' '/^\?whoami/ { for (i = 2; i <= NF; i++) if ($i ~ /^intercept=/) print "geo_" $i; else print "geo_who_" $i }' "$f" 2>/dev/null
@@ -1606,9 +1700,16 @@ dns_ctl() {
     # dns-geo-scan — проверить DNS обхода геоблока сейчас (кнопка на экране DNS)
     # ручные проверка и обновление — не чаще DNS_GEO_*_COOL: частые вызовы серверам
     # и GitHub только вредят (код 3 — «слишком часто», текст — для тоста)
+    # (в фоне: печатает время запроса, итог — dns-geo-scan-wait <время>);
+    # кулдаун — и от прошлого запроса: проверка, не давшая итога, тоже вызов
     dns-geo-scan)
-      dns_cool "$(dns_geo_scan_time)" "$DNS_GEO_SCAN_COOL" || return 3
-      dns_geo_scan || { echo "Проверка недоступна: нет nfqws2-helper" >&2; return 1; }; dns_geo_label ;;
+      local t r
+      t=$(dns_geo_scan_time); r=$(cat "$DNS_RUN_DIR/geoscan.req" 2>/dev/null)
+      [ "${r:-0}" -gt "${t:-0}" ] 2>/dev/null && t=$r
+      dns_cool "$t" "$DNS_GEO_SCAN_COOL" || return 3
+      [ -x "$HELPER_BIN" ] && [ -f "$DNS_GEO_CAND" ] || { echo "Проверка недоступна: нет nfqws2-helper" >&2; return 1; }
+      dns_geo_scan_req ;;
+    dns-geo-scan-wait) dns_geo_scan_wait "$1" ;;
     # отключить или вернуть сервер обхода геоблока вручную: <сервер> <1|0>
     dns-geo-off)
       case "$1" in ''|*[!A-Za-z0-9.:-]*) echo "Неверное имя сервера" >&2; return 1 ;; esac

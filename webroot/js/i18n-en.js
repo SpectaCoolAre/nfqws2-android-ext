@@ -742,6 +742,8 @@ EN = {
  "Повторный запрос": "Repeat request",
  "вместе с модулем": "with the module",
  "Не удалось проверить": "Could not check",
+ "Проверка уже идёт": "A check is already running",
+ "Проверяю серверы — до двух минут, можно уйти с экрана": "Checking the servers — up to two minutes, you can leave this screen",
  "Не отвечает": "Not answering",
  "в пуле": "in the pool",
  "доменов: {0}": "domains: {0}",

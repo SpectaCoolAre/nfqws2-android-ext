@@ -661,8 +661,38 @@ assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "-asncache $DNS_GEO_SCAN_DIR/a
 assert_eq "fast.example" "$(dns_geo_pick)" "the common pool: one server — the fastest of those that bypass the most domains (several at once gave a site different exit addresses in one session)"
 assert_not_contains "$(dns_geo_pick)" "ai.example" "a faster server that bypasses fewer stays out of it"
 assert_eq "applied" "$(cat "$MOCK_DIR/geo.applied")" "a new pool is applied at once"
+# Ручная проверка (кнопка) — в фоне: ответ команды сразу, итог — ожиданием
+sed -i '1s/^#time=[0-9]*/#time=1/' "$(dns_geo_scan_file)"; rm -f "$DNS_RUN_DIR/geoscan.req" "$DNS_RUN_DIR/geoscan.result"
+ctl dns-geo-scan
+assert_rc 0 "$ctl_rc" "the button starts a check"
+req=$ctl_out
+assert_match "$req" "^[0-9][0-9]*$" "and returns at once with the request time (the check takes longer than the screen waits for a command)"
+ctl dns-geo-scan-wait "$req"
+assert_rc 0 "$ctl_rc" "waiting gets its result"
+assert_eq "fast.example" "$ctl_out" "the pool, for the toast"
 ctl dns-geo-scan
 assert_rc 3 "$ctl_rc" "a manual check right after one is refused (calls to the servers only make things worse)"
+sed -i '1s/^#time=[0-9]*/#time=1/' "$(dns_geo_scan_file)"
+ctl dns-geo-scan
+assert_rc 3 "$ctl_rc" "a check that gave nothing new counts too: the cooldown runs from the request"
+rm -f "$DNS_RUN_DIR/geoscan.req"
+mkdir -p "$DNS_RUN_DIR/geoscan.lock"
+req=$(dns_geo_scan_req)
+( sleep 2; rmdir "$DNS_RUN_DIR/geoscan.lock" ) &
+dns_geo_scan_wait "$req" >/dev/null 2>&1
+assert_rc 0 $? "another check is running — the full one follows it, not silently skipped"
+cp "$(dns_geo_scan_file)" "$MOCK_DIR/geo.keep"
+cat > "$MOCK_DIR/helper.ok" < "$HELPER_BIN"
+printf '#!/bin/sh\nprintf "fast.example\\tfail\\t0\\t0\\t7\\t0\\t-\\n"\n' > "$HELPER_BIN"
+rm -f "$DNS_RUN_DIR/geoscan.req"
+req=$(dns_geo_scan_req)
+ctl dns-geo-scan-wait "$req"
+assert_rc 1 "$ctl_rc" "no server answered — the screen hears it"
+assert_contains "$ctl_out" "Ни один сервер не ответил — оставлен прежний выбор: fast.example" "and the old choice stays"
+cat "$MOCK_DIR/helper.ok" > "$HELPER_BIN"; cp "$MOCK_DIR/geo.keep" "$(dns_geo_scan_file)"; rm -f "$(dns_geo_scan_file).fail"
+date +%s > "$DNS_RUN_DIR/geoscan.req"
+ctl dns-geo-scan
+assert_rc 3 "$ctl_rc" "still within the cooldown"
 assert_contains "$ctl_out" "Слишком часто — повторить можно через 5 мин" "the screen says so"
 date +%s > "$DNS_DIR/geo_updated"
 ctl dns-geo-update
@@ -901,6 +931,54 @@ assert_contains "$(dns_geo_routes)" "gemini.google.com	b.example" "the group ser
   printf '=signaler-pa.clients6.google.com\ta.example\n'
 } > "$(dns_geo_scan_file)"
 assert_contains "$(dns_geo_routes)" "gemini.google.com	b.example" "and on stale data of a network it is kept while it answers there"
+# Стабильность, а не скорость: надёжность серверов по истории проверок
+# (<файл>.rel) — серия неудач и скользящая доля удач для основных доменов
+# группы. Одна неудачная проверка сервер группы не снимает, две подряд —
+# снимают, и новый выбирается самый надёжный, а не обходящий больше доменов
+cp "$(dns_geo_scan_file)" "$SANDBOX/scan.keep"
+hotf="$(dns_geo_scan_file).hot"
+mkhot() { { printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
+  printf 'a.example\tok\t20\t3\t3\t0\ttls\n'; printf 'b.example\tok\t30\t3\t3\t0\ttls\n'; printf 'c.example\tok\t10\t3\t3\t0\ttls\n'
+  printf '=gemini.google.com\t%s\n' "$1"; } > "$hotf"; touch -d "@$(( $(date +%s) + 60 ))" "$hotf" 2>/dev/null || touch "$hotf"; }
+{ printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
+  printf 'a.example\tok\t20\t3\t3\t0\ttls\n'; printf 'b.example\tok\t30\t3\t3\t0\ttls\n'; printf 'c.example\tok\t10\t3\t3\t0\ttls\n'
+  printf '=gemini.google.com\ta.example,b.example,c.example\n'
+  printf '=signaler-pa.clients6.google.com\ta.example,b.example,c.example\n'
+  printf '=waa-pa.clients6.google.com\tc.example\n'
+} > "$(dns_geo_scan_file)"
+rm -f "$(dns_geo_scan_file).rel" "$(dns_geo_scan_file).pin"
+echo "@google b.example" > "$DNS_GEO_SCAN_DIR/groups.pin"
+mkhot "a.example,b.example,c.example"; dns_geo_rel_update "$hotf" hot
+mkhot "a.example,c.example"; dns_geo_rel_update "$hotf" hot
+assert_contains "$(cat "$(dns_geo_scan_file).rel")" "@google	b.example	0.469	1" "a check where the server did not serve the main service is counted: lower reliability, a miss in a row"
+assert_contains "$(dns_geo_routes)" "gemini.google.com	b.example" "one missed check does not change the group server (a new exit address would be worse)"
+mkhot "a.example,c.example"; dns_geo_rel_update "$hotf" hot
+printf '@google\ta.example\t0.900\t0\n@google\tc.example\t0.400\t0\n@google\tb.example\t0.200\t2\n' > "$(dns_geo_scan_file).rel"
+r=$(dns_geo_routes)
+assert_contains "$r" "gemini.google.com	a.example" "two misses in a row do; the new one is the most reliable by history, not the one serving more domains"
+# Предпочтительные серверы группы (dns-geo-prefer.list, набор роутера): пока
+# хоть один обходит основные домены — только они, даже закреплённый другой
+# и более надёжный по истории уступает; не обходит никто — все
+pkeep=$DNS_GEO_PREFER; DNS_GEO_PREFER="$SANDBOX/prefer.list"
+echo "google c.example b.example" > "$DNS_GEO_PREFER"
+echo "@google a.example" > "$DNS_GEO_SCAN_DIR/groups.pin"
+mkhot "a.example,c.example"
+r=$(dns_geo_routes)
+assert_contains "$r" "gemini.google.com	c.example" "a preferred server that serves the main service wins over the pinned and more reliable other one"
+assert_contains "$r" "signaler-pa.clients6.google.com	c.example" "for the whole group"
+dns_geo_pin_save
+assert_contains "$(cat "$DNS_GEO_SCAN_DIR/groups.pin")" "@google c.example" "and becomes the group pin"
+mkhot "a.example"
+assert_contains "$(dns_geo_routes)" "gemini.google.com	c.example" "a preferred group server missing one check is still kept (two misses in a row change it)"
+printf '@google\tc.example\t0.300\t2\n@google\tb.example\t0.300\t2\n' > "$(dns_geo_scan_file).rel"
+assert_contains "$(dns_geo_routes)" "gemini.google.com	a.example" "no preferred one serves it — any server, the site keeps working"
+mkhot "a.example,b.example,c.example"
+echo "@google b.example" > "$DNS_GEO_SCAN_DIR/groups.pin"
+assert_contains "$(dns_geo_routes)" "gemini.google.com	b.example" "a pinned preferred server stays among the preferred"
+DNS_GEO_PREFER=$pkeep; rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
+assert_contains "$(cat "$DNS_GEO_PREFER")" "google router.comss.one dns.comss.one dns.magicdns.ru dns.zapret.moe" "the module ships the router's set for Google"
+rm -f "$hotf" "$(dns_geo_scan_file).rel"
+cp "$SANDBOX/scan.keep" "$(dns_geo_scan_file)"
 rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).pin"
 echo a.example > "$DNS_GEO_OFF"
 assert_not_contains "$(dns_geo_routes)" "a.example" "a server switched off by hand is not used"

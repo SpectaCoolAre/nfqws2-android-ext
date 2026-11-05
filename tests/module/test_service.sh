@@ -632,6 +632,56 @@ conf_reset
 unset NFQWS_SYSNET
 
 # ── boot-completed.sh lifecycle hook ──────────────────────────────────────────
+section "a lost nfqws2 of ours is stopped before a start"
+# Honor, MagicOS 11: служба потеряла свой nfqws2 (PID-файл сброшен), а он
+# держал очередь NFQUEUE — каждый новый запуск падал с «nfq_create_queue():
+# Operation not permitted». Свой — по --pidfile модуля, чужой не трогаем
+svc stop >/dev/null 2>&1
+# pidof Android (toybox) находит и скрипты, pidof procps — только с -x
+pidof_real=$(command -v pidof)
+printf '#!/bin/sh\nexec %s -x "$@"\n' "$pidof_real" > "$MOCKBIN/pidof"; chmod 0755 "$MOCKBIN/pidof"
+mkdir -p "$SANDBOX/orph" "$SANDBOX/orph2"
+printf '#!/bin/sh\nwhile :; do sleep 1; done\n' > "$SANDBOX/orph/nfqws2"; cp "$SANDBOX/orph/nfqws2" "$SANDBOX/orph2/nfqws2"
+chmod 0755 "$SANDBOX/orph/nfqws2" "$SANDBOX/orph2/nfqws2"
+"$SANDBOX/orph/nfqws2" --daemon --pidfile="$PIDFILE" --qnum=300 >/dev/null 2>&1 &
+op=$!
+"$SANDBOX/orph2/nfqws2" --daemon --pidfile=/data/adb/other/nfqws2.pid >/dev/null 2>&1 &
+fp=$!
+sleep 0.3
+rm -f "$PIDFILE"; : > "$SERVICE_LOG"
+svc start
+assert_rc 0 "$svc_rc" "the start goes through"
+kill -0 "$op" 2>/dev/null; assert_rc 1 $? "our lost daemon holding the queue is stopped first"
+assert_contains "$(cat "$SERVICE_LOG")" "Найден потерянный nfqws2 (PID $op)" "and the log says so"
+kill -0 "$fp" 2>/dev/null; assert_rc 0 $? "another module's nfqws2 is left alone"
+kill -9 "$fp" "$op" 2>/dev/null; wait "$fp" "$op" 2>/dev/null
+rm -f "$MOCKBIN/pidof"
+svc stop >/dev/null 2>&1
+
+section "boot again without a kernel reboot (Android restart)"
+# Мягкая перезагрузка (LSPosed/Vector) запускает service.sh заново, а процессы
+# модуля живы: тот же boot_id — сначала остановить прежнее, а не терять его
+cp "$CONFFILE" "$SANDBOX/conf.keep"
+printf 'AUTOSTART=0\nWATCHDOG=0\n' >> "$CONFFILE"
+if [ -r /proc/sys/kernel/random/boot_id ]; then
+  svc start >/dev/null 2>&1
+  old=$(cat "$PIDFILE" 2>/dev/null)
+  sleep 300 & wd=$!; echo "$wd" > "$WD_PIDFILE"
+  cat /proc/sys/kernel/random/boot_id > "$CONFDIR/state/boot_id"
+  : > "$SERVICE_LOG"
+  svc boot
+  assert_contains "$(cat "$SERVICE_LOG")" "Повторная загрузка Android без перезагрузки ядра" "the same kernel boot is recognised"
+  kill -0 "$old" 2>/dev/null; assert_rc 1 $? "the old daemon is stopped, not lost"
+  kill -0 "$wd" 2>/dev/null; assert_rc 1 $? "and the old watchdog too (no second one beside the new)"
+  wait "$wd" 2>/dev/null
+  echo other > "$CONFDIR/state/boot_id"; : > "$SERVICE_LOG"
+  svc boot
+  assert_not_contains "$(cat "$SERVICE_LOG")" "Повторная загрузка Android" "a real reboot (new boot_id) is a normal boot"
+  assert_eq "$(cat /proc/sys/kernel/random/boot_id)" "$(cat "$CONFDIR/state/boot_id")" "the boot is remembered"
+fi
+cp "$SANDBOX/conf.keep" "$CONFFILE"
+svc stop >/dev/null 2>&1
+
 section "boot-completed.sh lifecycle hook"
 
 assert_file "$MODDIR/boot-completed.sh" "boot-completed.sh exists in sandbox"

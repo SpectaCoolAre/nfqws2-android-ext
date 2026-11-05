@@ -269,7 +269,8 @@ function dnsGeoSummary(){
 function renderDnsGeo(){
   const st = dnsSt.status || {};
   if(!$('dns-geo')) return;
-  const rows = [settingsRow({icon: 'refresh', title: 'Проверить DNS сейчас', sub: dnsGeoSummary(), on: 'dnsGeoScan()'})];
+  const rows = [settingsRow({icon: 'refresh', title: 'Проверить DNS сейчас',
+    sub: dnsGeoScanning ? t('Проверяю серверы — до двух минут, можно уйти с экрана') : dnsGeoSummary(), on: 'dnsGeoScan()'})];
   const list = (dnsSt.geoscan || []).slice().sort((a, b) => (b.ok - a.ok) || (dnsGeoFor(b.host) - dnsGeoFor(a.host)) || (b.proxy - a.proxy) || (a.ms - b.ms));
   list.forEach(r => {
     const sub = !r.ok ? t('не отвечает')
@@ -311,9 +312,19 @@ async function dnsGeoServerInfo(host){
   toast(off ? t('{0} снова в выборе', host) : t('{0} больше не используется', host));
   if(await loadDnsState()) renderDns(); else renderDnsGeo();
 }
+/* Проверка идёт до пары минут — дольше, чем стоит держать одну команду:
+   модуль запускает её в фоне и отдаёт время запроса, итог — отдельным
+   ожиданием; строка всё это время говорит, что проверка идёт */
+let dnsGeoScanning = false;
 async function dnsGeoScan(){
-  const r = await withBusy(['dns-geo-scan'], 60000);
-  toast(r.code ? errText(r, 'Не удалось проверить') : t('DNS для обхода геоблока: {0}', (r.out || '').trim()));
+  if(dnsGeoScanning){ toast(t('Проверка уже идёт')); return; }
+  const r = await withBusy(['dns-geo-scan'], 15000);
+  if(r.code){ toast(errText(r, 'Не удалось проверить')); return; }
+  dnsGeoScanning = true; renderDnsGeo();
+  let w;
+  try { w = await ctlx(['dns-geo-scan-wait', (r.out || '').trim()], 190000); }
+  finally { dnsGeoScanning = false; }
+  toast(w.code ? errText(w, 'Не удалось проверить') : t('DNS для обхода геоблока: {0}', (w.out || '').trim()));
   if(await loadDnsState()) renderDns(); else renderDnsGeo();
 }
 async function dnsGeoUpdate(){

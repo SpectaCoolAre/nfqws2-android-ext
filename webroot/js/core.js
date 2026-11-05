@@ -209,15 +209,20 @@ function openMenu(anchor, items, opts){
   const back = document.createElement('div');
   back.className = 'menu-back';
   // любое касание мимо меню — нажатие, свайп, прокрутка — закрывает его сразу,
-  // а не только click (свайп click не даёт). Подложка уходит, когда палец
-  // поднят: иначе то же касание нажало бы кнопку под меню
-  let backHeld = false;
-  const dropBack = () => { backHeld = false; back.remove(); };
-  back.addEventListener('pointerdown', e => { backHeld = true; close(); });
+  // а не только click (свайп click не даёт). Подложка уходит не с pointerup, а
+  // когда пришёл click этого касания: на Android click касания (GestureTap)
+  // приходит отдельным событием после touchend, и подложка, убранная сразу
+  // после pointerup, пропускала его к кнопке под меню — касание мимо меню
+  // открывало вкладку или нажимало пункт настроек. Click не пришёл (свайп) —
+  // подложка уходит через 400 мс
+  let backHeld = false, dropT = 0;
+  const dropBack = () => { clearTimeout(dropT); backHeld = false; back.remove(); };
+  back.addEventListener('pointerdown', e => { backHeld = true; clearTimeout(dropT); close(); });
   // отпускание пальца, которым меню открыли долгим нажатием, тоже приходит
   // сюда — подложка уходит только после касания, начатого на ней
-  ['pointerup', 'pointercancel'].forEach(ev => back.addEventListener(ev, () => { if(backHeld) setTimeout(dropBack, 0); }));
-  back.addEventListener('click', e => { e.preventDefault(); close(); dropBack(); });
+  ['pointerup', 'pointercancel'].forEach(ev => back.addEventListener(ev, () => {
+    if(backHeld){ clearTimeout(dropT); dropT = setTimeout(dropBack, 400); } }));
+  back.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); close(); setTimeout(dropBack, 0); });
   back.addEventListener('wheel', () => { close(); dropBack(); }, {passive: true});
   $('layer').append(back, menu);
   const r = anchor.getBoundingClientRect(), mw = menu.offsetWidth, mh = menu.offsetHeight;
@@ -1233,7 +1238,7 @@ function inGestureZone(x, y, bottomOnly){
    (или в конце) прокрутки и продолжает тянуть — страница растягивается по
    вертикали от упора, с затуханием, отпустил — возвращается. Пока тянем
    мы, touchmove гасится, чтобы браузер не передал упор WebView. */
-const stretch = {el: null, pull: 0, y: 0, anim: null};
+const stretch = {el: null, pull: 0, y: 0, sp: 0, anim: null};
 /* HyperOS: страница не растягивается, а сдвигается за пальцем с
    сопротивлением и возвращается пружиной без отскока (как overScrollVertical
    в miuix: критическое затухание, период 0,4 с). Сопротивление — туже, чем в
@@ -1293,6 +1298,7 @@ function stretchRelease(){
     el.classList.remove('stretch');
     el.style.transform = '';
     const a = el.animate(mxSpringFrames(mxOverscroll(pulled), 0), {duration: 500});
+    a.release = true;
     stretch.anim = a;
     a.onfinish = () => { if(stretch.anim === a) stretch.anim = null; };
     return;
@@ -1313,6 +1319,7 @@ document.addEventListener('touchstart', e => {
   }
   stretch.el = document.querySelector('.page.active');
   stretch.y = e.touches[0].clientY;
+  stretch.sp = scrollPos();
   stretch.pull = 0;
 }, {passive: true});
 document.addEventListener('touchmove', e => {
@@ -1320,8 +1327,8 @@ document.addEventListener('touchmove', e => {
   if(!el || e.touches.length !== 1) return;
   if(swipe.st === 2){ stretchDrop(); return; }           // страницу тянут вбок
   if(textBusy()){ stretch.pull = 0; stretchRelease(); return; }   // выделяют текст: страница не тянется
-  const y = e.touches[0].clientY, dy = y - stretch.y;
-  stretch.y = y;
+  const y = e.touches[0].clientY, dy = y - stretch.y, sp = scrollPos(), moved = sp - stretch.sp;
+  stretch.y = y; stretch.sp = sp;
   const maxY = scroller.scrollHeight - scroller.clientHeight;
   // край — с запасом в 2 px: прокрутка бывает дробной, и у самого верха
   // растяжение иногда не включалось
@@ -1334,9 +1341,14 @@ document.addEventListener('touchmove', e => {
   if(!e.cancelable && stretch.pull !== 0 && (stretch.pull > 0 ? dy < 0 : dy > 0)){
     stretchRelease(); stretch.el = el; stretch.y = y; return;
   }
+  // На стыке «прокрутка → оттягивание» часть пути пальца между событиями
+  // ещё прокрутила страницу (moved): в оттягивание идёт только остаток. Раньше
+  // шёл весь путь — у края страница разом прыгала на лишние 50–100 px, и
+  // быстрая прокрутка у края выглядела рывком с ускорением
   let p = stretch.pull;
-  if(p > 0 || (p === 0 && dy > 0 && atTop)) p = Math.max(0, p + dy);
-  else if(p < 0 || (p === 0 && dy < 0 && atBottom)) p = Math.min(0, p + dy);
+  const eff = p === 0 ? dy + moved : dy;
+  if(p > 0 || (p === 0 && dy > 0 && atTop)) p = Math.max(0, p + eff);
+  else if(p < 0 || (p === 0 && dy < 0 && atBottom)) p = Math.min(0, p + eff);
   // упор тянем сами: браузер это касание не получает и не запускает
   // системное растяжение WebView (оно двигало шапку и навигацию)
   if(p !== 0 && e.cancelable) e.preventDefault();
@@ -1401,6 +1413,12 @@ document.addEventListener('touchcancel', () => { fling.touching = 0; }, {passive
 function stretchAbsorb(fromTop, v){
   const el = document.querySelector('.page.active');
   if(!el || stretch.el || transitionCleanup || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  // У страницы одна анимация отскока. Пружина возврата после оттягивания ещё
+  // идёт — второй отскок поверх неё не нужен: прежде он перебивал её с места
+  // (последняя анимация WAAPI заменяет предыдущую), страница прыгала в ноль и
+  // отскакивала заново, а когда он кончался, досчитывалась старая — рывки
+  if((stretch.anim && stretch.anim.playState === 'running' && stretch.anim.release) || el.classList.contains('stretch-release')) return;
+  if(stretch.anim){ stretch.anim.cancel(); stretch.anim = null; }
   if(isMx()){
     // скорость влёта (px/мс) переходит в пружину, сильно ослабленная: отскок —
     // не больше ~30 px. Сильнее — и короткая страница (настройки, где почти
@@ -1409,7 +1427,9 @@ function stretchAbsorb(fromTop, v){
     // замедлившись (меньше 1 px/мс), и отскок выходил в 3–8 px — его не было
     // видно. Теперь: 0,5 px/мс — ~14 px, 1 — ~26 px, предел — ~64 px
     const v0 = (fromTop ? 1 : -1) * Math.min(2.5, Math.abs(v)) * 1100;
-    el.animate(mxSpringFrames(0, v0), {duration: 500});
+    const a = el.animate(mxSpringFrames(0, v0), {duration: 500});
+    stretch.anim = a;
+    a.onfinish = () => { if(stretch.anim === a) stretch.anim = null; };
     return;
   }
   const k = 1 + Math.min(.05, .012 + Math.abs(v) * .008);    // v — px/мс
@@ -1417,7 +1437,8 @@ function stretchAbsorb(fromTop, v){
   el.style.transformOrigin = '50% ' + oy + 'px';
   const a = el.animate([{transform: 'none'}, {transform: 'scaleY(' + k + ')', offset: .3}, {transform: 'none'}],
     {duration: 420, easing: 'cubic-bezier(.2, .8, .3, 1)'});
-  a.onfinish = a.oncancel = () => { if(!el.classList.contains('stretch')) el.style.transformOrigin = ''; };
+  stretch.anim = a;
+  a.onfinish = a.oncancel = () => { if(stretch.anim === a) stretch.anim = null; if(!el.classList.contains('stretch')) el.style.transformOrigin = ''; };
 }
 scroller.addEventListener('scroll', () => {
   const now = performance.now(), top = scrollPos(), dt = now - fling.t;
@@ -1760,13 +1781,18 @@ let auroraTm = 0;
 // своё время сияния: идёт только пока его видно (главная на экране, окно не
 // свёрнуто) — после возвращения анимация продолжается с того же кадра, а не
 // прыгает туда, куда «ушли» часы, пока её не было видно
-let auroraClock = 0, auroraLast = 0;
+let auroraClock = 0, auroraLast = 0, auroraScroll = 0;
+// Пока страницу прокручивают, сияние стоит (его часы тоже): пятна плывут на
+// несколько пикселей в секунду, пауза в прокрутке незаметна, а кадры
+// прокрутки не делят время с перерисовкой сияния
+scroller.addEventListener('scroll', () => { auroraScroll = performance.now(); }, {passive: true});
 function auroraTick(){
   auroraTm = 0;
   const root = document.documentElement;
   const on = root.dataset.design === 'miuix' && root.dataset.mxAurora === '1' && !document.hidden &&
     typeof currentPage !== 'undefined' && currentPage === 'control' && !matchMedia('(prefers-reduced-motion: reduce)').matches;
   if(!on){ auroraLast = 0; return; }
+  if(performance.now() - auroraScroll < 200){ auroraLast = 0; auroraTm = setTimeout(auroraTick, 100); return; }
   const now = Date.now();
   if(auroraLast) auroraClock += Math.min(now - auroraLast, 100);
   auroraLast = now;

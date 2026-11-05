@@ -154,7 +154,10 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   eq('0', await css('.mx-home-fade', 'opacity'), 'at the top of the home screen nothing is blurred');
   await page.evaluate(() => { $('content').style.minHeight = '2000px'; scrollToY(200); }); await page.waitForTimeout(700);
   eq('1', await css('.mx-home-fade', 'opacity'), 'scrolled — cards going under the status bar blur, fading in');
-  eq(['blur(1.5px)', 'blur(4px)', 'blur(8px)', 'blur(16px)'], await page.$$eval('.mx-home-fade i', l => l.map(e => getComputedStyle(e).backdropFilter)), 'the blur grows towards the edge, layer by layer');
+  const aur = await page.evaluate(() => { const a = document.querySelector('.mx-aurora'); const cs = getComputedStyle(a);
+    return [cs.webkitMaskImage || cs.maskImage, cs.clipPath, getComputedStyle(a, '::after').content]; });
+  truthy(/none/.test(aur[0]) && aur[1] !== 'none' && aur[2] !== 'none', 'the aurora fades into the page by a layer of background, not a mask (a mask costs every frame): ' + aur.join(' | '));
+  eq(['blur(3px)', 'blur(10px)'], await page.$$eval('.mx-home-fade i', l => l.map(e => getComputedStyle(e).backdropFilter)), 'the blur grows towards the edge, layer by layer (two layers: each one costs every scroll frame)');
   truthy(/opacity/.test(await css('.mx-home-fade', 'transition')), 'it comes and goes smoothly');
   await page.evaluate(() => { scrollToY(0); $('content').style.minHeight = ''; }); await page.waitForTimeout(400);
 

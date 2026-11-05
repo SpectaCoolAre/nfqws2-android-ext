@@ -616,14 +616,16 @@ html[data-design="miuix"][data-mx-aurora="1"] .mx-aurora {
   /* над страницей — запас в полэкрана цветом верха сияния (рамка сверху):
      оттягивание вниз сдвигает страницу, и раньше открывался край сияния */
   display: block; position: absolute; z-index: -1; pointer-events: none;
-  overflow-x: clip; overflow-y: visible; box-sizing: content-box;
+  box-sizing: content-box;
   left: calc(-1 * var(--screen-margin)); right: calc(-1 * var(--screen-margin));
   top: calc(-1 * (var(--top-inset) + var(--appbar-height)) - 50vh);
   height: min(760px, 88vh); border-top: 50vh solid var(--aur-top);
-  -webkit-mask: linear-gradient(#000, #000) top / 100% 50vh no-repeat,
-    linear-gradient(#000 52%, rgb(0 0 0 / .6) 72%, transparent) bottom / 100% min(760px, 88vh) no-repeat;
-  mask: linear-gradient(#000, #000) top / 100% 50vh no-repeat,
-    linear-gradient(#000 52%, rgb(0 0 0 / .6) 72%, transparent) bottom / 100% min(760px, 88vh) no-repeat;
+  /* Книзу сияние сходит в фон не маской, а слоем фона поверх (::after):
+     маска на слое с движущимися пятнами — отдельная поверхность отрисовки на
+     каждый кадр, и на главной со стеклом прокрутка теряла до половины
+     кадров. Слой фона даёт ту же картинку (под сиянием — тот же фон), а
+     края обрезает прямоугольный clip-path — его браузер считает даром */
+  clip-path: inset(0);
   background: var(--aur-base); background-clip: padding-box;
   --aur-top: #ded8fa;
   --aur-base: linear-gradient(170deg, #ded8fa, #f3dcef 55%, #dfe9fb);
@@ -644,6 +646,10 @@ html[data-design="miuix"][data-mode="dark"][data-mx-aurora="1"] .mx-aurora {
    секунду, все четыре за один кадр — сумма синусоид с разными периодами, так
    что сияние всё время переливается и пульсирует, не повторяясь. Пока
    главная не на экране — стоит */
+html[data-design="miuix"][data-mx-aurora="1"] .mx-aurora::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(transparent 52%, color-mix(in srgb, var(--mx-bg) 40%, transparent) 72%, var(--mx-bg));
+}
 .mx-aurora i {
   position: absolute; opacity: .85; will-change: transform, opacity;
   background: radial-gradient(closest-side, var(--c), color-mix(in srgb, var(--c) 45%, transparent) 55%, transparent);
@@ -653,14 +659,14 @@ html[data-design="miuix"][data-mode="dark"][data-mx-aurora="1"] .mx-aurora {
 .mx-aurora .a3 { width: 120%; height: 62%; left: -10%; top: 22%; --c: var(--aur-3); }
 .mx-aurora .a4 { width: 80%; height: 50%; left: 16%; top: -18%; --c: var(--aur-4); opacity: .6; }
 /* на сиянии: светлая — карточки белые, как у «Об устройстве»; тёмная —
-   полупрозрачные, а с текстурами — ещё и с размытием света под ними */
+   полупрозрачные, с текстурами — прозрачнее. Без размытия под карточками:
+   сияние и так размыто (мягкие градиенты), и размытие его почти не меняло,
+   а стоило больше всего остального на главной — каждый кадр прокрутки
+   и каждый шаг сияния под каждой карточкой */
 html[data-design="miuix"][data-mode="dark"][data-mx-aurora="1"] .page[data-page="control"] :is(.hero, .smart-tile, .mode-card) {
   background: color-mix(in srgb, var(--mx-card) 72%, transparent); }
-@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  html[data-design="miuix"][data-mode="dark"][data-mx-aurora="1"][data-mx-tex="1"] .page[data-page="control"] :is(.hero, .smart-tile, .mode-card) {
-    background: color-mix(in srgb, var(--mx-card) 52%, transparent);
-    -webkit-backdrop-filter: blur(24px) saturate(1.5); backdrop-filter: blur(24px) saturate(1.5); }
-}
+html[data-design="miuix"][data-mode="dark"][data-mx-aurora="1"][data-mx-tex="1"] .page[data-page="control"] :is(.hero, .smart-tile, .mode-card) {
+  background: color-mix(in srgb, var(--mx-card) 58%, transparent); }
 
 /* ── Вид HyperOS в листе темы: три слайда-заготовки ───────────────────────
    Главная модуля в миниатюре, как картинки-выборы в настройках HyperOS:
@@ -755,8 +761,10 @@ html[data-design="miuix"] .app-bar.home #logs-btn {
 }
 html[data-design="miuix"] .app-bar.home #logs-btn:active { transform: scale(.92); }
 html[data-design="miuix"] .app-bar.home #logs-btn .icon { width: 22px; height: 22px; }
-/* размытие нарастает к краю: четыре слоя, у каждого своё размытие и маска —
-   полоса, где он действует; появляется и уходит плавно (opacity) */
+/* размытие нарастает к краю: два слоя, у каждого своё размытие и маска —
+   полоса, где он действует; появляется и уходит плавно (opacity). Было
+   четыре — на полосе высотой в полпальца разница не видна, а каждый слой —
+   своё размытие на каждый кадр прокрутки */
 .mx-home-fade { display: none; }
 html[data-design="miuix"] .mx-home-fade {
   display: block; position: fixed; left: 0; right: 0; top: 0; z-index: 24; pointer-events: none;
@@ -766,14 +774,10 @@ html[data-design="miuix"] body.mx-home-scrolled .mx-home-fade { opacity: 1; }
 /* у каждого слоя — свой композитный слой: без него WebView во время
    прокрутки пальцем мог перестать перерисовывать размытие под маской */
 .mx-home-fade i { position: absolute; inset: 0; transform: translateZ(0); will-change: backdrop-filter; }
-.mx-home-fade i:nth-child(1) { -webkit-backdrop-filter: blur(1.5px); backdrop-filter: blur(1.5px);
-  -webkit-mask: linear-gradient(#000 60%, transparent); mask: linear-gradient(#000 60%, transparent); }
-.mx-home-fade i:nth-child(2) { -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
-  -webkit-mask: linear-gradient(#000 42%, transparent 78%); mask: linear-gradient(#000 42%, transparent 78%); }
-.mx-home-fade i:nth-child(3) { -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-  -webkit-mask: linear-gradient(#000 26%, transparent 58%); mask: linear-gradient(#000 26%, transparent 58%); }
-.mx-home-fade i:nth-child(4) { -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
-  -webkit-mask: linear-gradient(#000 10%, transparent 38%); mask: linear-gradient(#000 10%, transparent 38%); }
+.mx-home-fade i:nth-child(1) { -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+  -webkit-mask: linear-gradient(#000 55%, transparent); mask: linear-gradient(#000 55%, transparent); }
+.mx-home-fade i:nth-child(2) { -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  -webkit-mask: linear-gradient(#000 20%, transparent 55%); mask: linear-gradient(#000 20%, transparent 55%); }
 
 /* ══ Жидкое стекло ════════════════════════════════════════════════════════
    По слоям Liquid-Glass-Android (QWEA0) и liquidglass (ybouane): лёгкое

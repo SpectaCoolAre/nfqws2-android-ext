@@ -761,9 +761,27 @@ share_stream() { # <файл> <имя>
   esac
   mime=$(share_mime "$2")
   out=$(share_uri "$rf" "$mime"); u=${out%%	*}; how=${out#*	}
-  out=$(am start -a android.intent.action.SEND --user 0 -d "$u" -t "$mime" --eu android.intent.extra.STREAM "$u" \
-    --es android.intent.extra.SUBJECT "$2" --es android.intent.extra.TITLE "$2" -f 0x10000001 2>&1)
-  log_msg "поделиться: $2 — $u ($how)"
+  local nm="$2"
+  set -- am start -a android.intent.action.SEND --user 0 -d "$u" -t "$mime" --eu android.intent.extra.STREAM "$u" \
+    --es android.intent.extra.SUBJECT "$nm" --es android.intent.extra.TITLE "$nm" -f 0x10000001
+  # Право читать ссылку получателю выдаёт тот, кто запускает intent (флаг
+  # 0x1). От root (и system) Android такую выдачу молча отбрасывает
+  # (UriGrantsManager: «For security reasons, the system cannot issue a Uri
+  # permission grant»), а мы запускали am от root — получатель видел ссылку,
+  # но открыть её не мог. Поэтому am — от shell (uid 2000, как adb shell):
+  # ему выдавать можно. su, не умеющий сменить uid, — по-старому, от root
+  local who=root cmd a
+  if [ "$(su 2000 -c 'id -u' 2>/dev/null)" = 2000 ]; then
+    cmd=""; for a; do cmd="$cmd '$(printf '%s' "$a" | sed "s/'/'\\\\''/g")'"; done
+    out=$(su 2000 -c "$cmd" 2>&1); who=shell
+    case "$out" in *Error*|*Exception*) log_msg "поделиться: am от shell: $out — повтор от root"; who=root; out=$("$@" 2>&1) ;; esac
+  else
+    out=$("$@" 2>&1)
+  fi
+  log_msg "поделиться: $nm — $u ($how, от $who)"
+  # отказ в выдаче права виден только в logcat — туда и смотрим
+  a=$(logcat -d -t 400 2>/dev/null | grep -m 1 -E 'cannot issue a Uri permission|Permission Denial.*(grant|Uri)')
+  [ -n "$a" ] && log_msg "поделиться: logcat: ${a#*: }"
   case "$out" in *Error*|*Exception*) log_msg "поделиться: am: $out"; echo "Не удалось открыть «Поделиться»: $out" >&2; return 1 ;; esac
   return 0
 }
