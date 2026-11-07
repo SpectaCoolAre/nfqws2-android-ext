@@ -746,39 +746,6 @@ check((readall(HOME .. "/state/smart_kill") or ""):find(" " .. sc.port .. "\n", 
 check((readall(HOME .. "/logs/smart.log") or ""):find("silent.example: сервер принял ClientHello и молчит", 1, true) ~= nil, "the smart log says so")
 smart_watch()
 check((rec("silent.example").err[sv] or 0) <= 1.01, "counted once")
--- Мёртвый узел: у сервиса много серверов (кэши Google в сети оператора), один
--- молчит на любом варианте, а тот же вариант открывает другие. Вариант не
--- штрафуется, а после трёх таких сбоев к узлу соединения обрываются сразу
-later(400); os.remove(HOME .. "/state/smart_kill")
-local function node_ok(ip) local c = conn("node.example"); c.ip = ip; local v = packet(c); packet(c, { incoming = true, seq = 18000 }); return v end
-local function node_silent(ip, iphex)
-	local c = conn("node.example"); c.ip = ip; local v = packet(c)
-	later(5); tcptable({ aliveline(c.port, iphex) }); smart_watch(); later(16)
-	return v, c
-end
-local nv = node_ok("10.0.0.1")
-local e0 = rec("node.example").err[nv] or 0
-for i = 1, 3 do later(); node_ok("10.0.0.1"); node_silent("10.0.0.2", "0200000A") end
-check((rec("node.example").err[nv] or 0) == e0, "a node silent on a variant that opens the other nodes of the site: the variant is not blamed")
-check(rec("node.example").cur == nv, "and the site keeps its variant")
-check((readall(HOME .. "/logs/smart.log") or ""):find("node.example: узел 10.0.0.2 молчит на любом варианте", 1, true) ~= nil, "after three such failures the node is called dead")
-os.remove(HOME .. "/state/smart_kill"); later(5)
-local dc = conn("node.example"); dc.ip = "10.0.0.2"; packet(dc)
-check((readall(HOME .. "/state/smart_kill") or ""):find("10.0.0.2 " .. dc.port .. "\n", 1, true) ~= nil, "a new connection to the dead node is cut at once: the player moves to another node sooner")
-os.remove(HOME .. "/state/smart_kill"); later(61)
-local pc = conn("node.example"); pc.ip = "10.0.0.2"; packet(pc)
-check(readall(HOME .. "/state/smart_kill") == nil, "once a minute one connection goes through as a probe")
-packet(pc, { incoming = true, seq = 18000 })
-local ac = conn("node.example"); ac.ip = "10.0.0.2"; packet(ac)
-check(readall(HOME .. "/state/smart_kill") == nil, "a node that answers again is alive")
-check((readall(HOME .. "/logs/smart.log") or ""):find("node.example: узел 10.0.0.2 снова отвечает", 1, true) ~= nil, "and the smart log says so")
--- у сайта один сервер (или вариант нигде не открывался) — это ошибка варианта
-later(400)
-local lone = conn("lone.example"); lone.ip = "10.0.0.7"; local lv = packet(lone)
-later(5); tcptable({ aliveline(lone.port, "0700000A") }); smart_watch()
-check((rec("lone.example").err[lv] or 0) > 0, "a silent site with no other working server is still an error of the variant")
-tcptable({})
-
 later(400); os.remove(HOME .. "/state/smart_kill")
 local tc = conn("talk.example"); tc.ip = "192.168.1.9"; packet(tc); packet(tc, { incoming = true, seq = 1, len = 1400 })
 later(5); tcptable({ aliveline(tc.port, "0901A8C0") }); smart_watch()

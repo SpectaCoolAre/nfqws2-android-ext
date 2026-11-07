@@ -885,7 +885,14 @@ dns_build() {
   fi
   if [ ! -s "$up" ]; then
     [ "$def" = net ] && [ "${routed:-0}" = 0 ] && { rm -f "$up" "$up.rules"; return 1; }
-    for ip in $(printf '%s' "$net" | tr ',' ' '); do dns_addr_port "$ip" >> "$up"; echo >> "$up"; done
+    # Есть IPv4-DNS сети — по умолчанию только он, IPv6 — в запасных.
+    # Запрос идёт всем серверам разом (parallel), а дома за IPv6-адресом
+    # роутера (fe80::…) может отвечать другой DNS, чем за 192.168.1.1: у
+    # Keenetic обход геоблока (geodns) слушает IPv4, а IPv6 — встроенный DNS.
+    # Тогда один и тот же сайт получал то адрес прокси, то настоящий
+    local n4
+    n4=$(printf '%s' "$net" | tr ',' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | tr '\n' ' ')
+    for ip in ${n4:-$(printf '%s' "$net" | tr ',' ' ')}; do dns_addr_port "$ip" >> "$up"; echo >> "$up"; done
   fi
   # Ни сеть, ни профиль серверов не дали — тогда публичные
   [ -s "$up" ] || for ip in $DNS_PUBLIC; do echo "$ip:53" >> "$up"; done

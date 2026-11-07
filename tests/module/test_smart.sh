@@ -288,6 +288,11 @@ assert_contains "$(grep '^#@google 4[56] ' "$REPO_DIR/strategies/smart.conf")" "
 assert_contains "$(grep 'strategy=45' "$REPO_DIR/strategies/smart.conf")" "hostfakesplit:host=google.com:tcp_flags_unset=ack:badsum:repeats=3" "Yv34: datanoack is tcp_flags_unset=ack in zapret2"
 # замер 07.11.2026 на МТС: Yv34 — 15 из 15, Yv35 — 3 из 5
 assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",43-45:" "Yv34 and googlevideo #1, #2 (15 of 15 in the benchmark) are in the base set"
+# видео YouTube на МТС — с кэшей Google в сети оператора: там hostfakesplit
+# google.com (Youtube_circular #1) открыл 94 из 94, одиночный fake — 0 из 41
+assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",21,34," "Youtube_circular #1 is in the Google base set"
+assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ":first=21" "and Google sites start on it"
+assert_contains "$(grep 'strategy=21$' "$REPO_DIR/strategies/smart.conf")" "hostfakesplit:host=google.com:tcp_ts=-600000" "it is the hostfakesplit google.com variant"
 assert_not_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" "46" "Yv35 (3 of 5) waits in the extended pool"
 assert_eq "" "$(grep -o 'slot=tls[a-z_0-9]*:pass=14:base=[0-9,-]*' "$REPO_DIR/strategies/smart.conf" | grep -v 'base=1,4-6,8-9,')" "hardcorp74 #1 and #2 (96%, each opens sites no other does) are in the base set of every TLS slot"
 assert_contains "$(grep -o 'slot=tls:pass=14:base=[0-9,-]*:first=[0-9]*' "$REPO_DIR/strategies/smart.conf")" ":first=8" "ordinary TLS sites start on hardcorp74 #1: the most checks and its own sites in both benchmarks"

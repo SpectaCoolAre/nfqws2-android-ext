@@ -115,7 +115,8 @@ dns_build
 assert_rc 0 $? "an enabled profile with domains gives a configuration"
 up=$(cat "$DNS_RUN_DIR/upstreams.txt")
 assert_contains "$up" "192.168.1.1:53" "the default goes to the DNS of the active network"
-assert_contains "$up" "[fe80::1%wlan0]:53" "an IPv6 network DNS is bracketed"
+assert_not_contains "$(grep -v '^\[/' "$DNS_RUN_DIR/upstreams.txt")" "fe80::1" "with an IPv4 network DNS the IPv6 one is not asked by default: at home it can be another resolver (Keenetic: geodns on IPv4, the built-in DNS on IPv6)"
+assert_contains "$(cat "$DNS_RUN_DIR/fallback.txt")" "[fe80::1%wlan0]:53" "it stays a fallback, bracketed"
 assert_not_contains "$up" "10.10.10.10" "not the DNS of an inactive network"
 assert_contains "$up" "[/instagram.com/cdninstagram.com/]https://ns2.opennameserver.org/dns-query" "domains route to the first server"
 assert_contains "$up" "[/instagram.com/cdninstagram.com/]tls://dns.google" "and to the second one"
