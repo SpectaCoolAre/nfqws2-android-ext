@@ -302,6 +302,48 @@ assert_contains "$(ipt_rules nfqws_dns nat)" "REDIRECT --to-ports $(dns_port_now
 assert_contains "$(tail -n 5 "$DNS_LOG")" "работает, но не отвечает на запросы (127.0.0.1:$DNS_PORT: нет ответа )" "the DNS log says it hung, with the helper's reason"
 assert_contains "$(tail -n 3 "$SERVICE_LOG")" "DNS: dnsproxy завис" "and the service log too"
 assert_no_file "$DNS_RUN_DIR/probe_fail" "the count starts over"
+# dnsproxy отвечает сам, а ответы серверов до него не доходят: телефон без
+# DNS («нет сети» в приложениях), а журнал пуст. Проверка — настоящим именем
+cat > "$HELPER_BIN" <<EOF
+#!/bin/sh
+echo "\$*" >> "$MOCK_DIR/helper.calls"
+case "\$*" in
+  *"-probe 127.0.0.1:"*"-name "*) [ -f "$MOCK_DIR/up_dead" ] || exit 0; echo "nfqws2-helper: 2026/11/07 16:09:30 127.0.0.1:x: rcode 2" >&2; exit 1 ;;
+  *"-name "*) [ -f "$MOCK_DIR/net_dead" ] && exit 1; exit 0 ;;
+esac
+exit 0
+EOF
+chmod 0755 "$HELPER_BIN"
+: > "$MOCK_DIR/helper.calls"
+dns_check
+assert_contains "$(cat "$MOCK_DIR/helper.calls")" "-name www.google.com" "the watchdog also resolves a real name through the module's DNS"
+: > "$MOCK_DIR/up_dead"; : > "$MOCK_DIR/net_dead"
+dns_check; dns_check; dns_check
+assert_no_file "$DNS_RUN_DIR/up_fail" "the network's own DNS is silent too — the network is down, not the module's DNS"
+assert_contains "$(ipt_rules nfqws_dns nat)" "REDIRECT" "and interception stays"
+rm -f "$MOCK_DIR/net_dead"
+if [ -n "$(dns_net_servers | tr ',' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')" ]; then
+  pid=$(cat "$DNS_PIDFILE")
+  dns_check
+  assert_eq "$pid" "$(cat "$DNS_PIDFILE")" "one failed real lookup is not enough"
+  dns_check
+  assert_contains "$(tail -n 5 "$DNS_LOG")" "DNS модуля не разрешает www.google.com (127.0.0.1:x: rcode 2), а DNS сети" "two in a row while the network's DNS answers: logged with the reason"
+  [ "$(cat "$DNS_PIDFILE")" != "$pid" ]; assert_rc 0 $? "and dnsproxy is restarted"
+  dns_check
+  assert_not_contains "$(ipt_rules nfqws_dns nat)" "REDIRECT" "still dead after the restart: interception is lifted, the phone uses the network's DNS"
+  assert_file "$DNS_RUN_DIR/failopen" "for a while"
+  assert_contains "$(tail -n 3 "$SERVICE_LOG")" "перехват снят на 5 мин" "the service log says so"
+  dns_check
+  assert_not_contains "$(ipt_rules nfqws_dns nat)" "REDIRECT" "the watchdog does not put it back at once"
+  rm -f "$MOCK_DIR/up_dead"
+  echo $(( $(date +%s) - 400 )) > "$DNS_RUN_DIR/failopen"
+  dns_check
+  assert_contains "$(ipt_rules nfqws_dns nat)" "REDIRECT --to-ports $(dns_port_now)" "five minutes later, answering again: interception is back"
+  assert_no_file "$DNS_RUN_DIR/failopen" "and the pause is over"
+else
+  echo "   skip  real-lookup restart: no IPv4 network DNS in the mock"
+fi
+rm -f "$MOCK_DIR/up_dead" "$MOCK_DIR/net_dead"
 rm -f "$MOCK_DIR/dns_hung" "$HELPER_BIN"
 : > "$MOCK_DIR/helper.calls"
 dns_check

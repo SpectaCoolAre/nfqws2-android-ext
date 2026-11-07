@@ -22,6 +22,7 @@ func main() {
 	alarm := flag.Duration("alarm", 0, "режим будильника: интервал (см. alarm.go)")
 	run := flag.String("run", "", "команда будильника")
 	probe := flag.String("probe", "", "адреса DNS через запятую: ответил ли каждый (см. probe.go)")
+	pname := flag.String("name", "", "с -probe: спросить адрес этого имени (ответ серверов, а не самого dnsproxy)")
 	wait := flag.Duration("wait", 3*time.Second, "сколько ждать ответа на проверку")
 	geo := flag.String("geoscan", "", "DoT-серверы через запятую: доступность и покрытие геоблока (см. geoscan.go)")
 	samples := flag.String("samples", "", "домены для -geoscan через запятую или @файл (строка — домен, # — комментарий)")
@@ -49,7 +50,13 @@ func main() {
 			if a = strings.TrimSpace(a); a == "" {
 				continue
 			}
-			if err := probeDNS(a, *wait); err != nil {
+			err := error(nil)
+			if *pname != "" {
+				_, err = udpResolve(a, *pname, *wait)
+			} else {
+				err = probeDNS(a, *wait)
+			}
+			if err != nil {
 				log.Printf("%s: %v", a, err)
 				bad = true
 			}

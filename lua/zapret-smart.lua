@@ -109,6 +109,19 @@ local FROZEN_RTX = 3        -- столько переотправок одно�
 local FROZEN_IN = 12        -- входящих пакетов: дальше их может не быть видно (лимит очереди), и счёт нечем обнулять
 local NET_STUCK_IPS = 3     -- застряло у стольких разных серверов разом — это сеть, а не DPI
 local SILENT_SEC = 4        -- сек: ClientHello дошёл (переотправок нет), а сервер молчит — DPI съел ответ
+-- Мёртвые узлы: у сервиса с многими серверами (видео YouTube — кэши Google
+-- внутри сети оператора) отдельный сервер молчит на любом варианте, а тот же
+-- вариант в это же время открывает другие его серверы. Это беда узла, а не
+-- обхода: вариант не штрафуется (иначе сайт без конца менял рабочий вариант),
+-- а после NODE_FAILS таких сбоев подряд узел на NODE_DEAD секунд считается
+-- недоступным — новые соединения к нему обрываются сразу, и плеер быстрее
+-- уходит на другой узел. Раз в NODE_PROBE секунд одно соединение пропускаем —
+-- вдруг ожил
+local NODE_OKWIN = 300      -- сек: вариант открывал другой сервер сайта не раньше этого
+local NODE_FAILS = 3
+local NODE_DEAD = 600
+local NODE_PROBE = 60
+local NODE_MAX = 512        -- записей об узлах, не больше
 local APP_UID = 10000       -- наблюдатель — только за приложениями
 local NODPI_VARIANTS = 4    -- ошибки хотя бы на стольких вариантах (и на половине набора), ни одной удачи — не DPI
 local NODPI_TIME = 6 * 3600
@@ -566,6 +579,7 @@ local function check_net()
 	SM.net = net
 	SM.rate, SM.raten = nil, 0   -- обычная скорость — у каждой сети своя
 	SM.near = {}                 -- и соседи по серверам
+	SM.node, SM.vok, SM.nnode = {}, {}, 0   -- и мёртвые узлы
 	if load_net(net) then
 		DLOG("smart: network '" .. net .. "': loaded")
 		SJ("сеть " .. net .. ": выученное загружено")
@@ -733,8 +747,57 @@ local function near_get(slot, ip, n, t)
 	return x.v
 end
 
+-- узлы сервиса: удача на сервере — он жив, а вариант годится для сайта
+local function node_ok(c, v, t)
+	if not (c and c.ip and c.key) then return end
+	SM.node, SM.vok = SM.node or {}, SM.vok or {}
+	local nd = SM.node[c.ip]
+	if nd then
+		if nd.dead and nd.dead > t then SJ(c.key .. ": узел " .. c.ip .. " снова отвечает") end
+		SM.node[c.ip] = nil; SM.nnode = math.max(0, (SM.nnode or 1) - 1)
+	end
+	local vk = SM.vok[c.key]
+	if not vk then vk = {}; SM.vok[c.key] = vk end
+	vk[v] = { t = t, ip = c.ip }
+end
+-- ошибка до ответа сервера: не беда ли это узла? true — да, вариант не
+-- штрафуем (а после NODE_FAILS подряд узел считается мёртвым)
+local function node_fail(c, t)
+	if not (c and c.ip and c.key and c.v) then return false end
+	local vk = SM.vok and SM.vok[c.key]
+	local o = vk and vk[c.v]
+	if not (o and o.ip ~= c.ip and t - o.t <= NODE_OKWIN) then return false end
+	SM.node = SM.node or {}
+	local nd = SM.node[c.ip]
+	if not nd then
+		if (SM.nnode or 0) >= NODE_MAX then
+			SM.nnode = 0
+			for ip, x in pairs(SM.node) do
+				if (x.dead or x.t or 0) < t - NODE_DEAD then SM.node[ip] = nil else SM.nnode = SM.nnode + 1 end
+			end
+			if SM.nnode >= NODE_MAX then SM.node, SM.nnode = {}, 0 end
+		end
+		nd = { f = 0 }; SM.node[c.ip] = nd; SM.nnode = (SM.nnode or 0) + 1
+	end
+	nd.f, nd.t = nd.f + 1, t
+	if nd.f >= NODE_FAILS and not (nd.dead and nd.dead > t) then
+		nd.dead, nd.probe = t + NODE_DEAD, t
+		SJ(c.key .. ": узел " .. c.ip .. " молчит на любом варианте, хотя другие узлы открываются, — " ..
+			math.floor(NODE_DEAD / 60) .. " мин соединения к нему обрываем сразу, чтобы приложение ушло на другой")
+	end
+	return true
+end
+-- новое соединение к мёртвому узлу: true — оборвать сразу (кроме пробы раз в NODE_PROBE)
+local function node_dead(ip, t)
+	local nd = ip and SM.node and SM.node[ip]
+	if not (nd and nd.dead and nd.dead > t) then return false end
+	if t - (nd.probe or 0) >= NODE_PROBE then nd.probe = t; return false end
+	return true
+end
+
 local function on_ok(slot, r, v, t, c)
 	count(r, slot, "ok", v, 1, t)
+	node_ok(c, v, t)
 	-- запоминаем только «особый» вариант: не лучший в сети (с лучшего новые
 	-- сайты и так начинают). На одних /24 у Cloudflare — тысячи чужих сайтов,
 	-- и общий вариант сети не должен из-за соседства подменяться чем попало
@@ -1064,8 +1127,12 @@ function smart_watch()
 				-- молчат разом несколько серверов — это сеть, а не DPI: не считаем
 				if r and sn < NET_STUCK_IPS and not (r.nodpi and r.nodpi > t) then
 					DLOG("smart: " .. c.key .. ": connection :" .. h.lp .. " silent after ClientHello on variant " .. c.v)
-					SJ(c.key .. ": сервер принял ClientHello и молчит — ошибка " .. vname(c.slot, c.v) .. ", обрываем")
-					on_err(c.slot, c.key, r, c.v, c.n, t, c.pass, false, c)
+					if node_fail(c, t) then
+						SJ(c.key .. ": узел " .. c.ip .. " принял ClientHello и молчит, а " .. vname(c.slot, c.v) .. " открывает другие узлы — вариант не штрафуем, обрываем")
+					else
+						SJ(c.key .. ": сервер принял ClientHello и молчит — ошибка " .. vname(c.slot, c.v) .. ", обрываем")
+						on_err(c.slot, c.key, r, c.v, c.n, t, c.pass, false, c)
+					end
 				end
 				kill[#kill + 1] = kill_line(h.ip, h.lp)
 			end
@@ -1085,9 +1152,13 @@ function smart_watch()
 					-- застряло после удачного начала — обрыв посреди работы; ещё до
 					-- ответа сервера — ошибка начала соединения
 					DLOG("smart: " .. c.key .. ": connection :" .. h.lp .. " stuck " .. (c.ok and "mid-stream" or "before any answer") .. " on variant " .. c.v)
-					SJ(c.key .. ": соединение застряло " .. (c.ok and "посреди работы" or "до ответа сервера") .. " — ошибка " .. vname(c.slot, c.v) .. ", обрываем")
 					c.done, c.failed = true, true
-					on_err(c.slot, c.key, r, c.v, c.n, t, c.pass, c.ok, c)
+					if not c.ok and c.maxin == 0 and node_fail(c, t) then
+						SJ(c.key .. ": узел " .. c.ip .. " не отвечает, а " .. vname(c.slot, c.v) .. " открывает другие узлы — вариант не штрафуем, обрываем")
+					else
+						SJ(c.key .. ": соединение застряло " .. (c.ok and "посреди работы" or "до ответа сервера") .. " — ошибка " .. vname(c.slot, c.v) .. ", обрываем")
+						on_err(c.slot, c.key, r, c.v, c.n, t, c.pass, c.ok, c)
+					end
 				end
 				-- и то, и уже засчитанное — обрываем: приложение переподключится
 				kill[#kill + 1] = kill_line(h.ip, h.lp)
@@ -1191,6 +1262,12 @@ function smart(ctx, desync)
 			SM.conns[desync.dis.tcp.th_sport] = crec.smart
 			SM.lastconn = t
 			watch_start()
+			-- мёртвый узел: обрываем сразу, не учимся
+			if node_dead(crec.smart.ip, t) then
+				crec.smart.done = true
+				DLOG("smart: " .. key .. ": node " .. crec.smart.ip .. " is dead, resetting the connection")
+				kill_conns({ kill_line(crec.smart.ip, desync.dis.tcp.th_sport) })
+			end
 		end
 	end
 	local cs = crec and crec.smart

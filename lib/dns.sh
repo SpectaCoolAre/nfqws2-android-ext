@@ -1410,6 +1410,8 @@ _dns_start() { # <причина> [force — перезапуск dnsproxy и п
   fi
   if ! dns_build; then _dns_stop "$why: применять нечего — DNS сети и нет включённых профилей"; return 0; fi
   mkdir -p "$DNS_RUN_DIR"
+  # новая сеть или настройки — DNS модуля снова пробует сам (см. dns_upstream_check)
+  rm -f "$DNS_RUN_DIR/failopen" "$DNS_RUN_DIR/up_fail"
   # Свежий dnsproxy (меньше 20 с) с тем же конфигом уже открыл соединения в
   # новой сети: одна смена сети — несколько событий и запуск службы, и он
   # перезапускался трижды за 15 секунд
@@ -1503,6 +1505,7 @@ dns_probe_check() {
   [ -f "$DNS_RUN_DIR/cdn.args" ] && ports="$ports,127.0.0.1:$(dns_cdn_port_now)"
   if "$HELPER_BIN" -probe "$ports" >/dev/null 2>"$DNS_RUN_DIR/probe.err"; then
     rm -f "$DNS_RUN_DIR/probe_fail" "$DNS_RUN_DIR/probe.err"
+    dns_upstream_check
     return 0
   fi
   [ -f "$DNS_RUN_DIR/probe_fail" ] && IFS= read -r n < "$DNS_RUN_DIR/probe_fail"
@@ -1514,6 +1517,64 @@ dns_probe_check() {
   dns_proxy_stop
   if dns_proxy_start; then log_msg "DNS: dnsproxy перезапущен"; else dns_rules_del; fi
   rm -f "$DNS_RUN_DIR/probe.err"
+}
+
+# Отвечает ли DNS модуля по-настоящему. Проверка выше спрашивает имя, на
+# которое dnsproxy отвечает сам, — так видно зависание, но не то, что ответы
+# серверов до него не доходят: телефон тогда без DNS («нет сети» в
+# приложениях), а журнал пуст. Поэтому раз в минуту — настоящее имя через DNS
+# модуля; не разрешилось, а DNS сети напрямую отвечает — дважды подряд:
+# перезапуск dnsproxy, трижды: перехват снимается на DNS_FAILOPEN секунд
+# (телефон пользуется DNS сети), потом — новая попытка. DNS сети тоже молчит —
+# пропала сама сеть, DNS модуля ни при чём
+DNS_UP_NAME="www.google.com"
+DNS_FAILOPEN=300
+dns_upstream_check() {
+  local n=0 net why
+  if "$HELPER_BIN" -probe "127.0.0.1:$(dns_port_now)" -name "$DNS_UP_NAME" -wait 4s >/dev/null 2>"$DNS_RUN_DIR/up.err"; then
+    rm -f "$DNS_RUN_DIR/up_fail" "$DNS_RUN_DIR/up.err"; return 0
+  fi
+  net=$(dns_net_servers | tr ',' '\n' | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')
+  if [ -z "$net" ] || ! "$HELPER_BIN" -probe "$net:53" -name "$DNS_UP_NAME" -wait 4s >/dev/null 2>&1; then
+    rm -f "$DNS_RUN_DIR/up_fail" "$DNS_RUN_DIR/up.err"; return 0
+  fi
+  [ -f "$DNS_RUN_DIR/up_fail" ] && IFS= read -r n < "$DNS_RUN_DIR/up_fail"
+  n=$((${n:-0} + 1)); echo "$n" > "$DNS_RUN_DIR/up_fail"
+  why=$(sed 's/^nfqws2-helper: [0-9/]* [0-9:]* //' "$DNS_RUN_DIR/up.err" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+  if [ "$n" -eq 2 ]; then
+    dns_log "watchdog: DNS модуля не разрешает $DNS_UP_NAME (${why:-нет ответа}), а DNS сети ($net) отвечает — перезапуск dnsproxy"
+    log_msg "DNS: модуль не получает ответов, хотя DNS сети работает — перезапуск dnsproxy"
+    dns_proxy_stop
+    dns_proxy_start || dns_rules_del
+  elif [ "$n" -ge 3 ]; then
+    rm -f "$DNS_RUN_DIR/up_fail"
+    dns_rules_del
+    date +%s > "$DNS_RUN_DIR/failopen"
+    dns_log "watchdog: DNS модуля и после перезапуска не разрешает $DNS_UP_NAME (${why:-нет ответа}) — перехват снят на $((DNS_FAILOPEN / 60)) мин, телефон пользуется DNS сети ($net) напрямую"
+    log_msg "DNS: модуль не отвечает — перехват снят на $((DNS_FAILOPEN / 60)) мин, связь через DNS сети"
+  fi
+  rm -f "$DNS_RUN_DIR/up.err"
+}
+# перехват снят (см. dns_upstream_check): через DNS_FAILOPEN — новая попытка
+dns_failopen_check() {
+  local at=0
+  IFS= read -r at < "$DNS_RUN_DIR/failopen" 2>/dev/null
+  [ $(( $(date +%s) - ${at:-0} )) -ge "$DNS_FAILOPEN" ] || return 0
+  if [ -x "$HELPER_BIN" ] && ! "$HELPER_BIN" -probe "127.0.0.1:$(dns_port_now)" -name "$DNS_UP_NAME" -wait 4s >/dev/null 2>&1; then
+    dns_proxy_stop; dns_proxy_start
+    if ! "$HELPER_BIN" -probe "127.0.0.1:$(dns_port_now)" -name "$DNS_UP_NAME" -wait 4s >/dev/null 2>&1; then
+      date +%s > "$DNS_RUN_DIR/failopen"
+      dns_log "watchdog: DNS модуля всё ещё не отвечает — ещё $((DNS_FAILOPEN / 60)) мин через DNS сети"
+      return 0
+    fi
+  fi
+  rm -f "$DNS_RUN_DIR/failopen"
+  if dns_rules_add; then
+    dns_log "watchdog: DNS модуля снова отвечает — перехват возвращён"
+    log_msg "DNS: модуль снова отвечает — перехват возвращён"
+  else
+    dns_fail "не удалось вернуть перехват"
+  fi
 }
 
 dns_check() { _dns_locked 0 _dns_check; return 0; }
@@ -1538,6 +1599,8 @@ _dns_check() {
     elif [ -f "$DNS_RUN_DIR/cdn.args" ] && ! dns_cdn_pid >/dev/null; then
       dns_log "watchdog: dnsproxy умного DNS (видео и CDN) не работает — перезапуск"
       dns_cdn_start
+    elif [ -f "$DNS_RUN_DIR/failopen" ]; then
+      dns_failopen_check
     elif ! dns_rules_ok; then
       dns_log "watchdog: правила перехвата пропали — восстанавливаю"
       dns_rules_add || dns_fail "не удалось восстановить перехват"
