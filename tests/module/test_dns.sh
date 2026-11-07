@@ -691,6 +691,14 @@ ctl dns-geo-scan-wait "$req"
 assert_rc 1 "$ctl_rc" "no server answered — the screen hears it"
 assert_contains "$ctl_out" "Ни один сервер не ответил — оставлен прежний выбор: fast.example" "and the old choice stays"
 cat "$MOCK_DIR/helper.ok" > "$HELPER_BIN"; cp "$MOCK_DIR/geo.keep" "$(dns_geo_scan_file)"; rm -f "$(dns_geo_scan_file).fail"
+# фоновая проверка погибла, не дав итога (менеджер снял её вместе с
+# командой WebUI) — ожидание не молчит три минуты, а кулдаун не держит
+echo "$(date +%s)" > "$DNS_RUN_DIR/geoscan.req"; rm -f "$DNS_RUN_DIR/geoscan.result"; echo 999999 > "$DNS_RUN_DIR/geoscan.pid"
+ctl dns-geo-scan-wait "$(cat "$DNS_RUN_DIR/geoscan.req")"
+assert_rc 1 "$ctl_rc" "a check that died without a result is reported"
+assert_contains "$ctl_out" "Проверка не запустилась" "in words"
+assert_eq "" "$(cat "$DNS_RUN_DIR/geoscan.req" 2>/dev/null)" "and the button may be pressed again at once"
+assert_contains "$(sed -n '/^dns_geo_scan_req()/,/^}/p' "$MODDIR/lib/dns.sh")" "setsid" "the check runs in its own session (the manager kills the command's group)"
 date +%s > "$DNS_RUN_DIR/geoscan.req"
 ctl dns-geo-scan
 assert_rc 3 "$ctl_rc" "still within the cooldown"
@@ -876,6 +884,17 @@ rm -f "$(dns_geo_scan_file).pin"
   printf '=gemini.google.com\ta.example,b.example\n'
 } > "$(dns_geo_scan_file)"
 assert_eq "a.example" "$(dns_geo_routes | cut -f2 | sort -u | tr '\n' ' ' | sed 's/ $//')" "a group of sites goes through one server"
+# Роутер сам обходит основные домены Gemini (geodns): вся группа остаётся
+# DNS сети — иначе домены не из списка шли через прокси роутера, а из
+# списка — через прокси модуля, и у Gemini два адреса выхода
+cp "$(dns_geo_scan_file)" "$SANDBOX/scan.keep"
+sed -i 's/^=gemini.google.com\t.*/=gemini.google.com\t-\tnet/' "$(dns_geo_scan_file)"
+r=$(dns_geo_routes | sort | tr '\n' '|')
+assert_contains "$r" "gemini.google.com	-|" "a domain the network DNS already bypasses stays with it"
+assert_contains "$r" "signaler-pa.clients6.google.com	-|" "and so does its whole group"
+dns_geo_pin_save
+assert_not_contains "$(cat "$DNS_GEO_SCAN_DIR/groups.pin" 2>/dev/null)" "@google -" "the network DNS is not pinned as a server"
+cp "$SANDBOX/scan.keep" "$(dns_geo_scan_file)"; rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).pin"
 { printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
   printf 'a.example\tok\t20\t1\t1\t0\ttls\n'
   printf 'b.example\tok\t30\t1\t1\t0\ttls\n'

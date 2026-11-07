@@ -1045,6 +1045,24 @@ func geoScan(servers, names []string, boot string, wait time.Duration) []scanRes
 	real := refAnswers(names, boot, refWait)
 	var wg sync.WaitGroup
 	res := make([]scanResult, len(servers))
+	// ответы DNS сети — чтобы узнать, не обходит ли он сам (см. netBypassMarks)
+	netAns := make([][]net.IP, len(names))
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var nw sync.WaitGroup
+		sem := make(chan struct{}, 32)
+		for i := range names {
+			nw.Add(1)
+			go func(i int) {
+				defer nw.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				netAns[i], _ = udpResolve(boot, names[i], refWait)
+			}(i)
+		}
+		nw.Wait()
+	}()
 	for i, s := range servers {
 		wg.Add(1)
 		go func(i int, s string) {
@@ -1105,7 +1123,77 @@ func geoScan(servers, names []string, boot string, wait time.Duration) []scanRes
 	if verifyCerts {
 		verifyRoutes(res, names, 4*time.Second)
 	}
+	lastNetBypass = netBypassMarks(netAns, real, res)
 	return res
+}
+
+// lastNetBypass — итог netBypassMarks последней проверки (по доменам)
+var lastNetBypass []bool
+
+// netBypassMarks — какие домены DNS сети обходит сам: его адрес не совпал с
+// настоящим и есть среди адресов прокси (или в их /24), которые серверы
+// обхода отдали в этой проверке. Дома DNS сети — роутер, и он может обходить
+// геоблок сам (geodns, AdGuard Home со своими серверами). Модуль отправлял
+// такие домены на свой сервер, а остальные домены сайта, которых нет в
+// списке, шли через роутер — к его прокси: у Gemini два адреса выхода в
+// одной сессии, и он отвечал ошибкой. Подмена провайдера (заглушка) с
+// адресами прокси не совпадает и обходом не считается
+func netBypassMarks(netAns, real [][]net.IP, res []scanResult) []bool {
+	px := make(map[string]bool)
+	for _, r := range res {
+		if !r.ok {
+			continue
+		}
+		for i, a := range r.ans {
+			if i < len(r.marks) && r.marks[i] == 'p' {
+				for _, ip := range a {
+					px[ip.String()] = true
+					if k := asnKey(ip); k != "" {
+						px["/"+k] = true
+					}
+				}
+			}
+		}
+	}
+	out := make([]bool, len(netAns))
+	for i, a := range netAns {
+		if len(a) == 0 {
+			continue
+		}
+		same := false
+		if i < len(real) {
+			for _, g := range a {
+				for _, r := range real[i] {
+					if g.Equal(r) {
+						same = true
+					}
+				}
+			}
+		}
+		if same {
+			continue
+		}
+		for _, g := range a {
+			if junkIP(g) {
+				continue
+			}
+			if px[g.String()] || (asnKey(g) != "" && px["/"+asnKey(g)]) {
+				out[i] = true
+				break
+			}
+		}
+	}
+	return out
+}
+
+// applyNetBypass — домены, которые DNS сети обходит сам, остаются ему
+func applyNetBypass(rt []route, nb []bool) []route {
+	for i := range rt {
+		if i < len(nb) && nb[i] {
+			rt[i] = route{direct: true, known: true, net: true}
+		}
+	}
+	return rt
 }
 
 // route — куда отправлять домен: серверы (индексы res) или direct — никто не
@@ -1114,6 +1202,7 @@ type route struct {
 	servers []int
 	direct  bool
 	known   bool
+	net     bool // DNS сети обходит сам (см. netBypassMarks)
 }
 
 // planRoutes — для каждого домена до max серверов, у которых для него
@@ -1249,6 +1338,8 @@ func formatRoutes(res []scanResult, names []string, rt []route) []string {
 	for i, x := range rt {
 		switch {
 		case !x.known:
+		case x.direct && x.net:
+			out = append(out, "="+names[i]+"\t-\tnet")
 		case x.direct:
 			out = append(out, "="+names[i]+"\t-")
 		default:

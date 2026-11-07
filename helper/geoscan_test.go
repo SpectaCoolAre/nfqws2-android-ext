@@ -523,3 +523,25 @@ func TestPlanRoutesGroupDomainKeepsAllCandidates(t *testing.T) {
 		t.Fatalf("в группе — все: %q", r)
 	}
 }
+
+// DNS сети (роутер) сам отдаёт адрес прокси — домен остаётся ему; заглушка
+// провайдера и настоящий адрес обходом не считаются
+func TestNetBypassMarks(t *testing.T) {
+	ip := func(s string) []net.IP { return []net.IP{net.ParseIP(s)} }
+	res := []scanResult{{ok: true, marks: []byte{'p', 'p', 's', 'p'},
+		ans: [][]net.IP{ip("45.114.60.100"), ip("45.114.60.100"), ip("142.250.1.1"), ip("206.223.246.75")}}}
+	real := [][]net.IP{ip("142.250.1.1"), ip("142.250.1.2"), ip("142.250.1.1"), ip("142.250.1.3")}
+	netAns := [][]net.IP{ip("45.114.60.100"), ip("188.186.157.49"), ip("142.250.1.1"), ip("206.223.246.9")}
+	got := netBypassMarks(netAns, real, res)
+	want := []bool{true, false, false, true}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("домен %d: %v, ждали %v", i, got[i], want[i])
+		}
+	}
+	rt := applyNetBypass([]route{{servers: []int{0}, known: true}, {servers: []int{0}, known: true}}, got)
+	out := formatRoutes(res, []string{"gemini.google.com", "facebook.com"}, rt)
+	if len(out) != 2 || out[0] != "=gemini.google.com\t-\tnet" || out[1] != "=facebook.com\t" {
+		t.Fatalf("маршруты: %q", out)
+	}
+}

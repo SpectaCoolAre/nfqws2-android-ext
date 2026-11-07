@@ -101,7 +101,7 @@ func main() {
 				log.Printf("-groups: %v", err)
 			}
 		}
-		for _, l := range formatRoutes(res, ss, planRoutes(res, len(ss), *maxRoute, wide)) {
+		for _, l := range formatRoutes(res, ss, applyNetBypass(planRoutes(res, len(ss), *maxRoute, wide), lastNetBypass)) {
 			fmt.Println(l)
 		}
 	default:

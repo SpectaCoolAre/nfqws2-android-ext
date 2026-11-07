@@ -56,7 +56,7 @@ DNS_GEO_CAND="$MODDIR/defaults/dns-geo-servers.list"
 # где чей прокси и свой ли у домена адрес, видно только по самому домену
 DNS_GEO_SCAN_DIR="$CONFDIR/dns/geoscan"
 DNS_GEO_SCAN_EVERY=14400     # полная проверка — раз в 4 часа
-DNS_GEO_SCAN_VER=3           # формат файла проверки: старый — проверить заново
+DNS_GEO_SCAN_VER=4           # формат файла проверки: старый — проверить заново
 # (3 — эталон «настоящих» адресов из честного DNS, а не DNS сети: в v2 дома за
 # роутером с обходом геоблока проверка шла по адресам прокси)
 # Эталон «настоящих» адресов для проверки серверов обхода: DoH Яндекса (его
@@ -222,10 +222,12 @@ dns_geo_routes() { # [save] -> «домен<TAB>сервер<TAB>протоко�
     # частая проверка свежее: сервер, не ответивший в ней, сейчас недоступен —
     # маршрут из полной проверки на него не ведёт (иначе домен получал ошибку)
     !/^[#=+!?]/ && $2 == "fail" && FILENAME == hf { delete pr[$1]; next }
-    /^=/ { d = substr($1, 2); if (!(d in rt)) ord[++n] = d; rt[d] = $2; if (FILENAME == hf || (d in basehot)) hot[d] = 1 }
+    /^=/ { d = substr($1, 2); if (!(d in rt)) ord[++n] = d; rt[d] = $2; netb[d] = ($3 == "net"); if (FILENAME == hf || (d in basehot)) hot[d] = 1 }
     END {
       for (k = 1; k <= n; k++) {
-        d = ord[k]; if (rt[d] == "-") continue
+        d = ord[k]
+        if (d in hot) { hall[site(d)]++; if (netb[d]) hnet[site(d)]++ }
+        if (rt[d] == "-") continue
         m = split(rt[d], hs, ","); nc[d] = 0
         for (i = 1; i <= m; i++) if ((hs[i] in pr) && !(hs[i] in off)) { c[d, ++nc[d]] = hs[i]; s = site(d); if (!((s, hs[i]) in cnt)) so[s, ++ns[s]] = hs[i]; cnt[s, hs[i]] += (d in hot) ? 1000 : 1 }
         if (d in hot) hotn[site(d)]++
@@ -260,9 +262,13 @@ dns_geo_routes() { # [save] -> «домен<TAB>сервер<TAB>протоко�
         else if (substr(s, 1, 1) == "@" && g != "" && (g in pr) && !(g in off) && ((s, g) in rst) && rst[s, g] < 2) best = g
         ch[s] = best
       }
+      # DNS сети (роутер) сам обходит большинство основных доменов группы —
+      # вся группа остаётся ему: свой сервер модуля для части доменов дал бы
+      # сайту второй адрес выхода (остальные домены Gemini идут через роутер)
+      for (s in hall) if (substr(s, 1, 1) == "@" && hnet[s] * 2 > hall[s]) ch[s] = "-"
       for (k = 1; k <= n; k++) {
         d = ord[k]; s = site(d)
-        if (rt[d] == "-") { print d "\t-"; continue }
+        if (rt[d] == "-" || ch[s] == "-") { print d "\t-"; continue }
         if (substr(s, 1, 1) == "@" && ch[s] != "") { print d "\t" ch[s] "\t" pr[ch[s]]; continue }
         if (!nc[d]) continue
         x = c[d, 1]
@@ -273,12 +279,13 @@ dns_geo_routes() { # [save] -> «домен<TAB>сервер<TAB>протоко�
         sub(/[[:space:]]*#.*/, "", l); gsub(/[[:space:]]/, "", l); d = tolower(l)
         if (d == "" || (d in rt) || (d in done)) continue
         done[d] = 1; s = site(d)
-        if (substr(s, 1, 1) == "@" && ch[s] != "") print d "\t" ch[s] "\t" pr[ch[s]]
+        if (ch[s] == "-") print d "\t-"
+        else if (substr(s, 1, 1) == "@" && ch[s] != "") print d "\t" ch[s] "\t" pr[ch[s]]
       }
       if (save == "save") {
         if ("*" in pin) print "* " pin["*"] > pf
-        for (s in ch) if (ch[s] != "") print s, ch[s] > pf
-        for (s in ch) if (substr(s, 1, 1) == "@" && ch[s] != "") gpin[s] = ch[s]
+        for (s in ch) if (ch[s] != "" && ch[s] != "-") print s, ch[s] > pf
+        for (s in ch) if (substr(s, 1, 1) == "@" && ch[s] != "" && ch[s] != "-") gpin[s] = ch[s]
         for (s in gpin) if (gpin[s] != "") print s, gpin[s] > gpf
       }
     }' "$f" $h
@@ -470,7 +477,8 @@ dns_geo_scan() { # [full|hot]
   routes=$(dns_geo_routes | awk -F'\t' '$2 == "-" { net++; next } { n[$2]++ }
     END { for (h in n) printf "%s%s — %d", (k++ ? ", " : ""), h, n[h]; if (net) printf "%sв DNS сети — %d", (k ? ", " : ""), net }')
   n=$(grep -c -v '^[#=+!?]' "$f" 2>/dev/null); ok=$(grep -c '	ok	' "$f" 2>/dev/null)
-  dns_log "проверка DNS обхода геоблока: ответили ${ok:-0} из ${n:-0}; пул — ${after:-пусто (остаётся Comss)}${routes:+; по доменам: $routes}"
+  local nb; nb=$(grep -c '^=.*	-	net$' "$f" 2>/dev/null)
+  dns_log "проверка DNS обхода геоблока: ответили ${ok:-0} из ${n:-0}; пул — ${after:-пусто (остаётся Comss)}${routes:+; по доменам: $routes}$([ "${nb:-0}" -gt 0 ] && echo "; DNS сети сам обходит доменов: $nb — они остаются ему")"
   [ "$before" != "$after$(dns_geo_routes | tr '\n\t' '  ')" ] && dns_apply_now
   echo "$(date +%s) ok" > "$DNS_RUN_DIR/geoscan.result"
   return 0
@@ -479,18 +487,28 @@ dns_geo_scan() { # [full|hot]
 # команды, — поэтому в фоне. Идёт другая (частая, по расписанию) — полная
 # после неё. -> время запроса: по нему dns-geo-scan-wait ждёт итог
 dns_geo_scan_req() {
-  local now lock="$DNS_RUN_DIR/geoscan.lock"
+  local now
   mkdir -p "$DNS_RUN_DIR"; now=$(date +%s)
-  echo "$now" > "$DNS_RUN_DIR/geoscan.req"; rm -f "$DNS_RUN_DIR/geoscan.result"
-  ( ( n=0
-    while [ -d "$lock" ] && [ "$n" -lt 150 ]; do sleep 1; n=$((n + 1)); done
-    dns_geo_scan full >/dev/null 2>&1
-    # проверка не дошла до итога (замок не снят, помощник упал) — ждущему
-    # всё равно нужен ответ
-    [ "$(cut -d' ' -f1 "$DNS_RUN_DIR/geoscan.result" 2>/dev/null)" -ge "$now" ] 2>/dev/null ||
-      echo "$(date +%s) fail" > "$DNS_RUN_DIR/geoscan.result"
-  ) </dev/null >/dev/null 2>&1 & ) 2>/dev/null
+  echo "$now" > "$DNS_RUN_DIR/geoscan.req"; rm -f "$DNS_RUN_DIR/geoscan.result" "$DNS_RUN_DIR/geoscan.pid"
+  # своя сессия (setsid), как у отладочного замера: менеджер снимает группу
+  # процессов команды WebUI, когда та закончилась, и фоновая проверка без
+  # setsid умирала, не начавшись, — кнопка молчала, а следующее нажатие
+  # упиралось в «слишком часто»
+  ( setsid sh "$MODDIR/bin/nfqws2-ctl" dns-geo-scan-run "$now" </dev/null >/dev/null 2>&1 & ) 2>/dev/null ||
+    ( sh "$MODDIR/bin/nfqws2-ctl" dns-geo-scan-run "$now" </dev/null >/dev/null 2>&1 & ) 2>/dev/null
   echo "$now"
+}
+# Сама ручная проверка (в фоне, см. dns_geo_scan_req): <время запроса>
+dns_geo_scan_run() {
+  local now="$1" n=0 lock="$DNS_RUN_DIR/geoscan.lock"
+  echo "$$" > "$DNS_RUN_DIR/geoscan.pid"
+  while [ -d "$lock" ] && [ "$n" -lt 150 ]; do sleep 1; n=$((n + 1)); done
+  dns_geo_scan full >/dev/null 2>&1
+  # проверка не дошла до итога (замок не снят, помощник упал) — ждущему
+  # всё равно нужен ответ
+  [ "$(cut -d' ' -f1 "$DNS_RUN_DIR/geoscan.result" 2>/dev/null)" -ge "$now" ] 2>/dev/null ||
+    echo "$(date +%s) fail" > "$DNS_RUN_DIR/geoscan.result"
+  rm -f "$DNS_RUN_DIR/geoscan.pid"
 }
 # Дождаться итога ручной проверки: <время запроса>. Код 0 — пул (текст для
 # тоста), 1 — ни один сервер не ответил, 2 — не дождались
@@ -504,6 +522,16 @@ dns_geo_scan_wait() {
         none) echo "$(M 'Ни один сервер не ответил — оставлен прежний выбор' 'No server answered — the previous choice stays'): $(dns_geo_label)" >&2; return 1 ;;
         *) M 'Проверка не завершилась — подробности в журнале DNS' 'The check did not finish — see the DNS log' >&2; echo >&2; return 1 ;;
       esac
+    fi
+    # фоновая проверка не запустилась или погибла без итога — не ждать зря
+    if [ "$n" -ge 5 ] && [ ! -f "$DNS_RUN_DIR/geoscan.result" ]; then
+      t=$(cat "$DNS_RUN_DIR/geoscan.pid" 2>/dev/null)
+      if [ -z "$t" ] || ! kill -0 "$t" 2>/dev/null; then
+        sleep 1; [ -f "$DNS_RUN_DIR/geoscan.result" ] && continue
+        M 'Проверка не запустилась — попробуйте ещё раз' 'The check did not start — try again' >&2; echo >&2
+        rm -f "$DNS_RUN_DIR/geoscan.req"
+        return 1
+      fi
     fi
     sleep 1; n=$((n + 1))
   done
@@ -1710,6 +1738,7 @@ dns_ctl() {
       [ -x "$HELPER_BIN" ] && [ -f "$DNS_GEO_CAND" ] || { echo "Проверка недоступна: нет nfqws2-helper" >&2; return 1; }
       dns_geo_scan_req ;;
     dns-geo-scan-wait) dns_geo_scan_wait "$1" ;;
+    dns-geo-scan-run) dns_geo_scan_run "$1" ;;
     # отключить или вернуть сервер обхода геоблока вручную: <сервер> <1|0>
     dns-geo-off)
       case "$1" in ''|*[!A-Za-z0-9.:-]*) echo "Неверное имя сервера" >&2; return 1 ;; esac

@@ -320,10 +320,14 @@ async function dnsGeoScan(){
   if(dnsGeoScanning){ toast(t('Проверка уже идёт')); return; }
   const r = await withBusy(['dns-geo-scan'], 15000);
   if(r.code){ toast(errText(r, 'Не удалось проверить')); return; }
+  /* проверка идёт в фоне: тост сразу и полоса сверху, пока ждём итог —
+     иначе первое нажатие выглядело так, будто ничего не произошло */
   dnsGeoScanning = true; renderDnsGeo();
+  toast(t('Проверяю серверы — до двух минут, можно уйти с экрана'));
+  busy(true, false);
   let w;
   try { w = await ctlx(['dns-geo-scan-wait', (r.out || '').trim()], 190000); }
-  finally { dnsGeoScanning = false; }
+  finally { dnsGeoScanning = false; busy(false, false); }
   toast(w.code ? errText(w, 'Не удалось проверить') : t('DNS для обхода геоблока: {0}', (w.out || '').trim()));
   if(await loadDnsState()) renderDns(); else renderDnsGeo();
 }
