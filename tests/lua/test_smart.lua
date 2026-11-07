@@ -818,5 +818,28 @@ check(rec(own, "cdn").cur == ownv, "a neighbour's success does not move it")
 section("slots are separate")
 check(okconn("b.example", "quic") == 1, "the same site in another slot starts fresh")
 
+section("hostfakesplit_alt: the parts go in the altorder=1 order of zapret 1")
+-- начало, фейковое имя (с порчей), конец, настоящее имя; порча — только у фейка
+do
+	local sent, keep = {}, { rawsend_payload_segmented, resolve_range, rawsend_opts, rawsend_opts_base, reconstruct_opts,
+		direction_check, payload_check, replay_first, replay_drop_set, direction_cutoff_opposite, genhost }
+	rawsend_payload_segmented = function(d, part, off, opts) sent[#sent + 1] = { part = part, off = off, fool = opts.fooling }; return true end
+	resolve_range = function() return { 5, 9 } end            -- имя — байты 5..9 (с 1)
+	rawsend_opts = function() return {} end; rawsend_opts_base = function() return {} end; reconstruct_opts = function() return {} end
+	direction_check = function() return true end; payload_check = function() return true end
+	replay_first = function() return true end; replay_drop_set = function() end; direction_cutoff_opposite = function() end
+	genhost = function(n, h) return string.rep("f", n) end
+	local data = "AAAAhosthBBBB"                           -- 4 байта, имя «hosth», 4 байта
+	local v = hostfakesplit_alt(nil, { dis = { tcp = {}, payload = data }, arg = { host = "www.google.com", tcp_ts = "-600000" }, l7payload = "tls_client_hello" })
+	local order = {}
+	for _, x in ipairs(sent) do order[#order + 1] = x.part .. "@" .. x.off end
+	check(table.concat(order, " ") == "AAAA@0 fffff@4 BBBB@9 hosth@4", "before, fake host, after, real host: " .. table.concat(order, " "))
+	check(sent[2].fool.tcp_ts == "-600000", "the fake host gets the fooling")
+	check(sent[1].fool.tcp_ts == nil and sent[4].fool.tcp_ts == nil, "the real parts do not")
+	check(v == VERDICT_DROP, "and the original packet is dropped")
+	rawsend_payload_segmented, resolve_range, rawsend_opts, rawsend_opts_base, reconstruct_opts,
+		direction_check, payload_check, replay_first, replay_drop_set, direction_cutoff_opposite, genhost = unpack(keep)
+end
+
 io.write("\n", failed == 0 and "PASS" or "FAIL", "  ", total - failed, " of ", total, " checks passed\n")
 os.exit(failed == 0 and 0 or 1)

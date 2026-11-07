@@ -1422,3 +1422,47 @@ function smartstat(ctx, desync)
 	-- решено — экземпляр больше не нужен этому соединению
 	if cs.done and ctx then instance_cutoff_shim(ctx, desync) end
 end
+
+-- ---------------------------------------------------------------- hostfakesplit_alt
+-- hostfakesplit с порядком частей из zapret 1 (--dpi-desync-hostfakesplit-mod=
+-- altorder=1): начало, фейковое имя, конец ClientHello, настоящее имя. В
+-- zapret2 параметра altorder у hostfakesplit нет, и стратегии, переведённые с
+-- zapret 1 (Flowseal ALT13 через eduncey, YouTube из Zapret-Manager), молча
+-- шли обычным порядком — фейк имени без порчи и не туда, куда задумано.
+-- По next_hostfakesplit из zapret2-next (MIT, (c) 2026 Zapret 2 NEXT
+-- contributors), который сам — по hostfakesplit bol-van (zapret2, MIT).
+-- Порча (tcp_ts, badsum…), repeats и ip_id — только у фейка, как у
+-- hostfakesplit; blob и optional — тоже как у него
+function hostfakesplit_alt(ctx, desync)
+	if not desync.dis.tcp then
+		if not desync.dis.icmp then instance_cutoff_shim(ctx, desync) end
+		return
+	end
+	direction_cutoff_opposite(ctx, desync)
+	if desync.arg.optional and desync.arg.blob and not blob_exist(desync, desync.arg.blob) then
+		DLOG("hostfakesplit_alt: blob '" .. desync.arg.blob .. "' not found. skipped")
+		return
+	end
+	local data = blob_or_def(desync, desync.arg.blob) or desync.reasm_data or desync.dis.payload
+	if #data > 0 and direction_check(desync) and payload_check(desync) then
+		if replay_first(desync) then
+			local pos = resolve_range(data, desync.l7payload, "host,endhost-1", true)
+			if pos then
+				DLOG("hostfakesplit_alt: host range " .. (pos[1] - 1) .. "-" .. (pos[2] - 1))
+				local orig = { rawsend = rawsend_opts_base(desync), reconstruct = {}, ipfrag = {},
+					ipid = desync.arg, fooling = { tcp_ts_up = desync.arg.tcp_ts_up } }
+				local fake = { rawsend = rawsend_opts(desync), reconstruct = reconstruct_opts(desync), ipfrag = {},
+					ipid = desync.arg, fooling = desync.arg }
+				if not rawsend_payload_segmented(desync, string.sub(data, 1, pos[1] - 1), 0, orig) then return VERDICT_PASS end
+				if not rawsend_payload_segmented(desync, genhost(pos[2] - pos[1] + 1, desync.arg.host), pos[1] - 1, fake) then return VERDICT_PASS end
+				if not rawsend_payload_segmented(desync, string.sub(data, pos[2] + 1), pos[2], orig) then return VERDICT_PASS end
+				if not rawsend_payload_segmented(desync, string.sub(data, pos[1], pos[2]), pos[1] - 1, orig) then return VERDICT_PASS end
+				replay_drop_set(desync)
+				return desync.arg.nodrop and VERDICT_PASS or VERDICT_DROP
+			end
+		end
+		if replay_drop(desync) then
+			return desync.arg.nodrop and VERDICT_PASS or VERDICT_DROP
+		end
+	end
+end
