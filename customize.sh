@@ -160,9 +160,10 @@ for src in "$MODPATH"/lists/*.list; do
     if [ ! -f "$dst" ]; then
       cp -f "$src" "$dst" || abort "! Failed to install $f"
     fi
-  elif [ "$f" = geoblock.list ] && [ -f "$dst" ] && ! cmp -s "$src" "$dst"; then
-    # список геоблока только пополняется (и кнопкой «Обновить»): свои домены
-    # пользователя остаются, новые из релиза (домены Gemini) — добавляются
+  elif { [ "$f" = geoblock.list ] || [ "$f" = google.list ]; } && [ -f "$dst" ] && ! cmp -s "$src" "$dst"; then
+    # списки геоблока и Google только пополняются (геоблока — и кнопкой
+    # «Обновить»): свои домены пользователя остаются, новые из релиза
+    # (домены Gemini, YouTube) — добавляются
     { grep '^#' "$src"; { grep -v '^#' "$dst"; grep -v '^#' "$src"; } | tr -d '\r' | awk 'NF' | sort -u; } > "$dst.new" &&
       mv -f "$dst.new" "$dst" || abort "! Failed to update $f"
   elif [ ! -f "$dst" ] || cmp -s "$src" "$dst"; then

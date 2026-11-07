@@ -397,4 +397,11 @@ section "tr works the same on Android"
 assert_eq "" "$(grep -rnE "tr [^|]*'[^']*\\\\[0-7]{3}-\\\\[0-7]{3}" "$REPO_DIR/bin" "$REPO_DIR/lib" "$REPO_DIR"/*.sh 2>/dev/null)" \
   "no tr range written as octal codes"
 
+# Список Google только пополняется при обновлении, как геоблока: свои домены
+# пользователя остаются, новые домены YouTube из релиза доходят и до него
+assert_contains "$(cat "$REPO_DIR/customize.sh")" '[ "$f" = google.list ]' "an update adds new Google domains to a list the user edited"
+for d in googlevideo.com ggpht.com ytimg.com youtubei.googleapis.com gvt1.com; do
+  assert_eq "1" "$(grep -cx "$d" "$REPO_DIR/lists/google.list")" "google.list has $d"
+done
+
 harness_finish

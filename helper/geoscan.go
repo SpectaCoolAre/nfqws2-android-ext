@@ -1131,8 +1131,9 @@ func geoScan(servers, names []string, boot string, wait time.Duration) []scanRes
 var lastNetBypass []bool
 
 // netBypassMarks — какие домены DNS сети обходит сам: его адрес не совпал с
-// настоящим и есть среди адресов прокси (или в их /24), которые серверы
-// обхода отдали в этой проверке. Дома DNS сети — роутер, и он может обходить
+// настоящим и есть среди адресов прокси, которые серверы обхода отдали в
+// этой проверке (только точное совпадение: по /24 в мобильной сети «обходом»
+// оказывались сайты на тех же облаках, что и прокси). Дома DNS сети — роутер, и он может обходить
 // геоблок сам (geodns, AdGuard Home со своими серверами). Модуль отправлял
 // такие домены на свой сервер, а остальные домены сайта, которых нет в
 // списке, шли через роутер — к его прокси: у Gemini два адреса выхода в
@@ -1148,9 +1149,6 @@ func netBypassMarks(netAns, real [][]net.IP, res []scanResult) []bool {
 			if i < len(r.marks) && r.marks[i] == 'p' {
 				for _, ip := range a {
 					px[ip.String()] = true
-					if k := asnKey(ip); k != "" {
-						px["/"+k] = true
-					}
 				}
 			}
 		}
@@ -1177,7 +1175,7 @@ func netBypassMarks(netAns, real [][]net.IP, res []scanResult) []bool {
 			if junkIP(g) {
 				continue
 			}
-			if px[g.String()] || (asnKey(g) != "" && px["/"+asnKey(g)]) {
+			if px[g.String()] {
 				out[i] = true
 				break
 			}

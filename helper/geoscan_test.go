@@ -533,7 +533,9 @@ func TestNetBypassMarks(t *testing.T) {
 	real := [][]net.IP{ip("142.250.1.1"), ip("142.250.1.2"), ip("142.250.1.1"), ip("142.250.1.3")}
 	netAns := [][]net.IP{ip("45.114.60.100"), ip("188.186.157.49"), ip("142.250.1.1"), ip("206.223.246.9")}
 	got := netBypassMarks(netAns, real, res)
-	want := []bool{true, false, false, true}
+	// последний — соседний адрес в той же /24, что и прокси: сайт на том же
+	// облаке, а не обход
+	want := []bool{true, false, false, false}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("домен %d: %v, ждали %v", i, got[i], want[i])
