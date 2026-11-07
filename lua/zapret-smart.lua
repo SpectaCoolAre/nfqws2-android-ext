@@ -161,6 +161,28 @@ local function shared_zone(two)
 end
 -- Ключ сайта. Без имени — адрес, но только там, где имени и не будет
 -- (mtproto и прочее): у TLS, HTTP и QUIC имя приходит с первым пакетом данных
+-- Видео YouTube приходит с двух разных мест: с кэшей Google в сети
+-- оператора (у МТС — 212.188.x) и с серверов самого Google. Через ТСПУ к ним
+-- проходят разные варианты (журналы 07.11.2026: на кэшах МТС hostfakesplit —
+-- 94 из 94, на серверах Google он же то и дело молчит), а сайт для умного
+-- режима был один — и вариант метался между ними. Теперь это два сайта:
+-- googlevideo.com (серверы Google) и googlevideo.com~isp (кэши оператора)
+local GV_ISP = "googlevideo.com~isp"
+local GV_OWN_FIRST = 43     -- Manager: googlevideo #1: в замере на серверах Google 15 из 15 дважды
+local GOOG4 = {}
+for _, n in ipairs({ "64.233", "64.15", "66.102", "66.249", "72.14", "74.125", "108.170", "108.177", "142.250", "142.251",
+	"172.217", "172.253", "173.194", "192.178", "192.179", "209.85", "216.58", "216.239" }) do GOOG4[n] = true end
+local function google_ip(ip)
+	if not ip then return true end
+	local a, b = ip:match("^(%d+)%.(%d+)%.")
+	if a then return GOOG4[a .. "." .. b] == true end
+	ip = ip:lower()
+	for _, p in ipairs({ "^2a00:1450:", "^2404:6800:", "^2607:f8b0:", "^2800:0?3f0:", "^2c0f:fb50:", "^2001:4860:" }) do
+		if ip:find(p) then return true end
+	end
+	return false
+end
+
 local function site_key(desync)
 	local h = desync.track and desync.track.hostname
 	if not h then
@@ -172,6 +194,7 @@ local function site_key(desync)
 	local two = dissect_nld(h, 2)
 	if not two then return h end
 	if shared_zone(two) then return dissect_nld(h, 3) or h end
+	if two == "googlevideo.com" and not google_ip(host_ip(desync)) then return GV_ISP end
 	return two
 end
 
@@ -559,6 +582,8 @@ local function check_net()
 	if t - SM.netcheck < NET_EVERY then return end
 	SM.netcheck = t
 	SM.pool_ext = readline(SM.home .. "/state/smart_pool") == "ext"
+	-- «не брать видео YouTube с кэшей оператора» (настройка разработчика)
+	SM.noggc = readline(SM.home .. "/state/smart_noggc") == "1"
 	SM.bench = tonumber((readline(SM.home .. "/state/smart_bench") or ""):match("^(%d+)") or "")
 	local net = readline(SM.home .. "/state/smart_net") or "default"
 	net = net:gsub("[^%w%-_.]", "_")
@@ -1188,11 +1213,31 @@ function smart(ctx, desync)
 		return verdict
 	end
 
+	-- кэш оператора, а видео с него брать не велено: соединение — в никуда
+	-- (TCP оборвётся сбросом сразу, QUIC — без ответа), и плеер уходит на
+	-- запасной узел — сервер Google. Как hosts для Instagram, только узел
+	-- выбирает сам YouTube. Без обучения
+	if host == GV_ISP and SM.noggc then
+		local tcp = desync.dis and desync.dis.tcp
+		if tcp and desync.outgoing then
+			local ip = norm_ip(host_ip(desync))
+			if ip then kill_conns({ kill_line(ip, tcp.th_sport) }) end
+			if t - (SM.noggc_said or 0) >= 60 then
+				SM.noggc_said = t
+				SJ(GV_ISP .. ": кэш оператора " .. tostring(ip) .. " — соединение оборвано (видео YouTube — только с серверов Google)")
+			end
+		end
+		return VERDICT_DROP
+	end
+
 	local key = slot .. "|" .. host
 	local pass = tonumber(desync.arg.pass)
 	local r = SM.db[key]
 	if not r then
-		r = newrec(leader(slot, n, tonumber(desync.arg.first) or 1, pass))
+		local first = leader(slot, n, tonumber(desync.arg.first) or 1, pass)
+		-- серверы Google для видео: старт — googlevideo #1, если он в наборе
+		if host == "googlevideo.com" and GV_OWN_FIRST <= n and allowed(slot, GV_OWN_FIRST) then first = GV_OWN_FIRST end
+		r = newrec(first)
 		SM.db[key] = r
 	end
 	-- сайт на варианте вне набора (пул выключили, набор сменился) — к стартовому

@@ -39,6 +39,7 @@ SMART_LEARN_FILE="$STATE_DIR/smart_learn"      # фоновое обучение
 SMART_LEARN_EVERY=120                          # сек между сайтами фонового обучения
 SMART_TURBO_FILE="$STATE_DIR/smart_turbo"      # до какого времени обучение ускорено (игра)
 SMART_POOL_FILE="$STATE_DIR/smart_pool"        # ext — умный режим перебирает и расширенный пул
+SMART_NOGGC_FILE="$STATE_DIR/smart_noggc"      # 1 — видео YouTube не брать с кэшей оператора
 SMART_BENCH_FILE="$STATE_DIR/smart_bench"      # идёт отладочный замер: число его исполнителей
 BENCH_DIR="$STATE_DIR/bench"                   # рабочий каталог замера
 SMART_TURBO_EVERY=15
@@ -128,6 +129,7 @@ set_defaults() {
   : "${SMART_LEARN:=1}"
   : "${WL_PAUSE:=1}"
   : "${SMART_POOL:=0}"
+  : "${SMART_NOGGC:=0}"
   : "${PUSH_FIX:=0}"
 }
 
@@ -1541,7 +1543,7 @@ render_strategy() {
 
 # Module settings (same across strategies) are carried over whole from the live
 # config on strategy change/reset. NFQWS_EXTRA_ARGS only for standard $MODE_* refs.
-USER_KEYS="DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL SMART_LEARN WL_PAUSE SMART_POOL PUSH_FIX NFQWS_EXTRA_ARGS"
+USER_KEYS="DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL SMART_LEARN WL_PAUSE SMART_POOL SMART_NOGGC PUSH_FIX NFQWS_EXTRA_ARGS"
 merge_user_keys() { # <generated config> <settings source config>  -> stdout
   awk -v keys=" $USER_KEYS " -v src="$2" '
     function quotes(str,   t) { t = str; return gsub(/"/, "", t) }
@@ -1752,6 +1754,8 @@ smart_net_update() {
 # в несколько секунд — перезапуск не нужен
 smart_pool_sync() {
   if [ "$SMART_POOL" = "1" ]; then echo ext > "$SMART_POOL_FILE"; else rm -f "$SMART_POOL_FILE"; fi
+  # видео YouTube только с серверов Google (кэши оператора — мимо): тоже читает оркестратор
+  if [ "$SMART_NOGGC" = "1" ]; then echo 1 > "$SMART_NOGGC_FILE"; else rm -f "$SMART_NOGGC_FILE"; fi
 }
 
 ssid_is_home() {

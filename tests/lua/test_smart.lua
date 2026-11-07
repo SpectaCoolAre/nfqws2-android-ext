@@ -851,6 +851,26 @@ do
 		direction_check, payload_check, replay_first, replay_drop_set, direction_cutoff_opposite, genhost = unpack(keep)
 end
 
+section("YouTube video: operator caches and Google's own servers are learned apart")
+later(4000); os.remove(HOME .. "/state/smart_kill")
+host_ip = function(d) return d.track.ip or "104.244.42.1" end
+local gi = conn("rr5---sn-jvhnu5g-n8vk.googlevideo.com"); gi.ip = "212.188.35.16"; packet(gi)
+local go = conn("r3---sn-5uaeznlz.googlevideo.com"); go.ip = "173.194.11.136"; packet(go)
+check(rec("googlevideo.com~isp") ~= nil, "a node in the operator's network (212.188.x) is its own site")
+check(rec("googlevideo.com") ~= nil, "a Google server (173.194.x) is another one")
+local g6 = conn("rr1---sn-x.googlevideo.com"); g6.ip = "2a00:1450:4010:c05::c6"; packet(g6)
+check(rec("googlevideo.com") ~= nil and rec("googlevideo.com~isp") ~= nil, "an IPv6 Google address is Google's own")
+-- «не брать видео с кэшей оператора»: соединение к кэшу оборвано сразу,
+-- плеер уходит на сервер Google
+writefile(HOME .. "/state/smart_noggc", "1\n"); later(120)
+local gk = conn("rr5---sn-jvhnu5g-n8vk.googlevideo.com"); gk.ip = "212.188.35.16"
+check(packet(gk) == nil, "with the setting on, nothing is sent to an operator cache")
+check((readall(HOME .. "/state/smart_kill") or ""):find("212.188.35.16 " .. gk.port .. "\n", 1, true) ~= nil, "and the connection is cut at once")
+check((readall(HOME .. "/logs/smart.log") or ""):find("кэш оператора 212.188.35.16 — соединение оборвано", 1, true) ~= nil, "the smart log says so")
+local gg = conn("r3---sn-5uaeznlz.googlevideo.com"); gg.ip = "173.194.11.136"
+check(packet(gg) ~= nil, "a Google server still gets the bypass")
+os.remove(HOME .. "/state/smart_noggc"); os.remove(HOME .. "/state/smart_kill"); later(120)
+
 section("failing addresses are reported to the module's DNS")
 -- прокси обхода геоблока проходит проверку DNS, а соединения приложений на нём
 -- рвутся: DNS модуля узнаёт это из state/smart_ipstat и уводит сайты

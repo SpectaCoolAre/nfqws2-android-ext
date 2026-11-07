@@ -217,5 +217,10 @@ ctl json-status
 assert_contains "$ctl_out" '"smart_pool":1' "and the WebUI sees it"
 ctl set SMART_POOL 0
 assert_no_file "$SMART_POOL_FILE" "off"
+# видео YouTube мимо кэшей оператора — тоже флагом для оркестратора, без перезапуска
+ctl set SMART_NOGGC 1
+assert_eq "1" "$(cat "$SMART_NOGGC_FILE" 2>/dev/null)" "YouTube only from Google servers: the orchestrator is told at once"
+ctl set SMART_NOGGC 0
+assert_no_file "$SMART_NOGGC_FILE" "and off"
 
 harness_finish

@@ -290,7 +290,7 @@ cmd_json_status() {
   # нечисловое значение обваливает весь JSON и убивает WebUI, поэтому проверяем каждое поле
   for v in appn cnt_user cnt_auto cnt_excl cnt_ipset cnt_ipset_excl cnt_apps cnt_rkn cnt_flowseal cnt_geo uptime upms qdrop \
            PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC AUTOSTART WATCHDOG IPV6_ENABLED LOG_LEVEL NFQUEUE_NUM HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT \
-           DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL WL_PAUSE SMART_POOL PUSH_FIX; do
+           DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL WL_PAUSE SMART_POOL SMART_NOGGC PUSH_FIX; do
     eval "case \"\${$v}\" in ''|*[!0-9]*) $v=0 ;; esac"
   done
 
@@ -307,7 +307,7 @@ cmd_json_status() {
 {"running":$run,"pid":"$pid","uptime":$uptime,"uptime_ms":$upms,"strategy":"$(json_str "$cur_strat")","version":"$(json_str "$ver")","mode":"$(json_str "$(current_mode)")",
 "pkt_limit_out":$PKT_LIMIT_OUT,"pkt_limit_in":$PKT_LIMIT_IN,"block_quic":$BLOCK_QUIC,"app_mode":"$(json_str "$APP_MODE")","autostart":$AUTOSTART,
 "ipv6":$IPV6_ENABLED,"log_level":$LOG_LEVEL,"qdrop":$qdrop,"queue":$NFQUEUE_NUM,"app_uids":$appn,
-"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":$DOH_BYPASS,"meta_quic":$META_QUIC_REJECT,"calls_bypass":$CALLS_BYPASS,"dns_smart":$DNS_SMART,"dns_geo":$DNS_GEO,"extra_rkn":$EXTRA_RKN,"extra_flowseal":$EXTRA_FLOWSEAL,"wl_pause":$WL_PAUSE,"smart_pool":$SMART_POOL,"push_fix":$PUSH_FIX,"dns_paused":"$dnspause","dns_home_pause":$([ -f "$DNS_HOME_FILE" ] && echo 1 || echo 0),"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")",
+"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"doh_bypass":$DOH_BYPASS,"meta_quic":$META_QUIC_REJECT,"calls_bypass":$CALLS_BYPASS,"dns_smart":$DNS_SMART,"dns_geo":$DNS_GEO,"extra_rkn":$EXTRA_RKN,"extra_flowseal":$EXTRA_FLOWSEAL,"wl_pause":$WL_PAUSE,"smart_pool":$SMART_POOL,"smart_noggc":$SMART_NOGGC,"push_fix":$PUSH_FIX,"dns_paused":"$dnspause","dns_home_pause":$([ -f "$DNS_HOME_FILE" ] && echo 1 || echo 0),"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")",
 "counts":{"user":$cnt_user,"auto":$cnt_auto,"exclude":$cnt_excl,"ipset":$cnt_ipset,"ipset_exclude":$cnt_ipset_excl,"apps":$cnt_apps,"rkn":$cnt_rkn,"flowseal":$cnt_flowseal,"geoblock":$cnt_geo}}
 JSON
 }
@@ -2544,7 +2544,7 @@ case "$1" in
 
   set)
     case "$2" in
-      BLOCK_QUIC|AUTOSTART|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|VPN_PAUSE|ENABLE_HOTSPOT|DOH_BYPASS|META_QUIC_REJECT|CALLS_BYPASS|DNS_PUSH|DNS_SMART|DNS_GEO|EXTRA_RKN|EXTRA_FLOWSEAL|SMART_LEARN|WL_PAUSE|SMART_POOL|PUSH_FIX) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
+      BLOCK_QUIC|AUTOSTART|IPV6_ENABLED|NAT_FIX|LOG_LEVEL|HOME_WIFI|VPN_PAUSE|ENABLE_HOTSPOT|DOH_BYPASS|META_QUIC_REJECT|CALLS_BYPASS|DNS_PUSH|DNS_SMART|DNS_GEO|EXTRA_RKN|EXTRA_FLOWSEAL|SMART_LEARN|WL_PAUSE|SMART_POOL|SMART_NOGGC|PUSH_FIX) case "$3" in 0|1) ;; *) echo "Допустимо 0 или 1" >&2; exit 1 ;; esac ;;
       PKT_LIMIT_OUT|PKT_LIMIT_IN) case "$3" in [1-9]|1[0-5]) ;; *) echo "Допустимо 1..15" >&2; exit 1 ;; esac ;;
       APP_MODE) case "$3" in off|include|exclude) ;; *) echo "off|include|exclude" >&2; exit 1 ;; esac ;;
       *) echo "Параметр $2 нельзя менять этой командой" >&2; exit 1 ;;
@@ -2569,7 +2569,7 @@ case "$1" in
       # фоновое обучение подхватит помощник умного режима сам
       AUTOSTART|SMART_LEARN) ;;
       # расширенный пул оркестратор подхватит сам, через несколько секунд
-      SMART_POOL) load_conf >/dev/null 2>&1; smart_pool_sync ;;
+      SMART_POOL|SMART_NOGGC) load_conf >/dev/null 2>&1; smart_pool_sync ;;
       # будильник пульса: включили — запускается, выключили — останавливается сразу
       PUSH_FIX) if [ "$3" = 1 ]; then sh "$SERVICE" ensure_watchdog >/dev/null 2>&1
         else p=$(cat "$PF_PIDFILE" 2>/dev/null); [ -n "$p" ] && kill "$p" 2>/dev/null; rm -f "$PF_PIDFILE"; fi ;;
