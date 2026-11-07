@@ -289,7 +289,8 @@ assert_contains "$(grep 'strategy=45' "$REPO_DIR/strategies/smart.conf")" "hostf
 # замер 07.11.2026 на МТС: Yv34 — 15 из 15, Yv35 — 3 из 5
 assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",43-45:" "Yv34 and googlevideo #1, #2 (15 of 15 in the benchmark) are in the base set"
 assert_not_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" "46" "Yv35 (3 of 5) waits in the extended pool"
-assert_eq "" "$(grep -o 'slot=tls[a-z_0-9]*:pass=14:base=[0-9,-]*' "$REPO_DIR/strategies/smart.conf" | grep -v 'base=1,4-6,8,')" "hardcorp74 #1 (95%, the most checks) is in the base set of every TLS slot"
+assert_eq "" "$(grep -o 'slot=tls[a-z_0-9]*:pass=14:base=[0-9,-]*' "$REPO_DIR/strategies/smart.conf" | grep -v 'base=1,4-6,8-9,')" "hardcorp74 #1 and #2 (96%, each opens sites no other does) are in the base set of every TLS slot"
+assert_contains "$(grep -o 'slot=tls:pass=14:base=[0-9,-]*:first=[0-9]*' "$REPO_DIR/strategies/smart.conf")" ":first=8" "ordinary TLS sites start on hardcorp74 #1: the most checks and its own sites in both benchmarks"
 # eduncey #4: fooling=ts из zapret 1 — порча и фейкового ClientHello, а не только
 # hostfakesplit; без неё фейк доходил до сервера — 16 сбросов из 16
 assert_contains "$(grep 'strategy=35' "$REPO_DIR/strategies/smart.conf" | grep 'fake:blob=tls_clienthello')" "tcp_ts=-600000" "eduncey #4: the fake ClientHello is fooled too"
