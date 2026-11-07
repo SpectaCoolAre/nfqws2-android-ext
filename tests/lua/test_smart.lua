@@ -841,5 +841,20 @@ do
 		direction_check, payload_check, replay_first, replay_drop_set, direction_cutoff_opposite, genhost = unpack(keep)
 end
 
+section("failing addresses are reported to the module's DNS")
+-- прокси обхода геоблока проходит проверку DNS, а соединения приложений на нём
+-- рвутся: DNS модуля узнаёт это из state/smart_ipstat и уводит сайты
+later(4000); os.remove(HOME .. "/state/smart_ipstat")
+host_ip = function(d) return d.track.ip or "104.244.42.1" end
+for i = 1, 4 do
+	later(); local c = conn("proxy" .. i .. ".example"); c.ip = "203.0.113.9"; packet(c)
+	for k = 1, 3 do packet(c, { retrans = true }) end
+end
+later(); local okc = conn("fine.example"); okc.ip = "203.0.113.10"; packet(okc); packet(okc, { incoming = true, seq = 18000 })
+later(40); tcptable({}); smart_watch()
+local ipst = readall(HOME .. "/state/smart_ipstat") or ""
+check(ipst:find("203.0.113.9 0 4 ", 1, true) ~= nil, "an address where every connection failed is written with its counts (" .. ipst:gsub("\n", "; ") .. ")")
+check(ipst:find("203.0.113.10 ", 1, true) == nil, "an address that works is not")
+
 io.write("\n", failed == 0 and "PASS" or "FAIL", "  ", total - failed, " of ", total, " checks passed\n")
 os.exit(failed == 0 and 0 or 1)

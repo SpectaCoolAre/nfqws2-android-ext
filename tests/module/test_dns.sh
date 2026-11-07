@@ -327,9 +327,13 @@ if [ -n "$(dns_net_servers | tr ',' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-
   pid=$(cat "$DNS_PIDFILE")
   dns_check
   assert_eq "$pid" "$(cat "$DNS_PIDFILE")" "one failed real lookup is not enough"
-  dns_check
+  # перезапуск — заглушкой: настоящий ждёт порт заглушки dnsproxy по 4 с и
+  # сдвигает время, а в песочнице с «interception follows the service» сам
+  # работает watchdog и попадает в окна следующих проверок замка
+  : > "$MOCK_DIR/restarts"
+  ( dns_proxy_stop() { echo stop >> "$MOCK_DIR/restarts"; }; dns_proxy_start() { echo start >> "$MOCK_DIR/restarts"; }; dns_check )
   assert_contains "$(tail -n 5 "$DNS_LOG")" "DNS модуля не разрешает www.google.com (127.0.0.1:x: rcode 2), а DNS сети" "two in a row while the network's DNS answers: logged with the reason"
-  [ "$(cat "$DNS_PIDFILE")" != "$pid" ]; assert_rc 0 $? "and dnsproxy is restarted"
+  assert_eq "stop start" "$(tr '\n' ' ' < "$MOCK_DIR/restarts" | sed 's/ $//')" "and dnsproxy is restarted"
   dns_check
   assert_not_contains "$(ipt_rules nfqws_dns nat)" "REDIRECT" "still dead after the restart: interception is lifted, the phone uses the network's DNS"
   assert_file "$DNS_RUN_DIR/failopen" "for a while"
@@ -938,6 +942,25 @@ assert_contains "$r" "signaler-pa.clients6.google.com	-|" "and so does its whole
 dns_geo_pin_save
 assert_not_contains "$(cat "$DNS_GEO_SCAN_DIR/groups.pin" 2>/dev/null)" "@google -" "the network DNS is not pinned as a server"
 cp "$SANDBOX/scan.keep" "$(dns_geo_scan_file)"; rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).pin"
+# Прокси сервера проходит проверку DNS, а соединения приложений на нём рвутся
+# (умный режим пишет исходы по адресам): сайты группы уходят на другой сервер
+printf '+a.example\t198.51.100.1\t3\n' >> "$(dns_geo_scan_file)"
+printf '198.51.100.1 1 7 %s\n' "$(date +%s)" > "$DNS_GEO_IPSTAT"
+r=$(dns_geo_routes | cut -f2 | sort -u | tr '\n' ' ')
+assert_not_contains "$r" "a.example" "a server whose proxy takes almost no connections (1 of 8) is not used"
+assert_contains "$(dns_geo_bad)" "a.example	198.51.100.1	1/8" "and it is named with its address and counts"
+dns_geo_bad_check
+assert_contains "$(tail -n 3 "$DNS_LOG")" "a.example — 1/8 удач" "the DNS log says why the routes change"
+printf '198.51.100.1 1 7 %s\n' "$(( $(date +%s) - 4000 ))" > "$DNS_GEO_IPSTAT"
+assert_contains "$(dns_geo_routes | cut -f2 | sort -u | tr '\n' ' ')" "a.example" "old counts (over half an hour) do not count"
+printf '198.51.100.1 3 7 %s\n' "$(date +%s)" > "$DNS_GEO_IPSTAT"
+assert_contains "$(dns_geo_routes | cut -f2 | sort -u | tr '\n' ' ')" "a.example" "nor does a proxy that works a third of the time"
+printf '198.51.100.1 0 9 %s\n' "$(date +%s)" > "$DNS_GEO_IPSTAT"
+printf '+b.example\t198.51.100.2\t3\n+c.example\t198.51.100.3\t3\n' >> "$(dns_geo_scan_file)"
+printf '198.51.100.1 0 9 %s\n198.51.100.2 0 9 %s\n198.51.100.3 0 9 %s\n' "$(date +%s)" "$(date +%s)" "$(date +%s)" > "$DNS_GEO_IPSTAT"
+assert_contains "$(dns_geo_routes | cut -f2 | sort -u | tr '\n' ' ')" "a.example" "all of them failing is the network, not the proxies: nothing is dropped"
+rm -f "$DNS_GEO_IPSTAT"
+cp "$SANDBOX/scan.keep" "$(dns_geo_scan_file)"; rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).pin" "$DNS_RUN_DIR/geo-bad.last"
 { printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
   printf 'a.example\tok\t20\t1\t1\t0\ttls\n'
   printf 'b.example\tok\t30\t1\t1\t0\ttls\n'

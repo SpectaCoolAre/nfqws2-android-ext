@@ -642,6 +642,46 @@ local function network_suspect(key, t)
 	return false
 end
 
+-- Исходы соединений по адресам сервера (state/smart_ipstat): их читает DNS
+-- модуля. Прокси обхода геоблока (Comss и др.) проходит проверку DNS — один
+-- TLS-сеанс помощника, — а соединения приложений на нём рвутся (журнал
+-- 07.11.2026: Claude через 199.189.255.234 — 4 ответа на 38 соединений). По
+-- этим исходам DNS уводит сайты на другой сервер обхода. Окно — полчаса;
+-- в файл — адреса с тремя ошибками и больше
+local IPSTAT_WIN = 1800
+local IPSTAT_MAX = 2048
+local function ipstat(c, ok, t)
+	if not (c and c.ip) or c.bench then return end
+	SM.ipst = SM.ipst or {}
+	local x = SM.ipst[c.ip]
+	if not x or t - x.t0 > IPSTAT_WIN then
+		if not x then
+			SM.nipst = (SM.nipst or 0) + 1
+			if SM.nipst > IPSTAT_MAX then SM.ipst, SM.nipst = {}, 1 end
+		end
+		x = { ok = 0, err = 0, t0 = t }
+		SM.ipst[c.ip] = x
+	end
+	if ok then x.ok = x.ok + 1 else x.err = x.err + 1 end
+	x.t = t
+	if not ok or x.err >= 3 then SM.ipdirty = true end
+end
+local function ipstat_flush(t)
+	if not SM.ipdirty or not SM.home or t - (SM.ipflush or 0) < 30 then return end
+	SM.ipdirty, SM.ipflush = false, t
+	local out = {}
+	for ip, x in pairs(SM.ipst or {}) do
+		if t - x.t > IPSTAT_WIN then SM.ipst[ip] = nil; SM.nipst = math.max(0, (SM.nipst or 1) - 1)
+		elseif x.err >= 3 then out[#out + 1] = ip .. " " .. x.ok .. " " .. x.err .. " " .. x.t end
+	end
+	local p = SM.home .. "/state/smart_ipstat"
+	local f = io.open(p .. ".tmp", "w")
+	if not f then return end
+	f:write(table.concat(out, "\n"), #out > 0 and "\n" or "")
+	f:close()
+	os.rename(p .. ".tmp", p)
+end
+
 local function count(r, slot, field, v, d, t)
 	age(r, t)
 	local s = netstat(slot)
@@ -735,6 +775,7 @@ end
 
 local function on_ok(slot, r, v, t, c)
 	count(r, slot, "ok", v, 1, t)
+	ipstat(c, true, t)
 	-- запоминаем только «особый» вариант: не лучший в сети (с лучшего новые
 	-- сайты и так начинают). На одних /24 у Cloudflare — тысячи чужих сайтов,
 	-- и общий вариант сети не должен из-за соседства подменяться чем попало
@@ -759,6 +800,9 @@ end
 -- после удачного начала: удача остаётся удачей (сайт на варианте открывался),
 -- а для «не похоже на блокировку» такие ошибки не в счёт
 local function on_err(slot, key, r, v, n, t, pass, mid, c)
+	-- исход по адресу — и тогда, когда сайт уже признан «не DPI»: так DNS
+	-- модуля узнаёт про прокси обхода геоблока, который не принимает соединений
+	if not mid and not SM.offline then ipstat(c, false, t) end
 	-- уже ясно, что дело не в DPI: не считаем и не перебираем
 	if r.nodpi and r.nodpi > t then return end
 	if network_suspect(key, t) then
@@ -989,6 +1033,7 @@ local function kill_line(ip, lp) return (ip:find(":") and "6 " or "4 ") .. ip ..
 function smart_watch()
 	local ok, err = pcall(function()
 		local t = now()
+		ipstat_flush(t)
 		-- без трафика наблюдатель спит: таблицу читать незачем. Но пока живы
 		-- удачные соединения — смотрит, сколько они проработали
 		local busy = t - SM.lastconn <= 120

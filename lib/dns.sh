@@ -73,6 +73,7 @@ DNS_GEO_HOT_DAYS=7
 DNS_GEO_HOT_BASE="chatgpt.com claude.ai gemini.google.com gamea.clashofclans.com accounts.supercell.com spotify.com"
 DNS_GEO_POOL=3                # кандидатов в пул и маршрут домена; в работе — один (закреплённый)
 DNS_GEO_OFF="$CONFDIR/dns/geo-off.list"   # серверы, отключённые вручную
+DNS_GEO_IPSTAT="$STATE_DIR/smart_ipstat"  # исходы соединений по адресам (умный режим)
 DNS_GEO_FALLBACK="https://dns.comss.one/dns-query"
 DNS_GEO_SCAN_COOL=300        # ручная проверка — не чаще раза в 5 минут
 DNS_GEO_UPD_COOL=1800        # обновление списка — раз в 30 минут
@@ -107,6 +108,50 @@ dns_push_on() { [ "${DNS_PUSH:-1}" = 1 ] && [ "$(dns_default_used)" != net ]; }
 dns_enabled() { [ -f "$DNS_ENABLED_FILE" ] && [ -f "$DNS_BIN" ]; }
 dns_smart_on() { [ "${DNS_SMART:-1}" = 1 ]; }
 dns_geo_on() { [ "${DNS_GEO:-1}" = 1 ]; }
+# Серверы обхода, чьи прокси в этой сети почти не принимают соединений: по
+# исходам соединений умного режима (DNS_GEO_IPSTAT, полчаса) — на адресе
+# прокси сервера (строки «+сервер адрес» проверки) не меньше 4 ошибок и
+# удач меньше пятой части. Проверка DNS тут не помогает: один TLS-сеанс
+# помощника проходит, а соединения приложений рвутся (Claude через прокси
+# Comss: 4 ответа на 38 соединений, отправка файла — минуты и ошибка)
+dns_geo_bad() {
+  local f; f=$(dns_geo_scan_file)
+  [ -s "$DNS_GEO_IPSTAT" ] && [ -s "$f" ] || return 0
+  awk -v now="$(date +%s)" '
+    FNR == NR { if ($3 >= 4 && $2 * 4 < $3 && now - $4 < 1800) bad[$1] = $2 "/" ($2 + $3); next }
+    /^\+/ { s = substr($1, 2); if (($2 in bad) && !(s in seen)) { seen[s] = 1; print s "\t" $2 "\t" bad[$2] } }' "$DNS_GEO_IPSTAT" "$f" 2>/dev/null
+}
+# Отключённые: вручную (DNS_GEO_OFF) и те, чьи прокси не принимают соединений
+# (dns_geo_bad) — если без них останется хоть один ответивший сервер.
+# -> путь к списку
+dns_geo_offf() {
+  local o="$DNS_RUN_DIR/geo-off.all" f; f=$(dns_geo_scan_file)
+  mkdir -p "$DNS_RUN_DIR"
+  { cat "$DNS_GEO_OFF" 2>/dev/null; echo; } > "$o"
+  dns_geo_bad | cut -f1 > "$o.bad"
+  if [ -s "$o.bad" ] && awk -F'\t' -v of="$o" -v bf="$o.bad" '
+      BEGIN { while ((getline l < of) > 0) off[l] = 1; while ((getline l < bf) > 0) off[l] = 1 }
+      !/^[#=+!?]/ && $2 == "ok" && $4 > 0 && !($1 in off) { n++ } END { exit !n }' "$f" 2>/dev/null; then
+    cat "$o.bad" >> "$o"
+  fi
+  rm -f "$o.bad"
+  echo "$o"
+}
+# Изменился список серверов с неработающими прокси — применить маршруты сразу
+dns_geo_bad_check() {
+  local now last
+  dns_geo_on || return 0
+  now=$(dns_geo_bad | sort)
+  last=$(cat "$DNS_RUN_DIR/geo-bad.last" 2>/dev/null)
+  [ "$now" = "$last" ] && return 0
+  printf '%s\n' "$now" > "$DNS_RUN_DIR/geo-bad.last"
+  if [ -n "$now" ]; then
+    dns_log "умный режим: прокси обхода почти не принимают соединений ($(printf '%s\n' "$now" | awk -F'\t' '{ printf "%s%s — %s удач", (k++ ? ", " : ""), $1, $3 }')) — их сайты уходят на другие серверы"
+  else
+    dns_log "умный режим: прокси обхода снова принимают соединения — маршруты как по проверке"
+  fi
+  ( dns_apply_now >/dev/null 2>&1 & ) 2>/dev/null
+}
 dns_geo_count() { list_count "$DNS_GEO_LIST"; }
 # DNS для обхода геоблока выбирает сам модуль, как умный режим обхода —
 # вариант: раз в несколько часов тихо проверяет DoT-серверы из defaults/dns-
@@ -145,7 +190,7 @@ dns_geo_scan_time() { sed -n '1s/^#time=\([0-9]*\).*/\1/p' "$(dns_geo_scan_file)
 # идут по своим маршрутам (dns_geo_routes)
 dns_geo_pool() { # -> «мс сервер протокол» пула, лучшие сверху (закреплённый — первым)
   local f; f=$(dns_geo_scan_file); [ -s "$f" ] || return 0
-  awk -F'\t' -v of="$DNS_GEO_OFF" -v pf="$f.pin" '
+  awk -F'\t' -v of="$(dns_geo_offf)" -v pf="$f.pin" '
     BEGIN { while ((getline l < of) > 0) { gsub(/[[:space:]]/, "", l); if (l != "") off[l] = 1 }
       while ((getline l < pf) > 0) { split(l, a, " "); if (a[1] == "*") pin = a[2] } }
     !/^[#=+!?]/ && $2 == "ok" && $4 > 0 && !($1 in off) { c++; h[c] = $1; ms[c] = $3; pr[c] = ($7 == "https" ? "https" : "tls"); p[c] = $4 + 0; if (p[c] > max) max = p[c] }
@@ -203,7 +248,7 @@ dns_geo_routes() { # [save] -> «домен<TAB>сервер<TAB>протоко�
   # У группы могут быть предпочтительные серверы (dns-geo-prefer.list): пока
   # хоть один из них обходит её основные домены, выбор — только среди них.
   # Отключённые вручную (DNS_GEO_OFF) не берутся
-  awk -F'\t' -v prf="$DNS_GEO_PREFER" -v of="$DNS_GEO_OFF" -v pf="$f.pin" -v gpf="$DNS_GEO_SCAN_DIR/groups.pin" -v rf="$f.rel" -v fresh="$fresh" -v base="$DNS_GEO_HOT_BASE" -v gf="$DNS_GEO_GROUPS" -v gl="$DNS_GEO_LIST" -v hf="$h" -v save="$1" '
+  awk -F'\t' -v prf="$DNS_GEO_PREFER" -v of="$(dns_geo_offf)" -v pf="$f.pin" -v gpf="$DNS_GEO_SCAN_DIR/groups.pin" -v rf="$f.rel" -v fresh="$fresh" -v base="$DNS_GEO_HOT_BASE" -v gf="$DNS_GEO_GROUPS" -v gl="$DNS_GEO_LIST" -v hf="$h" -v save="$1" '
     function site(d,   n, a, x, i) {
       for (x = d; ; x = substr(x, i + 1)) { if (x in grp) return "@" grp[x]; if ((i = index(x, ".")) == 0) break }
       n = split(d, a, "."); return n < 2 ? d : a[n - 1] "." a[n] }
@@ -1613,6 +1658,7 @@ _dns_check() {
       dns_rules_add || dns_fail "не удалось восстановить перехват"
     elif [ "${DNS_PROBE:-1}" = 1 ]; then
       dns_probe_check
+      dns_geo_bad_check
       gm=$(dns_geo_due); [ -n "$gm" ] && dns_geo_scan_bg "$gm"
     fi
   elif dns_pid >/dev/null || dns_rules_ok; then
