@@ -127,11 +127,15 @@ assert_contains "$args" "77.88.8.8:53" "public bootstrap servers are there as a 
 
 echo insta > "$DNS_DEFAULT_FILE"
 dns_build
-assert_contains "$(head -n 1 "$DNS_RUN_DIR/upstreams.txt")" "192.168.1.1:53" "smart mode: the rest goes to the network DNS whatever the default"
-assert_not_contains "$(grep -v '^\[/' "$DNS_RUN_DIR/upstreams.txt")" "opennameserver" "the chosen default is not used for it"
+# на МТС DNS по умолчанию ставили на Google, а умный режим молча брал DNS
+# сети: выбор пользователя действует и в умном режиме
+assert_eq "https://ns2.opennameserver.org/dns-query" "$(head -n 1 "$DNS_RUN_DIR/upstreams.txt")" "smart mode: a profile chosen as the default is used for the rest"
 assert_contains "$(cat "$DNS_RUN_DIR/upstreams.txt")" "[/instagram.com/" "the profiles with domains still work"
-assert_eq "net" "$(dns_default_used)" "the DNS in use is the network one"
-assert_eq "insta" "$(dns_default)" "and the choice is kept for the profiles mode"
+assert_eq "insta" "$(dns_default_used)" "the DNS in use is the chosen one"
+echo net > "$DNS_DEFAULT_FILE"
+dns_build
+assert_contains "$(head -n 1 "$DNS_RUN_DIR/upstreams.txt")" "192.168.1.1:53" "smart mode with the default left as is: the network DNS"
+echo insta > "$DNS_DEFAULT_FILE"
 DNS_GEO=0; export DNS_GEO
 dns_build
 assert_eq "https://ns2.opennameserver.org/dns-query" "$(head -n 1 "$DNS_RUN_DIR/upstreams.txt")" "a profile as the default puts its servers first"
@@ -939,6 +943,14 @@ sed -i 's/^=gemini.google.com\t.*/=gemini.google.com\t-\tnet/' "$(dns_geo_scan_f
 r=$(dns_geo_routes | sort | tr '\n' '|')
 assert_contains "$r" "gemini.google.com	-|" "a domain the network DNS already bypasses stays with it"
 assert_contains "$r" "signaler-pa.clients6.google.com	-|" "and so does its whole group"
+# DNS по умолчанию — не DNS сети (Google и т. п.): то, что DNS сети обходит
+# сам (дома — роутер), уходит к нему правилом, а не к DNS по умолчанию
+cp "$DNS_GEO_LIST" "$SANDBOX/geo.keep2"; echo gemini.google.com >> "$DNS_GEO_LIST"
+echo insta > "$DNS_DEFAULT_FILE"; dns_build
+assert_contains "$(grep '^\[/' "$DNS_RUN_DIR/upstreams.txt" | grep '\]192.168.1.1:53$')" "/gemini.google.com/" "with another default DNS, a domain the network DNS bypasses itself goes to it by a rule"
+echo net > "$DNS_DEFAULT_FILE"; dns_build
+assert_not_contains "$(grep '^\[/' "$DNS_RUN_DIR/upstreams.txt" | grep '\]192.168.1.1:53$')" "/gemini.google.com/" "with the network DNS as the default no rule is needed"
+cp "$SANDBOX/geo.keep2" "$DNS_GEO_LIST"
 dns_geo_pin_save
 assert_not_contains "$(cat "$DNS_GEO_SCAN_DIR/groups.pin" 2>/dev/null)" "@google -" "the network DNS is not pinned as a server"
 cp "$SANDBOX/scan.keep" "$(dns_geo_scan_file)"; rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).pin"

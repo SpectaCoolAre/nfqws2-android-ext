@@ -215,7 +215,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     eq(true, await page.evaluate(() => window.__dns.enabled), 'the main switch turns the feature on');
     eq(false, await page.evaluate(() => $('dns-body').classList.contains('is-disabled')), 'and enables the body');
     truthy((await page.textContent('#dns-general')).includes('Не активно'), 'the state says nothing is applied yet');
-    eq(false, (await page.textContent('#dns-general')).includes('DNS по умолчанию'), 'smart mode: no default DNS row — everything else goes to the network DNS');
+    truthy((await page.textContent('#dns-general')).includes('DNS по умолчанию'), 'smart mode: the default DNS row is there too (it is used in smart mode as well)');
     truthy((await page.textContent('#dns-warn')).includes('Домены из списка геоблока есть в профилях x (2)'), 'a profile that takes domains of the geo-block list away from the bypass is warned about');
     eq(false, (await page.textContent('#dns-warn')).includes('перехватывает'), 'interception of plain DNS is not mentioned while no profile has plain addresses — nothing to fix');
     truthy((await page.textContent('#dns-nav .list-item:has-text("Обход геоблока")')).includes('DNS: dns.fast.example'), 'the geo-block bypass line names the DNS in use');

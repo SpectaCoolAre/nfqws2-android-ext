@@ -454,11 +454,11 @@ function renderDns(){
   setHTML('dns-warn', !dnsLoaded ? '' : dnsWarnings() + (s.private === 'opportunistic' && on
     ? '<div class="helper">' + esc(t('«Частный DNS» Android — «Автоматически»: часть запросов может пройти мимо модуля. Надёжнее «Отключено».')) + '</div>'
     : ''), false);
-  // DNS по умолчанию — для режима «Профили»: в умном режиме остальное идёт
-  // через DNS сети
-  setHTML('dns-general', (dnsLoaded && on ? dnsStateRow() : '') + (dnsSmartMode() ? ''
-    : settingsRow({icon: 'globe', title: 'DNS по умолчанию', sub: dnsDefaultLabel() + ' · ' + t('для доменов вне профилей'),
-      on: 'pickDnsDefault(this)', menu: true})), false);
+  // DNS по умолчанию — в обоих режимах: в умном сервисы с геоблоком всё
+  // равно идут в DNS с обходом
+  setHTML('dns-general', (dnsLoaded && on ? dnsStateRow() : '') +
+    settingsRow({icon: 'globe', title: 'DNS по умолчанию', sub: dnsDefaultLabel() + ' · ' + t('для доменов вне профилей'),
+      on: 'pickDnsDefault(this)', menu: true}), false);
   const max = dnsMax('profiles', 32), n = dnsSt.profiles.length;
   setHTML('dns-profiles', n ? dnsSt.profiles.map(p => {
     const sel = dnsSel && dnsSel.has(p.id);

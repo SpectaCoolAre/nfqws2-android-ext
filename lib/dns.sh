@@ -650,12 +650,12 @@ dns_default() {
   case "$d" in ''|*[!a-z0-9_-]*) d=net ;; esac
   printf '%s' "$d"
 }
-# DNS по умолчанию, который работает сейчас. В умном режиме — всегда DNS сети:
-# он самый быстрый (кэши оператора рядом), а сервисы с геоблоком идут по
-# списку в DNS с обходом. Выбранный пользователем — для режима «Профили»
-dns_default_used() {
-  if [ "${DNS_GEO:-1}" = 1 ]; then printf net; else dns_default; fi
-}
+# DNS по умолчанию, который работает сейчас: выбранный пользователем профиль
+# или DNS сети. Раньше умный режим всегда брал DNS сети (кэши оператора
+# рядом), а выбор молча не действовал: на МТС его ставили на Google — и
+# ничего не менялось. Сервисы с геоблоком идут по списку в DNS с обходом в
+# любом случае, а домены, которые DNS сети обходит сам (роутер), — в DNS сети
+dns_default_used() { dns_default; }
 
 # Первый запуск: каталоги и пресеты. Пресеты кладутся обычными профилями,
 # выключенными: дальше пользователь меняет и удаляет их как свои.
@@ -890,7 +890,13 @@ dns_build() {
       cat "$DNS_GEO_NEVER" "$DNS_CDN_LIST" 2>/dev/null
       for gp in $DNS_PUSH_DOMAINS; do echo "$gp"; done
     } | tr -d '\r' > "$DNS_RUN_DIR/geo.skip"
-    { cat "$DNS_GEO_LIST"; dns_profile_domains geo; } | tr -d '\r' | tr 'A-Z' 'a-z' | awk -v sf="$DNS_RUN_DIR/geo.skip" -v rf="$DNS_RUN_DIR/geo.routes" -v srv="$gs" '
+    # домены, которые DNS сети обходит сам («-»): при DNS по умолчанию не из
+    # сети — явным правилом в DNS сети (дома это обход роутера)
+    local nu=""
+    if [ "$def" != net ]; then
+      nu=$(for ip in $(printf '%s' "$net" | tr ',' ' '); do dns_addr_port "$ip"; printf ' '; done | sed 's/ $//')
+    fi
+    { cat "$DNS_GEO_LIST"; dns_profile_domains geo; } | tr -d '\r' | tr 'A-Z' 'a-z' | awk -v sf="$DNS_RUN_DIR/geo.skip" -v rf="$DNS_RUN_DIR/geo.routes" -v srv="$gs" -v nu="$nu" '
       BEGIN {
         while ((getline l < sf) > 0) { sub(/[[:space:]]*#.*/, "", l); if (l != "") skip[l] = 1 }
         while ((getline l < rf) > 0) { t = index(l, "\t"); if (t) rt[substr(l, 1, t - 1)] = substr(l, t + 1) }
@@ -901,7 +907,9 @@ dns_build() {
       {
         d = $0; r = srv; hit = 0
         while (1) { if (d in skip) next; if ((d in rt) && !hit) { r = rt[d]; hit = 1 }; if ((i = index(d, ".")) == 0) break; d = substr(d, i + 1) }
-        # «-» — никто из серверов домен не обходит: он в DNS сети
+        # «-» — никто из серверов домен не обходит: он в DNS сети (при DNS по
+        # умолчанию не из сети — правилом к ней)
+        if (r == "-" && nu != "") r = nu
         if (r == "" || r == "-") next
         if (!(r in cnt)) { if (r != srv) key[++nk] = r; cnt[r] = 0 }
         dom[r, ++cnt[r]] = $0
