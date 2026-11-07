@@ -109,6 +109,10 @@ local FROZEN_RTX = 3        -- столько переотправок одно�
 local FROZEN_IN = 12        -- входящих пакетов: дальше их может не быть видно (лимит очереди), и счёт нечем обнулять
 local NET_STUCK_IPS = 3     -- застряло у стольких разных серверов разом — это сеть, а не DPI
 local SILENT_SEC = 4        -- сек: ClientHello дошёл (переотправок нет), а сервер молчит — DPI съел ответ
+-- Google (видео YouTube): кэш в сети оператора отвечает за 0,1–0,3 с, а
+-- каждая секунда ожидания — стоп-кадр в ленте; молчание дольше 2 с — уже не
+-- ответ (журнал 07.11.2026: сбои пачками, соединение висело 4–7 с до обрыва)
+local SILENT_SEC_SLOT = { google = 2 }
 local APP_UID = 10000       -- наблюдатель — только за приложениями
 local NODPI_VARIANTS = 4    -- ошибки хотя бы на стольких вариантах (и на половине набора), ни одной удачи — не DPI
 local NODPI_TIME = 6 * 3600
@@ -1095,7 +1099,7 @@ function smart_watch()
 		for lp, c in pairs(SM.conns) do
 			if c.cht and alive[lp] == c.ip and not stuck[lp] and not c.done and not c.ok
 				and not c.srv and c.maxin == 0 and (c.nin or 0) < FROZEN_IN and (c.nout or 0) < FROZEN_IN
-				and t - c.cht >= SILENT_SEC then
+				and t - c.cht >= (SILENT_SEC_SLOT[c.slot] or SILENT_SEC) then
 				silent[#silent + 1] = { c = c, ip = c.ip, lp = lp }
 			end
 		end
@@ -1109,7 +1113,7 @@ function smart_watch()
 				-- молчат разом несколько серверов — это сеть, а не DPI: не считаем
 				if r and sn < NET_STUCK_IPS and not (r.nodpi and r.nodpi > t) then
 					DLOG("smart: " .. c.key .. ": connection :" .. h.lp .. " silent after ClientHello on variant " .. c.v)
-					SJ(c.key .. ": сервер принял ClientHello и молчит — ошибка " .. vname(c.slot, c.v) .. ", обрываем")
+					SJ(c.key .. ": сервер " .. tostring(c.ip) .. " принял ClientHello и молчит — ошибка " .. vname(c.slot, c.v) .. ", обрываем")
 					on_err(c.slot, c.key, r, c.v, c.n, t, c.pass, false, c)
 				end
 				kill[#kill + 1] = kill_line(h.ip, h.lp)
@@ -1130,7 +1134,7 @@ function smart_watch()
 					-- застряло после удачного начала — обрыв посреди работы; ещё до
 					-- ответа сервера — ошибка начала соединения
 					DLOG("smart: " .. c.key .. ": connection :" .. h.lp .. " stuck " .. (c.ok and "mid-stream" or "before any answer") .. " on variant " .. c.v)
-					SJ(c.key .. ": соединение застряло " .. (c.ok and "посреди работы" or "до ответа сервера") .. " — ошибка " .. vname(c.slot, c.v) .. ", обрываем")
+					SJ(c.key .. ": соединение с " .. tostring(c.ip) .. " застряло " .. (c.ok and "посреди работы" or "до ответа сервера") .. " — ошибка " .. vname(c.slot, c.v) .. ", обрываем")
 					c.done, c.failed = true, true
 					on_err(c.slot, c.key, r, c.v, c.n, t, c.pass, c.ok, c)
 				end

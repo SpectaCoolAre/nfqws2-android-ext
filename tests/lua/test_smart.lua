@@ -743,9 +743,19 @@ check(next(rec("silent.example").err) == nil, "two seconds of silence are not ju
 later(3); smart_watch()
 check((rec("silent.example").err[sv] or 0) > 0, "after four seconds of silence the variant gets an error")
 check((readall(HOME .. "/state/smart_kill") or ""):find(" " .. sc.port .. "\n", 1, true) ~= nil, "and the connection is cut: the app reconnects at once")
-check((readall(HOME .. "/logs/smart.log") or ""):find("silent.example: сервер принял ClientHello и молчит", 1, true) ~= nil, "the smart log says so")
+check((readall(HOME .. "/logs/smart.log") or ""):find("silent.example: сервер 192.168.1.9 принял ClientHello и молчит", 1, true) ~= nil, "the smart log says so, with the server address")
 smart_watch()
 check((rec("silent.example").err[sv] or 0) <= 1.01, "counted once")
+-- видео YouTube: кэш оператора отвечает за доли секунды — молчание
+-- дольше 2 с уже стоп-кадр, обрываем раньше
+later(400); os.remove(HOME .. "/state/smart_kill")
+local gc = conn("video.example"); gc.ip = "192.168.1.9"; local gv = packet(gc, { slot = "google" })
+later(1); tcptable({ aliveline(gc.port, "0901A8C0") }); smart_watch()
+check(next(rec("video.example", "google").err) == nil, "Google: one second of silence is not judged yet")
+later(1); smart_watch()
+check((rec("video.example", "google").err[gv] or 0) > 0, "Google: after two seconds of silence the connection is cut")
+tcptable({})
+
 later(400); os.remove(HOME .. "/state/smart_kill")
 local tc = conn("talk.example"); tc.ip = "192.168.1.9"; packet(tc); packet(tc, { incoming = true, seq = 1, len = 1400 })
 later(5); tcptable({ aliveline(tc.port, "0901A8C0") }); smart_watch()
