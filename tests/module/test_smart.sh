@@ -286,7 +286,13 @@ gn=$(sed -n 's/^#@google \([0-9]*\) .*/\1/p' "$REPO_DIR/strategies/smart.conf" |
 assert_eq "$gv" "$gn" "the variants of the google slot and their names match"
 assert_contains "$(grep '^#@google 4[56] ' "$REPO_DIR/strategies/smart.conf")" "Manager: Yv35" "Yv34 and Yv35 of Zapret-Manager are in"
 assert_contains "$(grep 'strategy=45' "$REPO_DIR/strategies/smart.conf")" "hostfakesplit:host=google.com:tcp_flags_unset=ack:badsum:repeats=3" "Yv34: datanoack is tcp_flags_unset=ack in zapret2"
-assert_not_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",45" "they wait in the extended pool, not the base set"
+# замер 07.11.2026 на МТС: Yv34 — 15 из 15, Yv35 — 3 из 5
+assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",43-45:" "Yv34 and googlevideo #1, #2 (15 of 15 in the benchmark) are in the base set"
+assert_not_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" "46" "Yv35 (3 of 5) waits in the extended pool"
+assert_eq "" "$(grep -o 'slot=tls[a-z_0-9]*:pass=14:base=[0-9,-]*' "$REPO_DIR/strategies/smart.conf" | grep -v 'base=1,4-6,8,')" "hardcorp74 #1 (95%, the most checks) is in the base set of every TLS slot"
+# eduncey #4: fooling=ts из zapret 1 — порча и фейкового ClientHello, а не только
+# hostfakesplit; без неё фейк доходил до сервера — 16 сбросов из 16
+assert_contains "$(grep 'strategy=35' "$REPO_DIR/strategies/smart.conf" | grep 'fake:blob=tls_clienthello')" "tcp_ts=-600000" "eduncey #4: the fake ClientHello is fooled too"
 
 section "the active strategy says whether smart mode is on"
 ctl get-strategy
