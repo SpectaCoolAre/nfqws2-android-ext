@@ -114,4 +114,13 @@ assert_not_contains "$(grep -n 'nfqws2-helper' "$REPO_DIR/customize.sh")" 'abort
 assert_eq "" "$(grep -rn '/data/adb/modules/nfqws2-android\b' "$REPO_DIR/bin" "$REPO_DIR/lib" "$REPO_DIR/webroot/js" "$REPO_DIR/service.sh" "$REPO_DIR/uninstall.sh" "$REPO_DIR/action.sh" 2>/dev/null | grep -v 'nfqws2-android-ext')" \
   "no path points at the original module's directory"
 
+section "Discord voice ports in the strategies"
+# Голос Discord — UDP 50000–65535 (оригинал, d63e67e): профили только с
+# discord,stun берут весь диапазон. Профиль, где есть unknown, — нет: он слал
+# бы фейки любому UDP на высоких портах (игры, звонки других приложений)
+narrow=$(grep -l -- "--filter-udp=[0-9,-]*19294-19344,50000-50100 --filter-l7=\(discord,stun\|stun,discord\)\b" "$REPO_DIR"/strategies/*.conf | grep -v -e eduncey -e /exp.conf)
+assert_eq "" "$narrow" "a Discord-only profile takes the whole voice range"
+assert_eq "" "$(grep -h -- "50000-65535" "$REPO_DIR"/strategies/*.conf | grep "unknown")" "a profile that also takes unknown UDP keeps the narrow range"
+assert_contains "$(grep -h 'filter-udp' "$REPO_DIR/strategies/eduncey.conf")" "49152-49999,50101-65535" "eduncey keeps its own split of the ranges"
+
 harness_finish

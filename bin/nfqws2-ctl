@@ -1060,8 +1060,10 @@ probe_attempt() { # <вид> <путь к утилите> <host[/путь]>  -> 
   t1=$(uptime_cs)
   local redir
   redir=$(printf '%s\n' "$out" | sed -n 's/^REDIRECT_URL://p')
+  # https:///… — переадресация без имени узла: её отдаёт промежуточное
+  # устройство провайдера, а не сайт (dpi-detector v5.0.0-alpha.21)
   case "$redir" in
-    *rkn.gov.ru*|*eais.*|*warning.rt.ru*|*blackhole*|*zapret*)
+    *rkn.gov.ru*|*eais.*|*warning.rt.ru*|*blackhole*|*zapret*|https:///*)
       rm -f "$body"
       echo "fail isp_redir"
       return ;;
@@ -1084,6 +1086,8 @@ probe_attempt() { # <вид> <путь к утилите> <host[/путь]>  -> 
     curl:52:*|curl:56:*)
       case "$out" in
         *reset*|*Reset*|*connection\ reset*|*broken\ pipe*) echo "fail tls_rst" ;;
+        # вместо ответа сайта — не HTTP: отвечает промежуточное устройство
+        *invalid\ HTTP*|*Invalid\ HTTP*) echo "fail not_http" ;;
         *) echo "fail reset" ;;
       esac ;;
     curl:28:*|*:124:*|*:143:*)

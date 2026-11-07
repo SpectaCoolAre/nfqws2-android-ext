@@ -1,6 +1,6 @@
 {
   "about": "Что взято из чужих проектов и до какой версии. Обновляется при каждом переносе изменений; читает модуль «трекер обновлений» (extras/update-tracker).",
-  "updated": "2026-11-03",
+  "updated": "2026-11-07",
   "module": "nfqws2-android-ext v2.2.4",
   "projects": [
     {
@@ -9,10 +9,10 @@
       "repo": "Dea1hwa1cher/nfqws2-android",
       "branch": "main",
       "track": "commits",
-      "ref": "8e916c85d464ee9f0c6618592322469984abbeda",
-      "label": "v2.0.4",
-      "date": "2026-10-31T23:21:16Z",
-      "use": "Основа модуля: служба, правила iptables, WebUI, сборка. Списки отсюда не берём"
+      "ref": "342cb429a79fb04784c770b9682f539566152752",
+      "label": "v2.1.0",
+      "date": "2026-11-05T03:09:21+03:00",
+      "use": "Основа модуля: служба, правила iptables, WebUI, сборка. Списки отсюда не берём; из v2.0.5–v2.1.0 — признаки проверки доступности из dpi-detector (переадресация без имени узла, ответ не по HTTP) и порты голоса Discord 50000–65535"
     },
     {
       "id": "nfqws-menu",
@@ -21,9 +21,9 @@
       "branch": "main",
       "path": "strategies",
       "track": "commits",
-      "ref": "817c1a23b6648b34bbfaf9a6d60c42f7d1616bc2",
-      "label": "817c1a2",
-      "date": "2026-11-02T23:21:33Z",
+      "ref": "3a2557bbddf6ddb2416c8e7d0ea17a1ec48c2ff9",
+      "label": "3a2557b",
+      "date": "2026-11-06T19:58:52+00:00",
       "use": "Все стратегии (с IPv6 и без fastpath), списки lists/, блобы, hosts (пресет «nfqws-menu»)"
     },
     {
@@ -33,10 +33,10 @@
       "branch": "main",
       "path": "files/Zapret2/zapret2",
       "track": "commits",
-      "ref": "171791b26e3959de50b800a7c80365fc2b7f3fce",
-      "label": "v4.996",
-      "date": "2026-11-02T18:12:30Z",
-      "use": "Стратегия «Zapret Manager» и кандидаты умного режима (TLS 38–54, Google 21–42) из его готового конфига zapret2, Google 43–44 — «Отдельный обход googlevideo.com» (4.995). Следим только за этим файлом: изменения в нём — повод подтянуть стратегии"
+      "ref": "a0c509ed794c4293784646ccb10295525a8e95d5",
+      "label": "v5.040",
+      "date": "2026-11-07T05:02:02+05:00",
+      "use": "Стратегия «Zapret Manager» и кандидаты умного режима (TLS 38–54, Google 21–42) из его готового конфига zapret2, Google 43–44 — «Отдельный обход googlevideo.com» (4.995). Следим только за этим файлом: изменения в нём — повод подтянуть стратегии; варианты YouTube Yv34, Yv35 (Google 45–46) из files/StrYoutube"
     },
     {
       "id": "zapret2",
@@ -44,10 +44,10 @@
       "repo": "bol-van/zapret2",
       "branch": "master",
       "track": "releases",
-      "ref": "v1.0.6",
-      "date": "2026-10-31T18:18:27Z",
-      "use": "Бинарник nfqws2 (сборка в CI) — с master после v1.0.6 (исправление UAF, «!» в hostlist), скрипты lua/ — v1.0.6 (после релиза менялся только zapret-obfs.lua, его в модуле нет)",
-      "label": "v1.0.6+f924d79"
+      "ref": "v1.0.7",
+      "date": "2026-11-05T10:40:38+03:00",
+      "use": "Бинарник nfqws2 (сборка в CI) — v1.0.7; скрипты lua/ — v1.0.7 (zapret-lib, antidpi, auto совпадают с v1.0.6)",
+      "label": "v1.0.7"
     },
     {
       "id": "nfqws2-keenetic",
@@ -55,9 +55,10 @@
       "repo": "nfqws/nfqws2-keenetic",
       "branch": "master",
       "track": "releases",
-      "ref": "v1.3.2",
-      "date": "2026-10-21T11:04:27Z",
-      "use": "Патч TLS-сборки для CI, исправления стратегий (fake с blob), учёт conntrack для connbytes. Списки и скрипты под Keenetic не берём"
+      "ref": "v1.3.3",
+      "date": "2026-11-05T08:34:59+00:00",
+      "use": "Патч TLS-сборки для CI, исправления стратегий (fake с blob), учёт conntrack для connbytes. Списки и скрипты под Keenetic не берём",
+      "label": "v1.3.3"
     },
     {
       "id": "dnsproxy",

@@ -651,6 +651,22 @@ assert_match "$ctl_out" "R	[123]	fail isp_redir" "a block page of the ISP instea
 ctl domain-check rich.example
 assert_match "$ctl_out" "R	[123]	ok" "a big page that only mentions blocking is the site itself"
 assert_eq "" "$(ls "$STATE_DIR"/probe.body.* 2>/dev/null)" "page bodies are removed after the attempt"
+# dpi-detector v5.0.0-alpha.21: переадресация без имени узла (https:///…) —
+# заглушка промежуточного устройства; не-HTTP вместо ответа сайта — подмена
+cat > "$MOCKBIN/curl" <<'X'
+#!/bin/sh
+o=""; for a; do [ "$p" = "-o" ] && o="$a"; p="$a"; done
+case "$a" in
+  *hostless.example*) : > "$o"; printf '\nREDIRECT_URL:https:///block\n'; exit 47 ;;
+  *nothttp.example*) : > "$o"; echo "curl: (56) Received HTTP/0.9 when not allowed: Invalid HTTP header" >&2; exit 56 ;;
+esac
+exit 0
+X
+chmod 0755 "$MOCKBIN/curl"
+ctl domain-check hostless.example
+assert_match "$ctl_out" "R	[123]	fail isp_redir" "a redirect with no host (https:///…) is the ISP's box, not the site"
+ctl domain-check nothttp.example
+assert_match "$ctl_out" "R	[123]	fail not_http" "an answer that is not HTTP at all is the ISP's box too"
 
 # Повторный запрос по тому же соединению: curl с двумя адресами, по строке
 # «код соединений» на каждый. Второй без ответа по старому соединению — заморожено

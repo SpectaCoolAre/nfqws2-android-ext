@@ -63,6 +63,7 @@ eq('TLS RST (сброс ClientHello)', probeReason.tls_rst, 'tls_rst maps to Cli
 eq('TLS Alert (SNI блок)', probeReason.tls_alert, 'tls_alert maps to SNI block');
 eq('Тихий сброс (Drop)', probeReason.drop, 'drop maps to silent TSPU drop');
 eq('Заглушка провайдера (RKN)', probeReason.isp_redir, 'isp_redir maps to RKN block page');
+eq('Ответ не по HTTP (подмена провайдером)', probeReason.not_http, 'not_http maps to a non-HTTP answer of the ISP box (dpi-detector v5.0.0-alpha.21)');
 eq('Подмена сертификата (MITM)', probeReason.tls_mitm, 'tls_mitm maps to MITM');
 eq('Подмена ответа (Spoof)', probeReason.tls_spoof, 'tls_spoof maps to response spoof');
 eq('Ошибка DNS', probeReason.dns_fail, 'dns_fail maps to DNS failure');

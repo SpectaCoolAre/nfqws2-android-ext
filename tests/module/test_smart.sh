@@ -279,6 +279,15 @@ assert_no_file "$SK_PIDFILE" "stopping the service stops the helper"
 assert_no_file "$MOCK_IPT_STORE/iptables/filter/nfqws_smartkill" "and removes its chain"
 assert_not_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/OUTPUT" 2>/dev/null)" "nfqws_smartkill" "and the hook"
 
+section "every Google variant has a name and every name a variant"
+# Zapret-Manager 5.040 (StrYoutube Yv34, Yv35) — варианты 45, 46 слота google
+gv=$(awk '/^SMART_GOOGLE="/{f=1} f{ while (match($0, /strategy=[0-9]+/)) { print substr($0, RSTART + 9, RLENGTH - 9); $0 = substr($0, RSTART + RLENGTH) } } f && /"$/ && !/^SMART_GOOGLE="/{f=0}' "$REPO_DIR/strategies/smart.conf" | sort -un | tr '\n' ' ')
+gn=$(sed -n 's/^#@google \([0-9]*\) .*/\1/p' "$REPO_DIR/strategies/smart.conf" | sort -un | tr '\n' ' ')
+assert_eq "$gv" "$gn" "the variants of the google slot and their names match"
+assert_contains "$(grep '^#@google 4[56] ' "$REPO_DIR/strategies/smart.conf")" "Manager: Yv35" "Yv34 and Yv35 of Zapret-Manager are in"
+assert_contains "$(grep 'strategy=45' "$REPO_DIR/strategies/smart.conf")" "hostfakesplit:host=google.com:tcp_flags_unset=ack:badsum:repeats=3" "Yv34: datanoack is tcp_flags_unset=ack in zapret2"
+assert_not_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",45" "they wait in the extended pool, not the base set"
+
 section "the active strategy says whether smart mode is on"
 ctl get-strategy
 assert_eq "smart" "$ctl_out" "smart mode is the smart strategy (the WebUI reads the mode from it)"

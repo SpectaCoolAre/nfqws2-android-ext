@@ -534,7 +534,7 @@ section "geo-block bypass: domains from the list go to the bypass DNS"
 # Как nameserver-policy в mihomo: маршрут — по списку доменов (geoblock.list),
 # обычные правила dnsproxy; ничего перед ним, никакой догадки по ответу
 : > "$DNS_ENABLED_FILE"
-printf '# сервисы с геоблоком\nchatgpt.com\nClaude.ai\ninstagram.com\nvk.com\nmail.ru\ngooglevideo.com\nmtalk.google.com\nchatgpt.com\n' > "$DNS_GEO_LIST"
+printf '# сервисы с геоблоком\nchatgpt.com\nClaude.ai\ninstagram.com\nvk.com\nmail.ru\ngooglevideo.com\nmtalk.google.com\nchatgpt.com\n4pda.to\n' > "$DNS_GEO_LIST"
 : > "$DNS_RUN_DIR/geo.args"; : > "$DNS_RUN_DIR/main_port"
 dns_build
 geo=$(grep '/chatgpt.com/' "$DNS_RUN_DIR/upstreams.txt")
@@ -552,6 +552,7 @@ assert_eq "1" "$(printf '%s\n' "$geo" | head -n 1 | grep -o '/chatgpt.com/' | gr
 assert_not_contains "$geo" "instagram.com" "an enabled profile's domain keeps the profile's route"
 assert_not_contains "$geo" "vk.com" "Russian services never go around"
 assert_not_contains "$geo" "mail.ru" "nor anything in .ru"
+assert_not_contains "$geo" "4pda" "nor 4pda: itdoginfo lists it, but in Russia it opens directly, and through a bypass proxy it did not open at all"
 assert_not_contains "$geo" "googlevideo.com" "nor video and CDN"
 assert_not_contains "$geo" "mtalk.google.com" "nor Google push notifications"
 assert_contains "$(head -n 1 "$DNS_RUN_DIR/upstreams.txt")" "192.168.1.1:53" "everything else — the network DNS"

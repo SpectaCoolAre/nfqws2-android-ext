@@ -39,5 +39,9 @@ kinopoisk.ru
 rutube.ru
 dzen.ru
 2gis.com
+# 4pda — российский форум, в Россию открывается напрямую; в список геоблока
+# itdoginfo он попадает, и через прокси DNS с обходом не открывался вовсе
+4pda.to
+4pda.ws
 # видео YouTube — ближний кэш оператора из DNS сети
 googlevideo.com
