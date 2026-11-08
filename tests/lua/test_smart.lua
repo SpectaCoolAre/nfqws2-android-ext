@@ -860,16 +860,33 @@ check(rec("googlevideo.com~isp") ~= nil, "a node in the operator's network (212.
 check(rec("googlevideo.com") ~= nil, "a Google server (173.194.x) is another one")
 local g6 = conn("rr1---sn-x.googlevideo.com"); g6.ip = "2a00:1450:4010:c05::c6"; packet(g6)
 check(rec("googlevideo.com") ~= nil and rec("googlevideo.com~isp") ~= nil, "an IPv6 Google address is Google's own")
--- «не брать видео с кэшей оператора»: соединение к кэшу оборвано сразу,
--- плеер уходит на сервер Google
-writefile(HOME .. "/state/smart_noggc", "1\n"); later(120)
-local gk = conn("rr5---sn-jvhnu5g-n8vk.googlevideo.com"); gk.ip = "212.188.35.16"
-check(packet(gk) == nil, "with the setting on, nothing is sent to an operator cache")
-check((readall(HOME .. "/state/smart_kill") or ""):find("212.188.35.16 " .. gk.port .. "\n", 1, true) ~= nil, "and the connection is cut at once")
-check((readall(HOME .. "/logs/smart.log") or ""):find("кэш оператора 212.188.35.16 — соединение оборвано", 1, true) ~= nil, "the smart log says so")
-local gg = conn("r3---sn-5uaeznlz.googlevideo.com"); gg.ip = "173.194.11.136"
-check(packet(gg) ~= nil, "a Google server still gets the bypass")
-os.remove(HOME .. "/state/smart_noggc"); os.remove(HOME .. "/state/smart_kill"); later(120)
+-- Подбор стабильных узлов видео: узел, что принимает соединение, но видео не
+-- отдаёт (короткий ответ и закрытие), — соединения к нему идут на узел,
+-- который в это же время отдаёт видео
+writefile(HOME .. "/state/smart_gvpick", "1\n"); later(120); os.remove(HOME .. "/state/smart_gvnat")
+local function gvbig(ip) later(5); local c = conn("rr5---sn-abc-x1.googlevideo.com"); c.ip = ip; packet(c, { slot = "google" }); packet(c, { incoming = true, seq = 18000, slot = "google" }) end
+local function gvshort(ip) later(5); local c = conn("rr8---sn-abc-x1.googlevideo.com"); c.ip = ip; packet(c, { slot = "google" }); packet(c, { incoming = true, seq = 1, len = 1500, slot = "google" }); packet(c, { incoming = true, seq = 1501, len = 0, fin = true, slot = "google" }) end
+gvbig("10.9.9.1"); gvbig("10.9.9.1"); gvshort("10.9.9.1")
+for i = 1, 3 do gvshort("10.9.9.2") end
+check(readall(HOME .. "/state/smart_gvnat") == nil, "three short answers are not enough yet")
+gvshort("10.9.9.2")
+check((readall(HOME .. "/state/smart_gvnat") or ""):find("^10.9.9.2 10.9.9.1 ") ~= nil, "a node with four short answers and no video goes to a node that gives video")
+check((readall(HOME .. "/logs/smart.log") or ""):find("узел 10.9.9.2 не отдаёт видео (коротких ответов 4, роликов 0) — 15 мин соединения к нему идут на 10.9.9.1", 1, true) ~= nil, "the smart log says so")
+for i = 1, 4 do gvshort("173.194.9.9") end
+check((readall(HOME .. "/state/smart_gvnat") or ""):find("173.194.9.9", 1, true) == nil, "a Google server is not sent to an operator cache (another kind of node)")
+check((readall(HOME .. "/logs/smart.log") or ""):find("узел 173.194.9.9 не отдаёт видео", 1, true) ~= nil, "and it is said that there is no stable node to replace it yet")
+gvbig("10.9.9.3"); gvbig("10.9.9.3")
+for i = 1, 3 do gvshort("10.9.9.4") end; gvbig("10.9.9.4"); gvshort("10.9.9.4")
+check((readall(HOME .. "/state/smart_gvnat") or ""):find("10.9.9.4", 1, true) == nil, "a node that gave video even once is not called bad")
+later(900); tcptable({}); smart_watch()
+check((readall(HOME .. "/state/smart_gvnat") or "") == "", "after 15 minutes the redirect is lifted and the node is checked again")
+check((readall(HOME .. "/logs/smart.log") or ""):find("узел 10.9.9.2 — перенаправление снято", 1, true) ~= nil, "and the smart log says so")
+gvbig("10.9.9.1"); gvbig("10.9.9.1")
+for i = 1, 4 do gvshort("10.9.9.2") end
+check((readall(HOME .. "/logs/smart.log") or ""):find("— 30 мин соединения к нему идут на", 1, true) ~= nil, "still bad: the next redirect is longer")
+writefile(HOME .. "/state/smart_gvpick", "0\n"); later(120); gvbig("10.9.9.1"); smart_watch()
+check((readall(HOME .. "/state/smart_gvnat") or "") == "", "the setting off: no redirects")
+os.remove(HOME .. "/state/smart_gvpick"); os.remove(HOME .. "/state/smart_gvnat"); later(120)
 
 section("failing addresses are reported to the module's DNS")
 -- прокси обхода геоблока проходит проверку DNS, а соединения приложений на нём

@@ -1033,7 +1033,7 @@ EN = {
   "Остановлена": "Stopped",
   "Запустить заново": "Run again",
   "Расширенный пул умного режима": "Smart mode extended pool",
-  "YouTube: видео только с серверов Google, мимо кэшей оператора": "YouTube: video only from Google servers, not the operator caches",
+  "YouTube: подбор стабильных узлов видео": "YouTube: pick stable video nodes",
   "Сайты сети через все варианты: что открывает, быстрее и надёжнее": "This network's sites through every variant: what opens them, faster and more reliably",
   "Отладочный замер": "Debug benchmark",
   "Сайты, выученные в этой сети, по очереди открываются на каждом варианте из набора замера (в этой сборке — кандидаты Zapret Manager против лучших прежних), затем лучшие варианты — ещё дважды. Это занимает 30–60 минут и расходует трафик; в обучение замер не попадает. Умный режим должен работать.": "The sites learned on this network are opened one by one on every variant of the benchmark set (in this build — Zapret Manager candidates against the best old ones), then the best variants twice more. It takes 30–60 minutes and uses traffic; the benchmark does not go into learning. Smart mode must be running.",

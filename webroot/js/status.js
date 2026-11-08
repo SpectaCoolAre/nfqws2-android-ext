@@ -305,7 +305,7 @@ const DEV_SW = [
   ['CALLS_BYPASS', 'Обход звонков (не тестировалось)', 'calls_bypass'],
   ['WL_PAUSE', 'Отключать при белых списках', 'wl_pause'],
   ['SMART_POOL', 'Расширенный пул умного режима', 'smart_pool'],
-  ['SMART_NOGGC', 'YouTube: видео только с серверов Google, мимо кэшей оператора', 'smart_noggc'],
+  ['SMART_GVPICK', 'YouTube: подбор стабильных узлов видео', 'smart_gvpick'],
   ['PUSH_FIX', 'Вылечить уведомления (пульс Google в мобильной сети)', 'push_fix']
 ];
 /* Переключатели разработчика, доступные в этой сборке */

@@ -581,8 +581,8 @@ local function check_net()
 	if t - SM.netcheck < NET_EVERY then return end
 	SM.netcheck = t
 	SM.pool_ext = readline(SM.home .. "/state/smart_pool") == "ext"
-	-- «не брать видео YouTube с кэшей оператора» (настройка разработчика)
-	SM.noggc = readline(SM.home .. "/state/smart_noggc") == "1"
+	-- подбор стабильных узлов видео YouTube (настройка разработчика)
+	SM.gvpick = readline(SM.home .. "/state/smart_gvpick") == "1"
 	SM.bench = tonumber((readline(SM.home .. "/state/smart_bench") or ""):match("^(%d+)") or "")
 	local net = readline(SM.home .. "/state/smart_net") or "default"
 	net = net:gsub("[^%w%-_.]", "_")
@@ -606,6 +606,9 @@ local function check_net()
 	end
 	restat()
 	SM.conns = {}
+	-- узлы видео другой сети — другие: и счёт, и перенаправления заново
+	SM.gv, SM.gvr = {}, {}
+	if SM.home then os.remove(SM.home .. "/state/smart_gvnat") end
 end
 
 -- Лучший вариант в сети: самая высокая доля удач среди тех, у кого их хотя бы
@@ -818,6 +821,96 @@ local function near_get(slot, ip, n, t)
 	if base > n or not allowed(slot, base) then return nil end
 	if x.v > MUT_BASE and not mutant(slot, x.v) then return nil end
 	return x.v
+end
+
+-- ── Подбор стабильных узлов видео YouTube ───────────────────────────────
+-- Видео идёт с узлов rrN---sn-….googlevideo.com — кэшей Google в сети
+-- оператора или серверов самого Google; узел назначает YouTube. Часть узлов
+-- принимает соединение и шифрование, но видео не отдаёт: короткий ответ
+-- (1–7 КБ) — и закрытие. Плеер ждёт и повторяет, а ролик стоит 5–20 с
+-- (журналы 07.11.2026, МТС: 4 узла из 9 — 22 соединения и ни одного ролика,
+-- соседние в это время отдавали мегабайты). Узел, давший за 10 минут не
+-- меньше GV_BAD коротких закрытий и ни одного соединения с видео (больше
+-- GV_BIG), — плохой: новые соединения к нему служба перенаправляет (DNAT) на
+-- стабильный узел того же рода (кэш оператора или сервер Google), ближе —
+-- из той же /24, потом /16. Сертификат у всех узлов общий, *.googlevideo.com.
+-- Через GV_HOLD перенаправление снимается и узел проверяется снова; не ожил
+-- — следующее дольше. Не зависит ни от оператора, ни от DNS
+local GV_BIG = 16000
+local GV_WIN = 600
+local GV_BAD = 4
+local GV_HOLD = { 900, 1800, 3600 }
+SM.gv, SM.gvr = SM.gv or {}, SM.gvr or {}
+local function gv_ip(c) return c and c.key and c.ip and c.key:find("googlevideo.com", 1, true) and c.ip or nil end
+local function gv_write(t)
+	if not SM.home then return end
+	local out = {}
+	for ip, x in pairs(SM.gvr) do
+		if x.untl > t then out[#out + 1] = ip .. " " .. x.to .. " " .. x.untl else x.to = nil end
+	end
+	local p = SM.home .. "/state/smart_gvnat"
+	local f = io.open(p .. ".tmp", "w")
+	if not f then return end
+	f:write(table.concat(out, "\n"), #out > 0 and "\n" or "")
+	f:close()
+	os.rename(p .. ".tmp", p)
+end
+-- лучший стабильный узел для замены ip
+local function gv_target(ip, x, t)
+	local b24, b16 = ip_block(ip), ip:match("^(%d+%.%d+)%.")
+	local best, bs
+	for y, z in pairs(SM.gv) do
+		local r = SM.gvr[y]
+		if y ~= ip and z.isp == x.isp and z.big >= 2 and z.short <= z.big and t - z.t <= GV_WIN
+			and not (r and r.to and r.untl > t) and (y:find(":") ~= nil) == (ip:find(":") ~= nil) then
+			local sc = z.big - z.short + (ip_block(y) == b24 and 100 or 0) + (b16 and y:match("^(%d+%.%d+)%.") == b16 and 50 or 0)
+			if not bs or sc > bs then best, bs = y, sc end
+		end
+	end
+	return best
+end
+local function gv_observe(c, big, t)
+	local ip = gv_ip(c)
+	if not ip or c.gvseen then return end
+	c.gvseen = true
+	local x = SM.gv[ip]
+	if not x or t - x.t0 > GV_WIN then
+		x = { big = 0, short = 0, t0 = t, isp = c.key:find("~isp", 1, true) ~= nil }
+		SM.gv[ip] = x
+	end
+	if big then x.big = x.big + 1 else x.short = x.short + 1 end
+	x.t = t
+	if not SM.gvpick or big or x.big > 0 or x.short < GV_BAD then return end
+	local r = SM.gvr[ip]
+	if r and r.to and r.untl > t then return end
+	local to = gv_target(ip, x, t)
+	if not to then
+		if t - (x.said or 0) >= GV_WIN then
+			x.said = t
+			SJ("googlevideo.com: узел " .. ip .. " не отдаёт видео (коротких ответов " .. x.short .. ", роликов 0), а стабильного узла на замену пока нет")
+		end
+		return
+	end
+	local lv = math.min(#GV_HOLD, ((r and r.lv) or 0) + 1)
+	SM.gvr[ip] = { to = to, untl = t + GV_HOLD[lv], lv = lv }
+	SJ("googlevideo.com: узел " .. ip .. " не отдаёт видео (коротких ответов " .. x.short .. ", роликов 0) — " ..
+		math.floor(GV_HOLD[lv] / 60) .. " мин соединения к нему идут на " .. to)
+	SM.gv[ip] = nil
+	gv_write(t)
+end
+-- снять истёкшие перенаправления (узел проверится заново)
+local function gv_expire(t)
+	-- настройку выключили — перенаправлений больше нет
+	if not SM.gvpick then
+		if next(SM.gvr) then SM.gvr = {}; gv_write(t) end
+		return
+	end
+	local ch = false
+	for ip, x in pairs(SM.gvr) do
+		if x.to and x.untl <= t then x.to = nil; ch = true; SJ("googlevideo.com: узел " .. ip .. " — перенаправление снято, проверяю его снова") end
+		if not x.to and t - x.untl > 4 * 3600 then SM.gvr[ip] = nil end
+	end
+	if ch then gv_write(t) end
 end
 
 local function on_ok(slot, r, v, t, c)
@@ -1081,6 +1174,7 @@ function smart_watch()
 	local ok, err = pcall(function()
 		local t = now()
 		ipstat_flush(t)
+		gv_expire(t)
 		-- без трафика наблюдатель спит: таблицу читать незачем. Но пока живы
 		-- удачные соединения — смотрит, сколько они проработали
 		local busy = t - SM.lastconn <= 120
@@ -1153,6 +1247,7 @@ function smart_watch()
 			for _, h in ipairs(silent) do
 				local c, r = h.c, SM.db[h.c.key]
 				c.done, c.failed = true, true
+				if sn < NET_STUCK_IPS then gv_observe(c, false, t) end
 				-- молчат разом несколько серверов — это сеть, а не DPI: не считаем
 				if r and sn < NET_STUCK_IPS and not (r.nodpi and r.nodpi > t) then
 					DLOG("smart: " .. c.key .. ": connection :" .. h.lp .. " silent after ClientHello on variant " .. c.v)
@@ -1231,23 +1326,6 @@ function smart(ctx, desync)
 		return verdict
 	end
 
-	-- кэш оператора, а видео с него брать не велено: соединение — в никуда
-	-- (TCP оборвётся сбросом сразу, QUIC — без ответа), и плеер уходит на
-	-- запасной узел — сервер Google. Как hosts для Instagram, только узел
-	-- выбирает сам YouTube. Без обучения
-	if host == GV_ISP and SM.noggc then
-		local tcp = desync.dis and desync.dis.tcp
-		if tcp and desync.outgoing then
-			local ip = norm_ip(host_ip(desync))
-			if ip then kill_conns({ kill_line(ip, tcp.th_sport) }) end
-			if t - (SM.noggc_said or 0) >= 60 then
-				SM.noggc_said = t
-				SJ(GV_ISP .. ": кэш оператора " .. tostring(ip) .. " — соединение оборвано (видео YouTube — только с серверов Google)")
-			end
-		end
-		return VERDICT_DROP
-	end
-
 	local key = slot .. "|" .. host
 	local pass = tonumber(desync.arg.pass)
 	local r = SM.db[key]
@@ -1314,6 +1392,7 @@ function smart(ctx, desync)
 		if tcp and not desync.outgoing and #desync.dis.payload > 0 then
 			local p = pos_get(desync, 'p')
 			if p > cs.maxin then cs.maxin = p end
+			if p >= GV_BIG and not cs.gvseen then gv_observe(cs, true, t) end
 			cs.tin = t
 			cs.srv = true
 			slowbps, slowbase = slow_sample(cs, p)
@@ -1380,6 +1459,8 @@ function smart(ctx, desync)
 			-- сервер — это удача, даже если ответ был коротким (API, статистика).
 			-- Сброс, которым сервер отвечает на закрытие, — уже не DPI
 			cs.done = true
+			-- узел видео закрыл соединение после короткого ответа
+			if cs.cht and cs.maxin < GV_BIG then gv_observe(cs, false, t) end
 			if not cs.ok and cs.maxin >= ANSWER then
 				cs.ok = true
 				on_ok(slot, r, cs.v, t, cs)
@@ -1388,6 +1469,7 @@ function smart(ctx, desync)
 			-- сброс от сервера, когда он уже ответил: начало соединения DPI
 			-- пропустил, сбрасывает сам сервер — не ошибка обхода
 			cs.done = true
+			if cs.cht and cs.maxin < GV_BIG then gv_observe(cs, false, t) end
 			DLOG("smart: " .. key .. ": server reset after " .. cs.maxin .. " bytes — not counted")
 		elseif not cs.ok then
 			local dd, a = detector_args(desync)

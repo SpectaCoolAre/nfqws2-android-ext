@@ -315,6 +315,10 @@ push_beat() {
 # соединение к тому времени закрыто. Помощник спит по 3 секунды и сам выходит,
 # когда служба остановлена или выбрана другая стратегия
 SK_CHAIN=nfqws_smartkill
+# Перенаправление соединений с узла видео, который не отдаёт видео, на
+# стабильный (подбор оркестратора, state/smart_gvnat): DNAT в nat OUTPUT —
+# действует сразу, и на адреса, уже запомненные приложением
+GV_CHAIN=nfqws_gvnat
 smartkill_chain() { # <add|del>
   local c
   for c in iptables ip6tables; do
@@ -322,18 +326,41 @@ smartkill_chain() { # <add|del>
     if [ "$1" = add ]; then
       $c -w -t filter -N $SK_CHAIN 2>/dev/null
       $c -w -t filter -C OUTPUT -j $SK_CHAIN 2>/dev/null || $c -w -t filter -I OUTPUT 1 -j $SK_CHAIN 2>/dev/null
+      $c -w -t nat -N $GV_CHAIN 2>/dev/null && { $c -w -t nat -C OUTPUT -j $GV_CHAIN 2>/dev/null || $c -w -t nat -I OUTPUT 1 -j $GV_CHAIN 2>/dev/null; }
     else
       while $c -w -t filter -D OUTPUT -j $SK_CHAIN 2>/dev/null; do :; done
       $c -w -t filter -F $SK_CHAIN 2>/dev/null
       $c -w -t filter -X $SK_CHAIN 2>/dev/null
+      while $c -w -t nat -D OUTPUT -j $GV_CHAIN 2>/dev/null; do :; done
+      $c -w -t nat -F $GV_CHAIN 2>/dev/null
+      $c -w -t nat -X $GV_CHAIN 2>/dev/null
     fi
   done
+}
+# Применить перенаправления узлов видео: «плохой хороший до-когда» (unix);
+# истёкшие и при выключенной настройке — не применяются
+gvnat_apply() {
+  local ip to u c now
+  now=$(date +%s)
+  iptables -w -t nat -F $GV_CHAIN 2>/dev/null; ip6tables -w -t nat -F $GV_CHAIN 2>/dev/null
+  [ "${SMART_GVPICK:-0}" = 1 ] && [ -s "$SMART_GVNAT_FILE" ] || return 0
+  while read -r ip to u; do
+    case "$ip$to" in ''|*[!0-9a-fA-F.:]*) continue ;; esac
+    case "$u" in ''|*[!0-9]*) continue ;; esac
+    [ "$u" -gt "$now" ] || continue
+    case "$ip" in
+      *:*) c=ip6tables; to="[$to]:443" ;;
+      *) c=iptables; to="$to:443" ;;
+    esac
+    $c -w -t nat -A $GV_CHAIN -p tcp -d "$ip" --dport 443 -j DNAT --to-destination "$to" 2>/dev/null
+    $c -w -t nat -A $GV_CHAIN -p udp -d "$ip" --dport 443 -j DNAT --to-destination "$to" 2>/dev/null
+  done < "$SMART_GVNAT_FILE"
 }
 smartkill() {
   echo $$ > "$SK_PIDFILE"
   protect_process
   trap 'smartkill_exit; exit 0' TERM INT HUP
-  local w="$SMART_KILL_FILE.work" ver ip lp c up flush=0 n learn_at=0 lp_pid= every ss=""
+  local w="$SMART_KILL_FILE.work" ver ip lp c up flush=0 n learn_at=0 lp_pid= every ss="" gvsum="" gvnow
   command -v ss >/dev/null 2>&1 && ss=ss
   # заявки прошлого запуска — до того, как цепочка заработает: их порты уже
   # могли достаться другим соединениям
@@ -341,6 +368,10 @@ smartkill() {
   smartkill_chain add
   while :; do
     sleep 3
+    # перенаправления узлов видео — как только оркестратор их поменял (или
+    # поменяли настройку); заодно раз в минуту — снять истёкшие
+    gvnow="${SMART_GVPICK:-0}:$(cksum < "$SMART_GVNAT_FILE" 2>/dev/null):$(( $(date +%s) / 60 ))"
+    [ "$gvnow" != "$gvsum" ] && { gvnat_apply; gvsum=$gvnow; }
     # спячка: обрывать почти нечего и учиться незачем — реже, без обучения
     dev_idle && sleep 12
     conf_refresh
