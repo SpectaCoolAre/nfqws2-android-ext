@@ -1113,21 +1113,22 @@ rm -f "$hotf" "$(dns_geo_scan_file).rel" "$(dns_geo_scan_file).pin"
 } > "$(dns_geo_scan_file)"
 rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
 assert_contains "$(dns_geo_routes)" "gemini.google.com	-" "all main domains of the group bypassed by the network DNS: the group goes to it"
-# Запасной сервер dnsproxy для домена с геоблоком — другой сервер обхода,
-# а не публичный DNS (тот отдал бы настоящий адрес — геоблок)
+# Запасной у dnsproxy для домена с геоблоком — тот же сервер: публичный DNS
+# отдал бы настоящий адрес (геоблок Claude после смены сети), другой сервер
+# обхода — другой адрес выхода посреди сессии (геоблок Gemini, 08.11 23:46)
 { printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
   printf 'a.example\tok\t20\t3\t3\t0\ttls\n'; printf 'b.example\tok\t30\t3\t3\t0\ttls\n'
   printf '=claude.ai\ta.example,b.example\n'
   printf '=gemini.google.com\t-\tnet\n'
 } > "$(dns_geo_scan_file)"
 rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).pin"
-r=$(DNS_GEO_BACKUP=1 dns_geo_routes)
-assert_contains "$r" "claude.ai	a.example	tls	b.example	tls" "a geo-blocked domain gets a second bypass server as its backup"
 cp "$DNS_GEO_LIST" "$SANDBOX/geo.keep3"; printf 'claude.ai\ngemini.google.com\n' >> "$DNS_GEO_LIST"
 dns_build
-assert_contains "$(grep '^\[/' "$DNS_RUN_DIR/fallback.txt")" "/claude.ai/" "dnsproxy gets it as a per-domain fallback"
-assert_contains "$(grep '/claude.ai/' "$DNS_RUN_DIR/fallback.txt")" "]tls://b.example" "to the other bypass server"
-assert_contains "$(grep '/gemini.google.com/' "$DNS_RUN_DIR/fallback.txt")" "]tls://" "a domain the network DNS bypasses itself falls back to a bypass server, not to a public DNS"
+srv=$(grep '^\[/' "$DNS_RUN_DIR/upstreams.txt" | grep '/claude.ai/' | sed 's/.*\]//')
+assert_contains "$(grep '/claude.ai/' "$DNS_RUN_DIR/fallback.txt" | sed 's/.*\]//')" "$srv" "a geo-blocked domain falls back to its own bypass server (a retry), not to another one"
+assert_eq "1" "$(grep '/claude.ai/' "$DNS_RUN_DIR/fallback.txt" | sed 's/.*\]//' | sort -u | grep -c .)" "and to that one only"
+assert_contains "$(grep '/gemini.google.com/' "$DNS_RUN_DIR/fallback.txt")" "]192.168.1.1:53" "a domain the network DNS bypasses itself falls back to the network DNS, not to a public one"
+assert_not_contains "$(grep '/gemini.google.com/' "$DNS_RUN_DIR/fallback.txt")" "77.88.8.8" "never to a public DNS"
 assert_contains "$(grep -v '^\[/' "$DNS_RUN_DIR/fallback.txt")" "77.88.8.8:53" "other domains keep the usual fallback"
 cp "$SANDBOX/geo.keep3" "$DNS_GEO_LIST"
 rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).pin"

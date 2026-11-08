@@ -203,16 +203,6 @@ dns_geo_pool() { # -> «мс сервер протокол» пула, лучш�
 # закрепляется (<файл>.pin, «*»), пока обходит не меньше 90% от лучшего —
 # иначе пул менялся бы с каждой проверкой
 dns_geo_pick() { dns_geo_pool | head -n 1 | cut -f2; }
-# Запасной сервер пула — для запасных серверов dnsproxy: ответивший, не
-# отключённый и не выбранный, что обходит больше всех доменов (при равенстве —
-# быстрее). Пусто — других нет
-dns_geo_pick_backup() {
-  local f p; f=$(dns_geo_scan_file); [ -s "$f" ] || return 0
-  p=$(dns_geo_pick)
-  awk -F'\t' -v of="$(dns_geo_offf)" -v p="$p" '
-    BEGIN { while ((getline l < of) > 0) { gsub(/[[:space:]]/, "", l); if (l != "") off[l] = 1 } }
-    !/^[#=+!?]/ && $2 == "ok" && $4 > 0 && !($1 in off) && $1 != p { print ($4 + 0) "\t" ($3 + 0) "\t" $1 }' "$f" | sort -t'	' -k1,1nr -k2,2n | head -n 1 | cut -f3
-}
 # Адрес сервера пула для dnsproxy: DoT, а где в этой сети прошёл только DoH — DoH
 dns_geo_pick_up() {
   dns_geo_pool | head -n 1 | awk -F'\t' '{ print ($3 == "https" ? "https://" $2 "/dns-query" : "tls://" $2) }'
@@ -258,16 +248,11 @@ dns_geo_routes() { # [save] -> «домен<TAB>сервер<TAB>протоко�
   # У группы могут быть предпочтительные серверы (dns-geo-prefer.list): пока
   # хоть один из них обходит её основные домены, выбор — только среди них.
   # Отключённые вручную (DNS_GEO_OFF) не берутся
-  local bk=""; [ "${DNS_GEO_BACKUP:-0}" = 1 ] && bk=$(dns_geo_pick_backup)
-  awk -F'\t' -v prf="$DNS_GEO_PREFER" -v of="$(dns_geo_offf)" -v pf="$f.pin" -v gpf="$DNS_GEO_SCAN_DIR/groups.pin" -v rf="$f.rel" -v fresh="$fresh" -v base="$DNS_GEO_HOT_BASE" -v gf="$DNS_GEO_GROUPS" -v gl="$DNS_GEO_LIST" -v hf="$h" -v save="$1" -v wbk="${DNS_GEO_BACKUP:-0}" -v pbk="$bk" '
+  awk -F'\t' -v prf="$DNS_GEO_PREFER" -v of="$(dns_geo_offf)" -v pf="$f.pin" -v gpf="$DNS_GEO_SCAN_DIR/groups.pin" -v rf="$f.rel" -v fresh="$fresh" -v base="$DNS_GEO_HOT_BASE" -v gf="$DNS_GEO_GROUPS" -v gl="$DNS_GEO_LIST" -v hf="$h" -v save="$1" '
     function site(d,   n, a, x, i) {
       for (x = d; ; x = substr(x, i + 1)) { if (x in grp) return "@" grp[x]; if ((i = index(x, ".")) == 0) break }
       n = split(d, a, "."); return n < 2 ? d : a[n - 1] "." a[n] }
-    # строка маршрута; с DNS_GEO_BACKUP=1 — и запасной сервер с протоколом
-    function out(d, x, b) {
-      if (wbk == 1 && b != "" && b != x && (b in pr)) print d "\t" x "\t" (x == "-" ? "-" : pr[x]) "\t" b "\t" pr[b]
-      else if (x == "-") print d "\t-"
-      else print d "\t" x "\t" pr[x] }
+    function out(d, x) { if (x == "-") print d "\t-"; else print d "\t" x "\t" pr[x] }
     BEGIN { while ((getline l < of) > 0) { gsub(/[[:space:]]/, "", l); if (l != "") off[l] = 1 }
       while ((getline l < pf) > 0) { split(l, a, " "); if (a[1] != "") pin[a[1]] = a[2] }
       while ((getline l < gf) > 0) { sub(/#.*/, "", l); n = split(tolower(l), a, " "); for (i = 2; i <= n; i++) grp[a[i]] = a[1] }
@@ -332,36 +317,23 @@ dns_geo_routes() { # [save] -> «домен<TAB>сервер<TAB>протоко�
       # С запасом, чтобы не прыгать каждые полчаса (так было ночью 08.11):
       # перейти к DNS сети — когда он обходит все основные домены группы,
       # вернуться к своему серверу — когда перестал обходить большинство
-      for (s in ch) best0[s] = ch[s]
       for (s in hall) if (substr(s, 1, 1) == "@" && (gpin[s] == "-" ? hnet[s] * 2 > hall[s] : (hall[s] > 0 && hnet[s] == hall[s]))) ch[s] = "-"
-      # запасной сервер группы (для запасных серверов dnsproxy): лучший после
-      # выбранного; у группы на DNS сети — её собственный сервер
-      if (wbk == 1) for (s in ns) {
-        b = (ch[s] == "-") ? best0[s] : ""
-        if (b == "" || b == "-") for (i = 1; i <= ns[s]; i++) { h = so[s, i]; if (h == ch[s]) continue; if (b == "" || cnt[s, h] > cnt[s, b]) b = h }
-        gbk[s] = b
-      }
+
       for (k = 1; k <= n; k++) {
         d = ord[k]; s = site(d)
-        if (rt[d] == "-" || ch[s] == "-") {
-          # запасной: у группы — её сервер; у домена, который обходит сам DNS
-          # сети, — пул. Домен, который не обходит никто, — без запасного
-          b = (s in gbk) ? gbk[s] : (netb[d] ? pbk : "")
-          out(d, "-", b); continue
-        }
-        if (substr(s, 1, 1) == "@" && ch[s] != "") { out(d, ch[s], gbk[s]); continue }
+        if (rt[d] == "-" || ch[s] == "-") { out(d, "-"); continue }
+        if (substr(s, 1, 1) == "@" && ch[s] != "") { out(d, ch[s]); continue }
         if (!nc[d]) continue
         x = c[d, 1]
         for (i = 1; i <= nc[d]; i++) if (c[d, i] == ch[s]) x = ch[s]
-        b = ""; for (i = 1; i <= nc[d]; i++) if (c[d, i] != x) { b = c[d, i]; break }
-        out(d, x, b != "" ? b : pbk)
+        out(d, x)
       }
       while ((getline l < gl) > 0) {
         sub(/[[:space:]]*#.*/, "", l); gsub(/[[:space:]]/, "", l); d = tolower(l)
         if (d == "" || (d in rt) || (d in done)) continue
         done[d] = 1; s = site(d)
-        if (ch[s] == "-") out(d, "-", gbk[s])
-        else if (substr(s, 1, 1) == "@" && ch[s] != "") out(d, ch[s], gbk[s])
+        if (ch[s] == "-") out(d, "-")
+        else if (substr(s, 1, 1) == "@" && ch[s] != "") out(d, ch[s])
       }
       if (save == "save") {
         if ("*" in pin) print "* " pin["*"] > pf
@@ -932,18 +904,17 @@ dns_build() {
     local gp gs gm gb
     gm=$(dns_geo_due); [ -n "$gm" ] && dns_geo_scan_bg "$gm"
     gs=$(dns_geo_servers)
-    # с запасным сервером: для доменов с геоблоком запасной у dnsproxy — другой
-    # сервер обхода, а не публичный DNS. Публичный отдавал настоящий адрес:
-    # дома claude.ai шёл в DNS роутера, после перехода на мобильную старый
-    # dnsproxy ещё несколько секунд спрашивал недоступный роутер, ушёл к
-    # запасному 77.88.8.8 — и Claude получил адрес Anthropic, то есть геоблок
-    # до конца срока записи (журнал 08.11.2026, 22:31)
-    DNS_GEO_BACKUP=1 dns_geo_routes | awk -F'\t' '
-      function url(h, p) { return p == "https" ? "https://" h "/dns-query" : "tls://" h }
-      { u = ($2 == "-" ? "-" : url($2, $3)); s[$1] = s[$1] (s[$1] == "" ? "" : " ") u; if ($4 != "") b[$1] = url($4, $5) }
-      END { for (d in s) print d "\t" s[d] "\t" ((d in b) ? b[d] : "") }' > "$DNS_RUN_DIR/geo.routes"
-    gb=$(dns_geo_pick_backup)
-    [ -n "$gb" ] && gb=$(awk -F'\t' -v h="$gb" '!/^[#=+!?]/ && $1 == h && $2 == "ok" { print ($7 == "https" ? "https://" h "/dns-query" : "tls://" h); exit }' "$(dns_geo_scan_file)")
+    # Запасной у dnsproxy для домена с геоблоком — тот же сервер (повтор
+    # запроса), у домена, который обходит DNS сети, — DNS сети. Общий
+    # запасной (DNS сети и публичные) отдавал настоящий адрес: после перехода
+    # с Wi‑Fi на мобильную Claude получил адрес Anthropic — геоблок (журнал
+    # 08.11.2026, 22:31). Другой сервер обхода в запасных — тоже плохо: Gemini
+    # посреди сессии получал прокси то wlrus, то zapret, и Google видел
+    # подозрительный трафик (журнал 08.11.2026, 23:46). Не ответил свой сервер —
+    # ошибка, приложение повторит, а адрес выхода тот же
+    dns_geo_routes | awk -F'\t' '{ u = ($2 == "-" ? "-" : ($3 == "https" ? "https://" $2 "/dns-query" : "tls://" $2)); s[$1] = s[$1] (s[$1] == "" ? "" : " ") u }
+      END { for (d in s) print d "\t" s[d] }' > "$DNS_RUN_DIR/geo.routes"
+    gb=$(for ip in $(printf '%s' "$net" | tr ',' ' '); do dns_addr_port "$ip"; printf ' '; done | sed 's/ $//')
     : > "$DNS_RUN_DIR/fallback.rules"
     {
       dns_profile_domains own
@@ -959,16 +930,17 @@ dns_build() {
     { cat "$DNS_GEO_LIST"; dns_profile_domains geo; } | tr -d '\r' | tr 'A-Z' 'a-z' | awk -v sf="$DNS_RUN_DIR/geo.skip" -v rf="$DNS_RUN_DIR/geo.routes" -v srv="$gs" -v nu="$nu" -v gb="$gb" -v ff="$DNS_RUN_DIR/fallback.rules" '
       BEGIN {
         while ((getline l < sf) > 0) { sub(/[[:space:]]*#.*/, "", l); if (l != "") skip[l] = 1 }
-        while ((getline l < rf) > 0) { split(l, a, "\t"); if (a[1] != "") { rt[a[1]] = a[2]; if (a[3] != "") rb[a[1]] = a[3] } }
+        while ((getline l < rf) > 0) { t = index(l, "\t"); if (t) rt[substr(l, 1, t - 1)] = substr(l, t + 1) }
         if (srv != "") key[++nk] = srv
       }
       { sub(/[[:space:]]*#.*/, ""); gsub(/[[:space:]]/, "") }
       $0 == "" || seen[$0]++ { next }
       {
-        d = $0; r = srv; hit = 0; fb = gb
-        while (1) { if (d in skip) next; if ((d in rt) && !hit) { r = rt[d]; fb = (d in rb) ? rb[d] : ""; hit = 1 }; if ((i = index(d, ".")) == 0) break; d = substr(d, i + 1) }
-        # запасной — только другой сервер обхода
-        if (fb != "" && fb != r) { if (!(fb in fcnt)) { fkey[++nf] = fb; fcnt[fb] = 0 }; fdom[fb, ++fcnt[fb]] = $0 }
+        d = $0; r = srv; hit = 0
+        while (1) { if (d in skip) next; if ((d in rt) && !hit) { r = rt[d]; hit = 1 }; if ((i = index(d, ".")) == 0) break; d = substr(d, i + 1) }
+        # запасной — тот же сервер; у «-» — DNS сети (gb)
+        fb = (r == "-") ? gb : r
+        if (fb != "") { if (!(fb in fcnt)) { fkey[++nf] = fb; fcnt[fb] = 0 }; fdom[fb, ++fcnt[fb]] = $0 }
         # «-» — никто из серверов домен не обходит: он в DNS сети (при DNS по
         # умолчанию не из сети — правилом к ней)
         if (r == "-" && nu != "") r = nu
@@ -988,11 +960,11 @@ dns_build() {
           }
         }
         for (q = 1; q <= nf; q++) {
-          r = fkey[q]
+          r = fkey[q]; ns = split(r, s, " ")
           for (k = 1; k <= fcnt[r]; k += 100) {
             line = "[/"
             for (j = k; j <= fcnt[r] && j < k + 100; j++) line = line fdom[r, j] "/"
-            print line "]" r > ff
+            for (i = 1; i <= ns; i++) print line "]" s[i] > ff
           }
         }
       }' >> "$up.rules"

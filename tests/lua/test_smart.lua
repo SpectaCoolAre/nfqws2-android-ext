@@ -885,6 +885,13 @@ later(40); tcptable({}); smart_watch()
 local ipst = readall(HOME .. "/state/smart_ipstat") or ""
 check(ipst:find("203.0.113.9 0 4 ", 1, true) ~= nil, "an address where every connection failed is written with its counts (" .. ipst:gsub("\n", "; ") .. ")")
 check(ipst:find("203.0.113.10 ", 1, true) == nil, "an address that works is not")
+-- перезапуск службы: счёт в памяти пропал, но файл остался — он и читается
+SMART.ipst = nil
+later(); local c2 = conn("proxy9.example"); c2.ip = "203.0.113.9"; packet(c2)
+for k = 1, 3 do packet(c2, { retrans = true }) end
+later(40); smart_watch()
+ipst = readall(HOME .. "/state/smart_ipstat") or ""
+check(ipst:find("203.0.113.9 0 5 ", 1, true) ~= nil, "after a restart the counts go on from the file, not from zero (" .. ipst:gsub("\n", "; ") .. ")")
 
 io.write("\n", failed == 0 and "PASS" or "FAIL", "  ", total - failed, " of ", total, " checks passed\n")
 os.exit(failed == 0 and 0 or 1)

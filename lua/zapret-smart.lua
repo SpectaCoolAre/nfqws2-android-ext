@@ -678,17 +678,36 @@ end
 -- в файл — адреса с тремя ошибками и больше
 local IPSTAT_WIN = 1800
 local IPSTAT_MAX = 2048
+-- Счёт переживает перезапуск службы (читается из файла) и не обнуляется разом:
+-- раз в полчаса — вдвое меньше. Иначе после перезапуска (журнал 08.11.2026:
+-- включили BLOCK_QUIC) прокси bezmezhau с 0 удач из 6 через минуту был
+-- «снова принимает», и сайты вернулись на него
+local function ipstat_load(t)
+	SM.ipst, SM.nipst = {}, 0
+	if not SM.home then return end
+	local f = io.open(SM.home .. "/state/smart_ipstat", "r")
+	if not f then return end
+	for l in f:lines() do
+		local ip, ok, err, lt = l:match("^(%S+) (%S+) (%S+) (%d+)$")
+		ok, err, lt = tonumber(ok), tonumber(err), tonumber(lt)
+		if ip and ok and err and lt and t - lt < IPSTAT_WIN then
+			SM.ipst[ip] = { ok = ok, err = err, t0 = lt, t = lt }
+			SM.nipst = SM.nipst + 1
+		end
+	end
+	f:close()
+end
 local function ipstat(c, ok, t)
 	if not (c and c.ip) or c.bench then return end
-	SM.ipst = SM.ipst or {}
+	if not SM.ipst then ipstat_load(t) end
 	local x = SM.ipst[c.ip]
-	if not x or t - x.t0 > IPSTAT_WIN then
-		if not x then
-			SM.nipst = (SM.nipst or 0) + 1
-			if SM.nipst > IPSTAT_MAX then SM.ipst, SM.nipst = {}, 1 end
-		end
+	if not x then
+		SM.nipst = (SM.nipst or 0) + 1
+		if SM.nipst > IPSTAT_MAX then SM.ipst, SM.nipst = {}, 1 end
 		x = { ok = 0, err = 0, t0 = t }
 		SM.ipst[c.ip] = x
+	elseif t - x.t0 > IPSTAT_WIN then
+		x.ok, x.err, x.t0 = x.ok / 2, x.err / 2, t
 	end
 	if ok then x.ok = x.ok + 1 else x.err = x.err + 1 end
 	x.t = t
@@ -700,7 +719,7 @@ local function ipstat_flush(t)
 	local out = {}
 	for ip, x in pairs(SM.ipst or {}) do
 		if t - x.t > IPSTAT_WIN then SM.ipst[ip] = nil; SM.nipst = math.max(0, (SM.nipst or 1) - 1)
-		elseif x.err >= 3 then out[#out + 1] = ip .. " " .. x.ok .. " " .. x.err .. " " .. x.t end
+		elseif x.err >= 3 then out[#out + 1] = ip .. " " .. string.format("%g %g", x.ok, x.err) .. " " .. x.t end
 	end
 	local p = SM.home .. "/state/smart_ipstat"
 	local f = io.open(p .. ".tmp", "w")
