@@ -192,11 +192,11 @@ export MOCK_IPT_FEATURES
 ipt_reset
 svc firewall_apply
 pre=$(ipt_rules nfqws_pre); post=$(ipt_rules nfqws_post)
-assert_contains "$pre" "--tcp-flags syn,ack syn,ack -m tcpmss --mss 1:500 -j CONNMARK --set-xmark 0x00800000/0x00800000" "a SYN-ACK with a tiny MSS marks its connection"
-assert_contains "$post" "-m connmark --mark 0x00800000/0x00800000 -m length --length 101:600 -j NFQUEUE --queue-num 300" "its data packets are queued without counting"
-case "$post" in *"--mark 0x00800000/0x00800000"*"-m connbytes"*) r=0 ;; *) r=1 ;; esac
+assert_contains "$pre" "--tcp-flags syn,ack syn,ack -m tcpmss --mss 1:500 -j CONNMARK --set-xmark 0x80000000/0x80000000" "a SYN-ACK with a tiny MSS marks its connection"
+assert_contains "$post" "-m connmark --mark 0x80000000/0x80000000 -m length --length 101:600 -j NFQUEUE --queue-num 300" "its data packets are queued without counting"
+case "$post" in *"--mark 0x80000000/0x80000000"*"-m connbytes"*) r=0 ;; *) r=1 ;; esac
 assert_rc 0 "$r" "before the limited rule"
-case "$pre" in *"-j CONNMARK --set-xmark 0x00800000"*"--tcp-flags syn,ack syn,ack -j NFQUEUE"*) r=0 ;; *) r=1 ;; esac
+case "$pre" in *"-j CONNMARK --set-xmark 0x80000000"*"--tcp-flags syn,ack syn,ack -j NFQUEUE"*) r=0 ;; *) r=1 ;; esac
 assert_rc 0 "$r" "the mark is set before the SYN-ACK goes to the queue"
 
 # ── connmark_out mode ─────────────────────────────────────────────────────────
@@ -244,7 +244,10 @@ assert_contains "$qout" "-j NFQUEUE --queue-num 300" "the counter chain ends in 
 assert_contains "$qout" "/0x0f000000" "the outgoing counter uses its own mark bits"
 assert_eq "15" "$(printf '%s\n' "$qout" | grep -c -- '--set-xmark')" "PKT_LIMIT_OUT=15 yields 15 counter steps"
 qin=$(ipt_rules nfqws_qin)
-assert_contains "$qin" "/0x000f0000" "the incoming counter uses disjoint mark bits"
+assert_contains "$qin" "/0x00f00000" "the incoming counter uses disjoint mark bits"
+# netd хранит в connmark сетевую метку сокета (биты 0-19): счётчики и метки
+# модуля этих битов не касаются
+assert_eq "" "$( { ipt_rules nfqws_qin; ipt_rules nfqws_qout; ipt_rules nfqws_pre; ipt_rules nfqws_post; } | grep -oE 'mark [^ ]*/0x[0-9a-f]+' | awk '{ split($2, a, "/"); m = a[2]; v = 0; for (i = 3; i <= length(m); i++) { c = index("0123456789abcdef", substr(m, i, 1)) - 1; v = v * 16 + c }; if (v % 1048576) print }' | sort -u)" "no connmark rule of the module touches the bits netd keeps the socket mark in (0-19)"
 
 section "connmark_out: BLOCK_QUIC drops UDP/443"
 
