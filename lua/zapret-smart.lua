@@ -836,7 +836,9 @@ end
 -- из той же /24, потом /16. Сертификат у всех узлов общий, *.googlevideo.com.
 -- Через GV_HOLD перенаправление снимается и узел проверяется снова; не ожил
 -- — следующее дольше. Не зависит ни от оператора, ни от DNS
-local GV_BIG = 16000
+local GV_BIG = 12000        -- байт: видно в первых пакетах (дальше nfqws2 их не видит — лимит очереди)
+local GV_BIGCLOSE = 65536   -- байт за всё соединение — по подтверждению в пакете закрытия
+local GV_SHORT = 10240      -- меньше — короткий ответ
 local GV_WIN = 600
 local GV_BAD = 4
 local GV_HOLD = { 900, 1800, 3600 }
@@ -911,6 +913,26 @@ local function gv_expire(t)
 		if not x.to and t - x.untl > 4 * 3600 then SM.gvr[ip] = nil end
 	end
 	if ch then gv_write(t) end
+end
+
+-- Хронометраж соединений с узлами видео (smart/gvtrace.log, в архиве журналов):
+-- когда соединение началось, через сколько мс после ClientHello пришёл
+-- первый ответ, сколько байт за всё соединение, сколько оно жило и кто его
+-- закрыл. Без отметок времени не видно, где теряются секунды перед роликом
+local function gv_trace(c, how, total, t)
+	if not (SM.home and gv_ip(c)) or c.gvtraced then return end
+	c.gvtraced = true
+	local p = SM.home .. "/smart/gvtrace.log"
+	local f = io.open(p, "a")
+	if not f then return end
+	local ft = ftime()
+	local ttfb = (c.cht_f and c.tin1_f) and math.floor((c.tin1_f - c.cht_f) * 1000 + 0.5) or -1
+	local life = c.cht_f and math.floor((ft - c.cht_f) * 1000 + 0.5) or -1
+	f:write(os.date("%Y-%m-%d %H:%M:%S", t), "\t", c.ip, "\t", tostring(c.hn or c.key), "\t", "v", tostring(c.v),
+		"\tttfb=", ttfb, "\tlife=", life, "\tbytes=", tostring(total or -1), "\t", how, "\n")
+	local sz = f:seek("end")
+	f:close()
+	if sz and sz > 262144 then os.rename(p, p .. ".1") end
 end
 
 local function on_ok(slot, r, v, t, c)
@@ -1248,6 +1270,7 @@ function smart_watch()
 				local c, r = h.c, SM.db[h.c.key]
 				c.done, c.failed = true, true
 				if sn < NET_STUCK_IPS then gv_observe(c, false, t) end
+				gv_trace(c, "молчит-обрыв", 0, t)
 				-- молчат разом несколько серверов — это сеть, а не DPI: не считаем
 				if r and sn < NET_STUCK_IPS and not (r.nodpi and r.nodpi > t) then
 					DLOG("smart: " .. c.key .. ": connection :" .. h.lp .. " silent after ClientHello on variant " .. c.v)
@@ -1266,6 +1289,7 @@ function smart_watch()
 		for _, h in ipairs(hits) do
 			local c = h.c
 			c.stuck = true
+			gv_trace(c, c.ok and "застряло-посреди" or "застряло-до-ответа", -1, t)
 			if not network then
 				local r = SM.db[c.key]
 				if r and not c.done then
@@ -1363,7 +1387,8 @@ function smart(ctx, desync)
 	if crec and not crec.smart then
 		-- новое соединение идёт на текущем варианте сайта; его итог засчитается
 		-- этому варианту, даже если сайт к тому времени перейдёт на другой
-		crec.smart = { maxin = 0, tin = t, v = r.cur, key = key, slot = slot, n = n, pass = pass, t = t, first = tonumber(desync.arg.first) or 1 }
+		crec.smart = { maxin = 0, tin = t, v = r.cur, key = key, slot = slot, n = n, pass = pass, t = t, first = tonumber(desync.arg.first) or 1,
+			hn = desync.track and desync.track.hostname }
 		-- прежнее соединение к этому сайту замерло на 14–17 КБ и браузер скоро
 		-- открыл новое — это обрыв по объёму. Ответ, который просто уложился в
 		-- эти размеры, так не выглядит: новое соединение сразу после него не нужно
@@ -1392,6 +1417,7 @@ function smart(ctx, desync)
 		if tcp and not desync.outgoing and #desync.dis.payload > 0 then
 			local p = pos_get(desync, 'p')
 			if p > cs.maxin then cs.maxin = p end
+			if not cs.tin1_f then cs.tin1_f = ftime() end
 			if p >= GV_BIG and not cs.gvseen then gv_observe(cs, true, t) end
 			cs.tin = t
 			cs.srv = true
@@ -1427,7 +1453,7 @@ function smart(ctx, desync)
 					end
 				end
 				if len > 0 then
-					if not cs.cht and desync.l7payload == "tls_client_hello" then cs.cht = t end
+					if not cs.cht and desync.l7payload == "tls_client_hello" then cs.cht = t; cs.cht_f = ftime() end
 					local s = pos_get(desync, 's')
 					if (cs.ok or cs.maxin >= ANSWER) and cs.outmax and s < cs.outmax
 						and cs.maxin < 18000 and (cs.nin or 0) < FROZEN_IN then
@@ -1459,8 +1485,19 @@ function smart(ctx, desync)
 			-- сервер — это удача, даже если ответ был коротким (API, статистика).
 			-- Сброс, которым сервер отвечает на закрытие, — уже не DPI
 			cs.done = true
-			-- узел видео закрыл соединение после короткого ответа
-			if cs.cht and cs.maxin < GV_BIG then gv_observe(cs, false, t) end
+			-- сколько пришло за всё соединение: у закрытия от телефона — по его
+			-- подтверждению, от сервера — по номеру его байта
+			local total
+			if desync.outgoing then
+				if cs.ack0 and tcp.th_ack then total = (tcp.th_ack - cs.ack0) % 4294967296 end
+			else
+				total = pos_get(desync, 'p')
+			end
+			if cs.cht and gv_ip(cs) then
+				if total and total >= GV_BIGCLOSE then gv_observe(cs, true, t)
+				elseif (total or cs.maxin) < GV_SHORT and cs.maxin < GV_BIG then gv_observe(cs, false, t) end
+				gv_trace(cs, (desync.outgoing and "клиент-" or "сервер-") .. (fin and "FIN" or "RST"), total, t)
+			end
 			if not cs.ok and cs.maxin >= ANSWER then
 				cs.ok = true
 				on_ok(slot, r, cs.v, t, cs)
@@ -1470,6 +1507,7 @@ function smart(ctx, desync)
 			-- пропустил, сбрасывает сам сервер — не ошибка обхода
 			cs.done = true
 			if cs.cht and cs.maxin < GV_BIG then gv_observe(cs, false, t) end
+			if cs.cht then gv_trace(cs, "сервер-RST", pos_get(desync, 'p'), t) end
 			DLOG("smart: " .. key .. ": server reset after " .. cs.maxin .. " bytes — not counted")
 		elseif not cs.ok then
 			local dd, a = detector_args(desync)

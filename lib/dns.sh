@@ -1515,6 +1515,7 @@ _dns_start() { # <причина> [force — перезапуск dnsproxy и п
   fi
   if ! dns_build; then _dns_stop "$why: применять нечего — DNS сети и нет включённых профилей"; return 0; fi
   mkdir -p "$DNS_RUN_DIR"
+  dns_geoquic
   # новая сеть или настройки — DNS модуля снова пробует сам (см. dns_upstream_check)
   rm -f "$DNS_RUN_DIR/failopen" "$DNS_RUN_DIR/up_fail"
   # Свежий dnsproxy (меньше 20 с) с тем же конфигом уже открыл соединения в
@@ -1569,6 +1570,34 @@ _dns_start() { # <причина> [force — перезапуск dnsproxy и п
 }
 
 dns_stop() { _dns_locked 1 _dns_stop "$@"; [ $? = 2 ] && return 1; return 0; }
+
+# QUIC к прокси обхода геоблока — сразу отказ: прокси работают только по
+# TCP, а UDP к ним уходил в пустоту, и приложение ждало, прежде чем перейти
+# на TCP (Gemini: robinfrontend-pa по QUIC к прокси wlrus — 6 пакетов и ни
+# одного ответа, журнал 09.11.2026). Адреса — общие адреса прокси из проверки
+# («+сервер адрес»)
+DNS_QUIC_CHAIN=nfqws_geoquic
+dns_geoquic() { # [del]
+  local c ip f
+  for c in iptables ip6tables; do
+    command -v "$c" >/dev/null 2>&1 || continue
+    if [ "$1" = del ]; then
+      while $c -w -t filter -D OUTPUT -j $DNS_QUIC_CHAIN 2>/dev/null; do :; done
+      $c -w -t filter -F $DNS_QUIC_CHAIN 2>/dev/null; $c -w -t filter -X $DNS_QUIC_CHAIN 2>/dev/null
+      continue
+    fi
+    $c -w -t filter -N $DNS_QUIC_CHAIN 2>/dev/null
+    $c -w -t filter -C OUTPUT -j $DNS_QUIC_CHAIN 2>/dev/null || $c -w -t filter -I OUTPUT 1 -j $DNS_QUIC_CHAIN 2>/dev/null
+    $c -w -t filter -F $DNS_QUIC_CHAIN 2>/dev/null
+  done
+  [ "$1" = del ] && return 0
+  dns_geo_on || return 0
+  f=$(dns_geo_scan_file); [ -s "$f" ] || return 0
+  for ip in $(awk -F'\t' '/^\+/ && $2 ~ /^[0-9a-fA-F.:]+$/ && !s[$2]++ { print $2 }' "$f" 2>/dev/null); do
+    case "$ip" in *:*) c=ip6tables ;; *) c=iptables ;; esac
+    $c -w -t filter -A $DNS_QUIC_CHAIN -p udp -d "$ip" --dport 443 -j REJECT 2>/dev/null
+  done
+}
 dns_fresh() { # запущен меньше 20 с назад с тем конфигом, что собран сейчас
   local at up
   dns_pid >/dev/null || return 1
@@ -1583,6 +1612,7 @@ _dns_stop() {
   { dns_pid >/dev/null || dns_rules_ok; } && had=1
   # Ничего не запущено и правил нет — не тратим вызовы iptables на каждый stop
   [ "$had" = 1 ] || [ -f "$DNS_RUN_DIR/ipv6" ] || return 0
+  dns_geoquic del
   dns_rules_del
   dns_proxy_stop
   rm -f "$DNS_RUN_DIR/active" "$DNS_RUN_DIR/error"

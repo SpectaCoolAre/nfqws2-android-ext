@@ -1130,6 +1130,15 @@ assert_eq "1" "$(grep '/claude.ai/' "$DNS_RUN_DIR/fallback.txt" | sed 's/.*\]//'
 assert_contains "$(grep '/gemini.google.com/' "$DNS_RUN_DIR/fallback.txt")" "]192.168.1.1:53" "a domain the network DNS bypasses itself falls back to the network DNS, not to a public one"
 assert_not_contains "$(grep '/gemini.google.com/' "$DNS_RUN_DIR/fallback.txt")" "77.88.8.8" "never to a public DNS"
 assert_contains "$(grep -v '^\[/' "$DNS_RUN_DIR/fallback.txt")" "77.88.8.8:53" "other domains keep the usual fallback"
+# QUIC к прокси обхода — сразу отказ: прокси работают только по TCP, и
+# приложение ждало, прежде чем перейти на TCP (Gemini, журнал 09.11)
+printf '+a.example\t198.51.100.7\t3\n+b.example\t2001:db8::7\t2\n' >> "$(dns_geo_scan_file)"
+dns_geoquic
+assert_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/OUTPUT" 2>/dev/null)" "-j nfqws_geoquic" "the QUIC refusal chain is hooked into OUTPUT"
+assert_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/nfqws_geoquic" 2>/dev/null)" "-p udp -d 198.51.100.7 --dport 443 -j REJECT" "QUIC to a bypass proxy is refused at once"
+assert_contains "$(cat "$MOCK_IPT_STORE/ip6tables/filter/nfqws_geoquic" 2>/dev/null)" "-d 2001:db8::7" "an IPv6 proxy too"
+dns_geoquic del
+assert_not_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/OUTPUT" 2>/dev/null)" "nfqws_geoquic" "and it goes away with the DNS"
 cp "$SANDBOX/geo.keep3" "$DNS_GEO_LIST"
 rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).pin"
 

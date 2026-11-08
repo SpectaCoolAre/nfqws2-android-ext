@@ -872,6 +872,9 @@ check(readall(HOME .. "/state/smart_gvnat") == nil, "three short answers are not
 gvshort("10.9.9.2")
 check((readall(HOME .. "/state/smart_gvnat") or ""):find("^10.9.9.2 10.9.9.1 ") ~= nil, "a node with four short answers and no video goes to a node that gives video")
 check((readall(HOME .. "/logs/smart.log") or ""):find("узел 10.9.9.2 не отдаёт видео (коротких ответов 4, роликов 0) — 15 мин соединения к нему идут на 10.9.9.1", 1, true) ~= nil, "the smart log says so")
+local gvt = readall(HOME .. "/smart/gvtrace.log") or ""
+check(gvt:find("10.9.9.2\trr8---sn-abc-x1.googlevideo.com\t", 1, true) ~= nil and gvt:find("\tbytes=1501\tсервер-FIN", 1, true) ~= nil and gvt:find("\tttfb=", 1, true) ~= nil,
+	"every video connection is timed in smart/gvtrace.log: first answer, life, bytes, who closed it")
 for i = 1, 4 do gvshort("173.194.9.9") end
 check((readall(HOME .. "/state/smart_gvnat") or ""):find("173.194.9.9", 1, true) == nil, "a Google server is not sent to an operator cache (another kind of node)")
 check((readall(HOME .. "/logs/smart.log") or ""):find("узел 173.194.9.9 не отдаёт видео", 1, true) ~= nil, "and it is said that there is no stable node to replace it yet")
