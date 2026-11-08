@@ -168,7 +168,6 @@ end
 -- режима был один — и вариант метался между ними. Теперь это два сайта:
 -- googlevideo.com (серверы Google) и googlevideo.com~isp (кэши оператора)
 local GV_ISP = "googlevideo.com~isp"
-local GV_OWN_FIRST = 43     -- Manager: googlevideo #1: в замере на серверах Google 15 из 15 дважды
 local GOOG4 = {}
 for _, n in ipairs({ "64.233", "64.15", "66.102", "66.249", "72.14", "74.125", "108.170", "108.177", "142.250", "142.251",
 	"172.217", "172.253", "173.194", "192.178", "192.179", "209.85", "216.58", "216.239" }) do GOOG4[n] = true end
@@ -1234,10 +1233,11 @@ function smart(ctx, desync)
 	local pass = tonumber(desync.arg.pass)
 	local r = SM.db[key]
 	if not r then
-		local first = leader(slot, n, tonumber(desync.arg.first) or 1, pass)
-		-- серверы Google для видео: старт — googlevideo #1, если он в наборе
-		if host == "googlevideo.com" and GV_OWN_FIRST <= n and allowed(slot, GV_OWN_FIRST) then first = GV_OWN_FIRST end
-		r = newrec(first)
+		-- старт — как у всех сайтов слота. Отдельный старт для серверов Google
+		-- (googlevideo #1, 15 из 15 в отладочном замере) себя не оправдал: в
+		-- живой ленте 08.11.2026 он молчал, и умный режим сам ушёл на
+		-- Youtube_circular #1 (36,7 удачи на 0,5 ошибки)
+		r = newrec(leader(slot, n, tonumber(desync.arg.first) or 1, pass))
 		SM.db[key] = r
 	end
 	-- сайт на варианте вне набора (пул выключили, набор сменился) — к стартовому
