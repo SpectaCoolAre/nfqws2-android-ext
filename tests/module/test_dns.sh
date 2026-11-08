@@ -952,7 +952,9 @@ echo net > "$DNS_DEFAULT_FILE"; dns_build
 assert_not_contains "$(grep '^\[/' "$DNS_RUN_DIR/upstreams.txt" | grep '\]192.168.1.1:53$')" "/gemini.google.com/" "with the network DNS as the default no rule is needed"
 cp "$SANDBOX/geo.keep2" "$DNS_GEO_LIST"
 dns_geo_pin_save
-assert_not_contains "$(cat "$DNS_GEO_SCAN_DIR/groups.pin" 2>/dev/null)" "@google -" "the network DNS is not pinned as a server"
+assert_contains "$(cat "$DNS_GEO_SCAN_DIR/groups.pin" 2>/dev/null)" "@google -" "a group on the network DNS is pinned as «-»: leaving it needs most main domains to stop being bypassed"
+r=$(dns_geo_routes | sort | tr '\n' '|')
+assert_contains "$r" "gemini.google.com	-|" "and the pin «-» is not taken for a server"
 cp "$SANDBOX/scan.keep" "$(dns_geo_scan_file)"; rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).pin"
 # Прокси сервера проходит проверку DNS, а соединения приложений на нём рвутся
 # (умный режим пишет исходы по адресам): сайты группы уходят на другой сервер
@@ -1054,16 +1056,20 @@ mkhot "a.example,c.example"; dns_geo_rel_update "$hotf" hot
 printf '@google\ta.example\t0.900\t0\n@google\tc.example\t0.400\t0\n@google\tb.example\t0.200\t2\n' > "$(dns_geo_scan_file).rel"
 r=$(dns_geo_routes)
 assert_contains "$r" "gemini.google.com	a.example" "two misses in a row do; the new one is the most reliable by history, not the one serving more domains"
-# Предпочтительные серверы группы (dns-geo-prefer.list, набор роутера): пока
-# хоть один обходит основные домены — только они, даже закреплённый другой
-# и более надёжный по истории уступает; не обходит никто — все
+# Предпочтительные серверы группы (dns-geo-prefer.list, набор роутера) — для
+# нового выбора. Работающий закреплённый другой они не вытесняют: так сервер
+# Google за день менялся dagami → malw → wlrus → dagami → malw (журналы
+# 07–08.11), и каждый раз Gemini получал новый адрес выхода
 pkeep=$DNS_GEO_PREFER; DNS_GEO_PREFER="$SANDBOX/prefer.list"
 echo "google c.example b.example" > "$DNS_GEO_PREFER"
 echo "@google a.example" > "$DNS_GEO_SCAN_DIR/groups.pin"
 mkhot "a.example,c.example"
 r=$(dns_geo_routes)
-assert_contains "$r" "gemini.google.com	c.example" "a preferred server that serves the main service wins over the pinned and more reliable other one"
-assert_contains "$r" "signaler-pa.clients6.google.com	c.example" "for the whole group"
+assert_contains "$r" "gemini.google.com	a.example" "a working pinned server is kept even when a preferred one serves the main service too"
+assert_contains "$r" "signaler-pa.clients6.google.com	a.example" "for the whole group"
+rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
+r=$(dns_geo_routes)
+assert_contains "$r" "gemini.google.com	c.example" "with nothing pinned, a preferred server that serves the main service is chosen"
 dns_geo_pin_save
 assert_contains "$(cat "$DNS_GEO_SCAN_DIR/groups.pin")" "@google c.example" "and becomes the group pin"
 mkhot "a.example"
@@ -1077,6 +1083,55 @@ DNS_GEO_PREFER=$pkeep; rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
 assert_contains "$(cat "$DNS_GEO_PREFER")" "google router.comss.one dns.comss.one dns.magicdns.ru dns.zapret.moe" "the module ships the router's set for Google"
 rm -f "$hotf" "$(dns_geo_scan_file).rel"
 cp "$SANDBOX/scan.keep" "$(dns_geo_scan_file)"
+# Обычный сайт (не группа): закреплённый сервер держится, пока не подводил две
+# проверки подряд — Supercell менял сервер почти каждый час (журналы 07–08.11)
+{ printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
+  printf 'a.example\tok\t20\t3\t3\t0\ttls\n'; printf 'b.example\tok\t30\t3\t3\t0\ttls\n'
+  printf '=login.examplegame.com\ta.example,b.example\n'
+  printf '=cdn.examplegame.com\tb.example\n'
+} > "$(dns_geo_scan_file)"
+rm -f "$(dns_geo_scan_file).hot" "$(dns_geo_scan_file).rel"
+echo "examplegame.com a.example" > "$(dns_geo_scan_file).pin"
+assert_contains "$(dns_geo_routes)" "login.examplegame.com	b.example" "without a history the site goes to the server serving most of its domains"
+printf 'examplegame.com\ta.example\t0.700\t1\n' > "$(dns_geo_scan_file).rel"
+r=$(dns_geo_routes)
+assert_contains "$r" "login.examplegame.com	a.example" "one missed check keeps the pinned server of a site"
+assert_contains "$r" "cdn.examplegame.com	b.example" "a domain it does not serve now still goes to a server that does"
+printf 'examplegame.com\ta.example\t0.400\t2\n' > "$(dns_geo_scan_file).rel"
+assert_contains "$(dns_geo_routes)" "login.examplegame.com	b.example" "two misses in a row change it"
+mkhot "a.example"
+printf '=login.examplegame.com\ta.example,b.example\n' >> "$hotf"
+dns_geo_rel_update "$hotf" hot
+assert_contains "$(cat "$(dns_geo_scan_file).rel")" "examplegame.com	a.example" "the history is kept for ordinary sites too, not only for groups"
+rm -f "$hotf" "$(dns_geo_scan_file).rel" "$(dns_geo_scan_file).pin"
+# Группа на DNS сети — с запасом: войти — когда DNS сети обходит все её
+# основные домены, выйти — когда перестал обходить большинство
+{ printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
+  printf 'a.example\tok\t20\t3\t3\t0\ttls\n'
+  printf '=gemini.google.com\t-\tnet\n'
+  printf '=claude.ai\ta.example\n'
+} > "$(dns_geo_scan_file)"
+rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
+assert_contains "$(dns_geo_routes)" "gemini.google.com	-" "all main domains of the group bypassed by the network DNS: the group goes to it"
+# Запасной сервер dnsproxy для домена с геоблоком — другой сервер обхода,
+# а не публичный DNS (тот отдал бы настоящий адрес — геоблок)
+{ printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
+  printf 'a.example\tok\t20\t3\t3\t0\ttls\n'; printf 'b.example\tok\t30\t3\t3\t0\ttls\n'
+  printf '=claude.ai\ta.example,b.example\n'
+  printf '=gemini.google.com\t-\tnet\n'
+} > "$(dns_geo_scan_file)"
+rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).pin"
+r=$(DNS_GEO_BACKUP=1 dns_geo_routes)
+assert_contains "$r" "claude.ai	a.example	tls	b.example	tls" "a geo-blocked domain gets a second bypass server as its backup"
+cp "$DNS_GEO_LIST" "$SANDBOX/geo.keep3"; printf 'claude.ai\ngemini.google.com\n' >> "$DNS_GEO_LIST"
+dns_build
+assert_contains "$(grep '^\[/' "$DNS_RUN_DIR/fallback.txt")" "/claude.ai/" "dnsproxy gets it as a per-domain fallback"
+assert_contains "$(grep '/claude.ai/' "$DNS_RUN_DIR/fallback.txt")" "]tls://b.example" "to the other bypass server"
+assert_contains "$(grep '/gemini.google.com/' "$DNS_RUN_DIR/fallback.txt")" "]tls://" "a domain the network DNS bypasses itself falls back to a bypass server, not to a public DNS"
+assert_contains "$(grep -v '^\[/' "$DNS_RUN_DIR/fallback.txt")" "77.88.8.8:53" "other domains keep the usual fallback"
+cp "$SANDBOX/geo.keep3" "$DNS_GEO_LIST"
+rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).pin"
+
 rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).pin"
 echo a.example > "$DNS_GEO_OFF"
 assert_not_contains "$(dns_geo_routes)" "a.example" "a server switched off by hand is not used"
