@@ -985,7 +985,10 @@ touch -d "@$(( $(date +%s) + 60 ))" "$(dns_geo_scan_file).hot" 2>/dev/null || { 
 r=$(dns_geo_routes | sort | tr '\n' '|')
 assert_contains "$r" "gemini.google.com	b.example" "the used domain decides the group's server"
 assert_contains "$r" "signaler-pa.clients6.google.com	b.example" "and the rest of the group follows it"
-assert_contains "$r" "gemini.google	b.example" "even a domain it was not seen serving: the group has no exceptions"
+# сервер группы этот домен не обходит, а другой обходит — к другому: иначе
+# сервер группы отдал бы настоящий адрес (Gemini, signaler-pa.googleapis.com,
+# журнал 09.11)
+assert_contains "$r" "gemini.google	a.example" "a group domain its server does not bypass goes to a server that does, not out with the real address"
 printf 'geminiweb-pa.clients6.google.com\nchatgpt.com\n' > "$SANDBOX/geo.saved"; cp "$DNS_GEO_LIST" "$SANDBOX/geo.keep"; cp "$SANDBOX/geo.saved" "$DNS_GEO_LIST"
 r=$(dns_geo_routes | sort | tr '\n' '|')
 assert_contains "$r" "geminiweb-pa.clients6.google.com	b.example" "a group domain the check does not know yet goes to the group server too"

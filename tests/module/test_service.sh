@@ -248,7 +248,9 @@ assert_contains "$qin" "/0x000f0000" "the incoming counter uses disjoint mark bi
 
 section "connmark_out: BLOCK_QUIC drops UDP/443"
 
-assert_contains "$(ipt_rules nfqws_post)" "-p udp --dport 443 -j DROP" "QUIC is blocked in the post chain"
+assert_not_contains "$(ipt_rules nfqws_post)" "-p udp --dport 443 -j DROP" "QUIC is not silently dropped (apps would wait for a timeout before TCP)"
+assert_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/nfqws_quicrej" 2>/dev/null)" "-p udp --dport 443 -j REJECT" "it is refused: apps switch to TCP at once"
+assert_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/OUTPUT" 2>/dev/null)" "-j nfqws_quicrej" "the refusal chain is hooked into OUTPUT"
 
 section "IPv6 disabled"
 

@@ -283,6 +283,13 @@ assert_contains "$(cat "$MOCK_IPT_STORE/iptables/nat/nfqws_gvnat" 2>/dev/null)" 
 assert_contains "$(cat "$MOCK_IPT_STORE/iptables/nat/nfqws_gvnat" 2>/dev/null)" "-p udp -d 10.9.9.2 --dport 443" "QUIC too"
 assert_not_contains "$(cat "$MOCK_IPT_STORE/iptables/nat/nfqws_gvnat" 2>/dev/null)" "10.9.9.5" "an expired redirect is not applied"
 ctl set SMART_GVPICK 0
+# ненадёжный QUIC — отказ: приложение сразу идёт по TCP
+printf '198.51.100.20 %s\n198.51.100.21 1\n' "$(( $(date +%s) + 600 ))" > "$STATE_DIR/smart_quicno"
+i=0; while [ "$i" -lt 40 ] && ! grep -q REJECT "$MOCK_IPT_STORE/iptables/filter/nfqws_quicno" 2>/dev/null; do sleep 0.5; i=$((i + 1)); done
+assert_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/OUTPUT" 2>/dev/null)" "-j nfqws_quicno" "the QUIC refusal chain is hooked into OUTPUT"
+assert_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/nfqws_quicno" 2>/dev/null)" "-p udp -d 198.51.100.20 --dport 443 -j REJECT" "QUIC that does not get through is refused"
+assert_not_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/nfqws_quicno" 2>/dev/null)" "198.51.100.21" "an expired refusal is not"
+rm -f "$STATE_DIR/smart_quicno"
 svc stop
 # наблюдатели сети этого запуска песочнице больше не нужны: иначе netwatch с
 # заглушкой ip крутился бы в фоне и мешал соседним наборам тестов

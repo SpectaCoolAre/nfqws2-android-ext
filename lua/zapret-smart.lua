@@ -920,7 +920,7 @@ end
 -- первый ответ, сколько байт за всё соединение, сколько оно жило и кто его
 -- закрыл. Без отметок времени не видно, где теряются секунды перед роликом
 local function gv_trace(c, how, total, t)
-	if not (SM.home and gv_ip(c)) or c.gvtraced then return end
+	if not (SM.home and c and c.ip and (gv_ip(c) or c.slot == "google")) or c.gvtraced then return end
 	c.gvtraced = true
 	local p = SM.home .. "/smart/gvtrace.log"
 	local f = io.open(p, "a")
@@ -935,9 +935,44 @@ local function gv_trace(c, how, total, t)
 	if sz and sz > 262144 then os.rename(p, p .. ".1") end
 end
 
+-- Ненадёжный QUIC — сразу отказ. Пакеты QUIC, которые съел ТСПУ, просто
+-- пропадают, и приложение ждёт таймаута, прежде чем перейти на TCP (YouTube:
+-- данные плеера по QUIC — каждая пятая попытка без ответа, ролик стоит на
+-- картинке). Адрес, где QUIC за полчаса не прошёл хотя бы QUIC_BAD раз и
+-- прошёл меньше чем в половине случаев, служба на QUIC_HOLD отвечает на QUIC
+-- отказом (REJECT): приложение тут же идёт по TCP, а TCP обход проходит
+local QUIC_BAD = 3
+local QUIC_HOLD = 1800
+SM.qst, SM.qno = SM.qst or {}, SM.qno or {}
+local function quic_write(t)
+	if not SM.home then return end
+	local out = {}
+	for ip, u in pairs(SM.qno) do if u > t then out[#out + 1] = ip .. " " .. u else SM.qno[ip] = nil end end
+	local p = SM.home .. "/state/smart_quicno"
+	local f = io.open(p .. ".tmp", "w")
+	if not f then return end
+	f:write(table.concat(out, "\n"), #out > 0 and "\n" or "")
+	f:close()
+	os.rename(p .. ".tmp", p)
+end
+local function quic_obs(slot, c, ok, t)
+	if not (c and c.ip and slot and slot:find("^quic")) then return end
+	local x = SM.qst[c.ip]
+	if not x or t - x.t0 > QUIC_HOLD then x = { ok = 0, err = 0, t0 = t }; SM.qst[c.ip] = x end
+	if ok then x.ok = x.ok + 1 else x.err = x.err + 1 end
+	if not ok and x.err >= QUIC_BAD and x.ok * 2 < x.err + x.ok and not (SM.qno[c.ip] and SM.qno[c.ip] > t) then
+		SM.qno[c.ip] = t + QUIC_HOLD
+		SJ(tostring(c.key) .. ": QUIC к " .. c.ip .. " не проходит (удач " .. x.ok .. ", ошибок " .. x.err .. ") — " ..
+			math.floor(QUIC_HOLD / 60) .. " мин на QUIC сразу отказ, приложение идёт по TCP")
+		SM.qst[c.ip] = nil
+		quic_write(t)
+	end
+end
+
 local function on_ok(slot, r, v, t, c)
 	count(r, slot, "ok", v, 1, t)
 	ipstat(c, true, t)
+	quic_obs(slot, c, true, t)
 	-- запоминаем только «особый» вариант: не лучший в сети (с лучшего новые
 	-- сайты и так начинают). На одних /24 у Cloudflare — тысячи чужих сайтов,
 	-- и общий вариант сети не должен из-за соседства подменяться чем попало
@@ -964,7 +999,7 @@ end
 local function on_err(slot, key, r, v, n, t, pass, mid, c)
 	-- исход по адресу — и тогда, когда сайт уже признан «не DPI»: так DNS
 	-- модуля узнаёт про прокси обхода геоблока, который не принимает соединений
-	if not mid and not SM.offline then ipstat(c, false, t) end
+	if not mid and not SM.offline then ipstat(c, false, t); quic_obs(slot, c, false, t) end
 	-- уже ясно, что дело не в DPI: не считаем и не перебираем
 	if r.nodpi and r.nodpi > t then return end
 	if network_suspect(key, t) then
@@ -1197,6 +1232,7 @@ function smart_watch()
 		local t = now()
 		ipstat_flush(t)
 		gv_expire(t)
+		for _, u in pairs(SM.qno) do if u <= t then quic_write(t); break end end
 		-- без трафика наблюдатель спит: таблицу читать незачем. Но пока живы
 		-- удачные соединения — смотрит, сколько они проработали
 		local busy = t - SM.lastconn <= 120
@@ -1401,6 +1437,8 @@ function smart(ctx, desync)
 			on_err(slot, key, r, prev.v, n, t, pass, prev.ok, prev)
 		end
 		r.lastc = crec.smart
+		-- адрес сервера — и у QUIC (для отказа ненадёжному QUIC, см. quic_obs)
+		if desync.outgoing and not desync.dis.tcp then crec.smart.ip = desync.target and norm_ip(host_ip(desync)) end
 		-- для наблюдателя: по локальному порту он узнает сайт и вариант
 		if desync.dis.tcp and desync.outgoing then
 			crec.smart.ip = desync.target and norm_ip(host_ip(desync))
@@ -1496,8 +1534,8 @@ function smart(ctx, desync)
 			if cs.cht and gv_ip(cs) then
 				if total and total >= GV_BIGCLOSE then gv_observe(cs, true, t)
 				elseif (total or cs.maxin) < GV_SHORT and cs.maxin < GV_BIG then gv_observe(cs, false, t) end
-				gv_trace(cs, (desync.outgoing and "клиент-" or "сервер-") .. (fin and "FIN" or "RST"), total, t)
 			end
+			if cs.cht then gv_trace(cs, (desync.outgoing and "клиент-" or "сервер-") .. (fin and "FIN" or "RST"), total, t) end
 			if not cs.ok and cs.maxin >= ANSWER then
 				cs.ok = true
 				on_ok(slot, r, cs.v, t, cs)

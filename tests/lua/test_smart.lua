@@ -891,6 +891,24 @@ writefile(HOME .. "/state/smart_gvpick", "0\n"); later(120); gvbig("10.9.9.1"); 
 check((readall(HOME .. "/state/smart_gvnat") or "") == "", "the setting off: no redirects")
 os.remove(HOME .. "/state/smart_gvpick"); os.remove(HOME .. "/state/smart_gvnat"); later(120)
 
+section("QUIC that does not get through is refused, so apps go to TCP at once")
+later(4000); os.remove(HOME .. "/state/smart_quicno")
+local function qconn(ip, ok)
+	later(); local c = conn("quicsite.example"); c.ip = ip
+	packet(c, { slot = "quic" })
+	if ok then packet(c, { incoming = true, seq = 18000, slot = "quic" }) else for k = 1, 3 do packet(c, { retrans = true, slot = "quic" }) end end
+end
+qconn("198.51.100.20", false); qconn("198.51.100.20", false)
+check(readall(HOME .. "/state/smart_quicno") == nil, "two failures are not enough")
+qconn("198.51.100.20", false)
+check((readall(HOME .. "/state/smart_quicno") or ""):find("^198.51.100.20 %d+") ~= nil, "three QUIC failures and no success: QUIC to that address is refused for a while")
+check((readall(HOME .. "/logs/smart.log") or ""):find("QUIC к 198.51.100.20 не проходит", 1, true) ~= nil, "the smart log says so")
+qconn("198.51.100.21", true); qconn("198.51.100.21", true); qconn("198.51.100.21", true); qconn("198.51.100.21", false); qconn("198.51.100.21", false); qconn("198.51.100.21", false)
+check((readall(HOME .. "/state/smart_quicno") or ""):find("198.51.100.21", 1, true) == nil, "QUIC that works half the time is left alone")
+later(1900); tcptable({}); smart_watch()
+check((readall(HOME .. "/state/smart_quicno") or "") == "", "after half an hour the refusal is lifted")
+os.remove(HOME .. "/state/smart_quicno")
+
 section("failing addresses are reported to the module's DNS")
 -- прокси обхода геоблока проходит проверку DNS, а соединения приложений на нём
 -- рвутся: DNS модуля узнаёт это из state/smart_ipstat и уводит сайты

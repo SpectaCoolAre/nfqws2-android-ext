@@ -268,7 +268,9 @@ dns_geo_routes() { # [save] -> «домен<TAB>сервер<TAB>протоко�
     # частая проверка свежее: сервер, не ответивший в ней, сейчас недоступен —
     # маршрут из полной проверки на него не ведёт (иначе домен получал ошибку)
     !/^[#=+!?]/ && $2 == "fail" && FILENAME == hf { delete pr[$1]; next }
-    /^=/ { d = substr($1, 2); if (!(d in rt)) ord[++n] = d; rt[d] = $2; netb[d] = ($3 == "net"); if (FILENAME == hf || (d in basehot)) hot[d] = 1 }
+    /^=/ { d = substr($1, 2); if (!(d in rt)) ord[++n] = d; rt[d] = $2; netb[d] = ($3 == "net"); if (FILENAME == hf || (d in basehot)) hot[d] = 1
+      # какие серверы домен обходят по полной проверке (не по частой)
+      if (FILENAME != hf) { fullseen[d] = 1; m = split($2, hs, ","); for (i = 1; i <= m; i++) full[d, hs[i]] = 1 } }
     END {
       for (k = 1; k <= n; k++) {
         d = ord[k]
@@ -322,7 +324,19 @@ dns_geo_routes() { # [save] -> «домен<TAB>сервер<TAB>протоко�
       for (k = 1; k <= n; k++) {
         d = ord[k]; s = site(d)
         if (rt[d] == "-" || ch[s] == "-") { out(d, "-"); continue }
-        if (substr(s, 1, 1) == "@" && ch[s] != "") { out(d, ch[s]); continue }
+        # домен группы — к её серверу; но если тот этот домен не обходит
+        # вообще (по полной проверке), а другой обходит, — к другому (из
+        # обходящих — к тому, что годится большему числу доменов группы).
+        # Иначе сервер группы отдавал настоящий адрес: signaler-pa.googleapis.com
+        # обходил только bezmezhau, группа была на wlrus — и приложение Gemini
+        # ходило к Google с российского адреса (журнал 09.11.2026). Промах в
+        # одной частой проверке и старые данные сети домен не уводят: адрес
+        # выхода важнее
+        if (substr(s, 1, 1) == "@" && ch[s] != "") {
+          x = ch[s]
+          if (fresh && nc[d] && fullseen[d] && !((d, x) in full)) { x = c[d, 1]; for (i = 2; i <= nc[d]; i++) if (cnt[s, c[d, i]] > cnt[s, x]) x = c[d, i] }
+          out(d, x); continue
+        }
         if (!nc[d]) continue
         x = c[d, 1]
         for (i = 1; i <= nc[d]; i++) if (c[d, i] == ch[s]) x = ch[s]

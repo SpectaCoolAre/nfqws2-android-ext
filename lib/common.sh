@@ -64,6 +64,7 @@ MARK_INCLUDE="0x10000000/0x10000000"
 MARK_PROCESSED="0x40000000/0x40000000"
 
 IPT_GROUP_POST="nfqws_post"
+IPT_GROUP_QREJ="nfqws_quicrej"   # BLOCK_QUIC: отказ на QUIC (filter OUTPUT)
 IPT_GROUP_PRE="nfqws_pre"
 IPT_GROUP_NAT="nfqws_nat"
 IPT_GROUP_QOUT="nfqws_qout"
@@ -1023,8 +1024,14 @@ _firewall_start() {
 
   app_rules "$CMD"
 
+  # «Блокировать QUIC» — отказом, а не молчаливым DROP: на пропавший пакет
+  # приложение ждёт таймаута, прежде чем перейти на TCP (ролики YouTube
+  # стояли на картинке), а на отказ переходит сразу
   if [ "$BLOCK_QUIC" = "1" ]; then
-    $CMD -w -t mangle -A $IPT_GROUP_POST -p udp --dport 443 -j DROP
+    $CMD -w -t filter -N $IPT_GROUP_QREJ 2>/dev/null
+    $CMD -w -t filter -F $IPT_GROUP_QREJ 2>/dev/null
+    $CMD -w -t filter -A $IPT_GROUP_QREJ -p udp --dport 443 -j REJECT 2>/dev/null
+    $CMD -w -t filter -C OUTPUT -j $IPT_GROUP_QREJ 2>/dev/null || $CMD -w -t filter -I OUTPUT 1 -j $IPT_GROUP_QREJ 2>/dev/null
   fi
 
   if [ -n "$ISP_INTERFACE" ]; then
@@ -1085,9 +1092,11 @@ _firewall_stop_batch() { # <iptables|ip6tables>
   if ! command -v "$CMD-save" >/dev/null 2>&1 || ! command -v "$CMD-restore" >/dev/null 2>&1; then
     return 1
   fi
-  for t in mangle nat; do
+  for t in mangle nat filter; do
     if [ "$t" = mangle ]; then
       chains="$IPT_GROUP_POST $IPT_GROUP_PRE $IPT_GROUP_FWD $IPT_GROUP_QOUT $IPT_GROUP_QIN $IPT_GROUP_APP"
+    elif [ "$t" = filter ]; then
+      chains="$IPT_GROUP_QREJ"
     else
       [ "$CMD" = iptables ] || continue
       chains="$IPT_GROUP_NAT"
@@ -1125,6 +1134,8 @@ _firewall_stop() {
   $CMD -w -t mangle -F $IPT_GROUP_QOUT 2>/dev/null; $CMD -w -t mangle -X $IPT_GROUP_QOUT 2>/dev/null
   $CMD -w -t mangle -F $IPT_GROUP_QIN 2>/dev/null;  $CMD -w -t mangle -X $IPT_GROUP_QIN 2>/dev/null
   $CMD -w -t mangle -F $IPT_GROUP_APP 2>/dev/null; $CMD -w -t mangle -X $IPT_GROUP_APP 2>/dev/null
+  while $CMD -w -t filter -D OUTPUT -j $IPT_GROUP_QREJ 2>/dev/null; do :; done
+  $CMD -w -t filter -F $IPT_GROUP_QREJ 2>/dev/null; $CMD -w -t filter -X $IPT_GROUP_QREJ 2>/dev/null
   if [ "$CMD" = "iptables" ]; then
     while $CMD -w -t nat -D POSTROUTING -j $IPT_GROUP_NAT 2>/dev/null; do :; done
     $CMD -w -t nat -F $IPT_GROUP_NAT 2>/dev/null; $CMD -w -t nat -X $IPT_GROUP_NAT 2>/dev/null
