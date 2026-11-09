@@ -990,10 +990,9 @@ dns_geo_routes > "$SANDBOX/routes.before"
 printf '=gemini.google.com\ta.example\n' >> "$(dns_geo_scan_file).hot"
 assert_contains "$(dns_geo_routes_diff "$SANDBOX/routes.before")" "gemini.google.com b.example → a.example" "a route change is spelled out for the log"
 rm -f "$(dns_geo_scan_file).hot"
-# С мобильной на Wi‑Fi: частой проверки Wi‑Fi ещё нет (или она старее полной),
-# общий сервер обходит Gemini, но меньше доменов группы, чем другой, — он всё
-# равно остаётся: иначе сервер сменился бы сразу после подключения, а через
-# полминуты частая проверка вернула бы прежний — два адреса выхода подряд
+# Сервер группы обходит gemini.google.com, но не остальные её домены, а другой
+# обходит все: группа уходит к нему — иначе signaler-pa и geminiweb-pa шли к
+# Google с настоящего адреса, и Gemini отвечал геоблоком (d.webshiftvpn.ru, 09.11)
 { printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
   printf 'a.example\tok\t20\t3\t3\t0\ttls\n'
   printf 'b.example\tok\t30\t3\t3\t0\ttls\n'
@@ -1004,7 +1003,11 @@ rm -f "$(dns_geo_scan_file).hot"
 } > "$(dns_geo_scan_file)"
 rm -f "$(dns_geo_scan_file).hot" "$(dns_geo_scan_file).pin"
 echo "@google b.example" > "$DNS_GEO_SCAN_DIR/groups.pin"
-assert_contains "$(dns_geo_routes)" "gemini.google.com	b.example" "the group server stays on a network without a frequent check while it serves the main services there"
+r=$(dns_geo_routes)
+assert_contains "$r" "gemini.google.com	a.example" "a group server that misses some of the group's domains gives way to one serving them all"
+assert_contains "$r" "signaler-pa.clients6.google.com	a.example" "for the whole group"
+printf '=signaler-pa.clients6.google.com\ta.example,b.example\n=waa-pa.clients6.google.com\ta.example,b.example\n=generativelanguage.googleapis.com\tb.example,a.example\n' >> "$(dns_geo_scan_file)"
+assert_contains "$(dns_geo_routes)" "gemini.google.com	b.example" "while it serves them all, the pinned server stays (no new exit address)"
 # данные сети старые (больше часа) — общий сервер держится, пока отвечает
 { printf '#time=%s boot=x v=%s\n' "$(( $(date +%s) - 7200 ))" "$DNS_GEO_SCAN_VER"
   printf 'a.example\tok\t20\t3\t3\t0\ttls\n'
@@ -1013,6 +1016,26 @@ assert_contains "$(dns_geo_routes)" "gemini.google.com	b.example" "the group ser
   printf '=signaler-pa.clients6.google.com\ta.example\n'
 } > "$(dns_geo_scan_file)"
 assert_contains "$(dns_geo_routes)" "gemini.google.com	b.example" "and on stale data of a network it is kept while it answers there"
+# Случай из журнала 09.11 (МТС): группа Google закреплена за сервером, который
+# обходит gemini.google.com, но не signaler-pa, geminiweb-pa.clients и
+# gemini.gstatic.com; другой обходит всё — группа переходит к нему
+{ printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
+  printf 'bez.example\tok\t379\t356\t741\t6\ttls\n'; printf 'web.example\tok\t289\t490\t741\t3\ttls\n'
+  printf '=gemini.google.com\tdns.malw.link,bez.example,web.example\n'
+  printf '=gemini.google\tbez.example,web.example\n'
+  printf '=generativelanguage.googleapis.com\tbez.example,web.example\n'
+  printf '=signaler-pa.googleapis.com\tbez.example\n'
+  printf '=geminiweb-pa.clients.google.com\tbez.example\n'
+  printf '=gemini.gstatic.com\tbez.example\n'
+  printf '=alkalimining-pa.googleapis.com\t-\n'
+} > "$(dns_geo_scan_file)"
+rm -f "$(dns_geo_scan_file).hot" "$(dns_geo_scan_file).rel" "$(dns_geo_scan_file).pin"
+echo "@google web.example" > "$DNS_GEO_SCAN_DIR/groups.pin"
+r=$(dns_geo_routes | sort | tr '\n' '|')
+assert_contains "$r" "signaler-pa.googleapis.com	bez.example" "09.11: Gemini's group leaves a server that bypasses only part of it"
+assert_contains "$r" "gemini.google.com	bez.example" "and goes whole to the one bypassing all of it"
+assert_contains "$r" "alkalimining-pa.googleapis.com	bez.example" "a group domain nobody bypasses goes with the group (one exit address)"
+rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
 # Стабильность, а не скорость: надёжность серверов по истории проверок
 # (<файл>.rel) — серия неудач и скользящая доля удач для основных доменов
 # группы. Одна неудачная проверка сервер группы не снимает, две подряд —
@@ -1026,15 +1049,15 @@ mkhot() { { printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
   printf 'a.example\tok\t20\t3\t3\t0\ttls\n'; printf 'b.example\tok\t30\t3\t3\t0\ttls\n'; printf 'c.example\tok\t10\t3\t3\t0\ttls\n'
   printf '=gemini.google.com\ta.example,b.example,c.example\n'
   printf '=signaler-pa.clients6.google.com\ta.example,b.example,c.example\n'
-  printf '=waa-pa.clients6.google.com\tc.example\n'
+  printf '=waa-pa.clients6.google.com\ta.example,b.example,c.example\n'
 } > "$(dns_geo_scan_file)"
 rm -f "$(dns_geo_scan_file).rel" "$(dns_geo_scan_file).pin"
 echo "@google b.example" > "$DNS_GEO_SCAN_DIR/groups.pin"
-mkhot "a.example,b.example,c.example"; dns_geo_rel_update "$hotf" hot
-mkhot "a.example,c.example"; dns_geo_rel_update "$hotf" hot
+mkhot "a.example,b.example,c.example"; dns_geo_rel_update "$hotf"
+mkhot "a.example,c.example"; dns_geo_rel_update "$hotf"
 assert_contains "$(cat "$(dns_geo_scan_file).rel")" "@google	b.example	0.469	1" "a check where the server did not serve the main service is counted: lower reliability, a miss in a row"
 assert_contains "$(dns_geo_routes)" "gemini.google.com	b.example" "one missed check does not change the group server (a new exit address would be worse)"
-mkhot "a.example,c.example"; dns_geo_rel_update "$hotf" hot
+mkhot "a.example,c.example"; dns_geo_rel_update "$hotf"
 printf '@google\ta.example\t0.900\t0\n@google\tc.example\t0.400\t0\n@google\tb.example\t0.200\t2\n' > "$(dns_geo_scan_file).rel"
 r=$(dns_geo_routes)
 assert_contains "$r" "gemini.google.com	a.example" "two misses in a row do; the new one is the most reliable by history, not the one serving more domains"
@@ -1083,7 +1106,7 @@ printf 'examplegame.com\ta.example\t0.400\t2\n' > "$(dns_geo_scan_file).rel"
 assert_contains "$(dns_geo_routes)" "login.examplegame.com	b.example" "two misses in a row change it"
 mkhot "a.example"
 printf '=login.examplegame.com\ta.example,b.example\n' >> "$hotf"
-dns_geo_rel_update "$hotf" hot
+dns_geo_rel_update "$hotf"
 assert_contains "$(cat "$(dns_geo_scan_file).rel")" "examplegame.com	a.example" "the history is kept for ordinary sites too, not only for groups"
 rm -f "$hotf" "$(dns_geo_scan_file).rel" "$(dns_geo_scan_file).pin"
 # Группа на DNS сети — с запасом: войти — когда DNS сети обходит все её

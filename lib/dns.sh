@@ -171,10 +171,15 @@ dns_geo_pick_up() {
 # сессии и перезапуск dnsproxy с пустым кэшем. Раньше маршруты строились по
 # каждому домену и переставлялись после каждой проверки — за сутки 33 смены
 # и 59 перезапусков, gamea.clashofclans.com сменил сервер восемь раз.
-#   - сервер группы годится, если обходит все её основные домены, которыми
-#     пользуются; новый выбирается среди годных: сначала предпочтительные
-#     (dns-geo-prefer.list), затем самый надёжный по истории, затем
-#     обходящий больше; сервер группы общий для всех сетей (groups.pin);
+#   - сервер группы годится, если обходит её домены, которыми пользуются, и
+#     не меньше 90% её доменов от лучшего: группа идёт через него целиком, и
+#     домен, которого он не обходит, уходит к сайту с настоящего адреса —
+#     Gemini с d.webshiftvpn.ru (29 доменов группы из 67: gemini.google.com
+#     да, signaler-pa, geminiweb-pa.clients, gemini.gstatic.com нет) отвечал
+#     геоблоком (09.11). Новый выбирается среди годных: сначала
+#     предпочтительные (dns-geo-prefer.list), затем самый надёжный по
+#     истории, затем обходящий больше; сервер группы общий для всех сетей
+#     (groups.pin);
 #   - группа уходит к DNS сети (роутер дома сам обходит), когда тот обходит
 #     все её основные домены, и возвращается, когда перестал обходить
 #     большинство;
@@ -195,6 +200,9 @@ dns_geo_routes() { # [save]
       for (x = d; ; x = substr(x, i + 1)) { if (x in grp) return "@" grp[x]; if ((i = index(x, ".")) == 0) break }
       n = split(d, a, "."); return n < 2 ? d : a[n - 1] "." a[n] }
     function usable(h) { return h != "" && (h in pr) && !(h in off) }
+    # сервер группы годен: обходит домены, которыми пользуются, и не меньше 90%
+    # доменов группы от лучшего (все не обходит никто: 09.11 лучший — 62 из 67)
+    function gfit(s, h) { return cnt[s, h] >= nr && call[s, h] * 10 >= mx[s] * 9 }
     function out(d, x) { if (x == "-") print d "\t-"; else print d "\t" x "\t" pr[x] }
     BEGIN { while ((getline l < of) > 0) { gsub(/[[:space:]]/, "", l); if (l != "") off[l] = 1 }
       while ((getline l < pf) > 0) { split(l, a, " "); if (a[1] != "") pin[a[1]] = a[2] }
@@ -208,7 +216,8 @@ dns_geo_routes() { # [save]
     !/^[#=+!?]/ && $2 == "ok" { pr[$1] = ($7 == "https" ? "https" : "tls"); next }
     # сервер, не ответивший в частой проверке, сейчас недоступен
     !/^[#=+!?]/ && $2 == "fail" && FILENAME == hf { delete pr[$1]; next }
-    /^=/ { d = substr($1, 2); if (!(d in rt)) ord[++n] = d; rt[d] = $2; netb[d] = ($3 == "net"); if (FILENAME == hf || (d in basehot)) hot[d] = 1 }
+    /^=/ { d = substr($1, 2); if (!(d in rt)) ord[++n] = d; rt[d] = $2; netb[d] = ($3 == "net"); if (FILENAME == hf || (d in basehot)) hot[d] = 1
+      if (FILENAME != hf) rtf[d] = $2 }
     END {
       # кто какой домен обходит; вес домена, которым пользуются, — 1000
       for (k = 1; k <= n; k++) {
@@ -219,9 +228,16 @@ dns_geo_routes() { # [save]
         for (i = 1; i <= m; i++) if (usable(hs[i])) {
           by[d, hs[i]] = 1; if (!nby[d]++) { first[d] = hs[i]; nk[s]++ }
           if (!((s, hs[i]) in cnt)) so[s, ++ns[s]] = hs[i]
-          cnt[s, hs[i]] += (d in hot) ? 1000 : 1
+          cnt[s, hs[i]] += (d in hot) ? 1000 : 1; call[s, hs[i]]++
         }
         if (d in hot) hotn[s]++
+      }
+      # то же по полной проверке — по ней одна неудачная частая сервер группы не снимает
+      for (k = 1; k <= n; k++) {
+        d = ord[k]; if (!(d in rtf) || rtf[d] == "-") continue
+        s = site(d); m = split(rtf[d], hs, ","); c = 0
+        for (i = 1; i <= m; i++) if (usable(hs[i])) { callf[s, hs[i]]++; c++ }
+        if (c) nkf[s]++
       }
       for (s in nd) {
         isg = substr(s, 1, 1) == "@"
@@ -234,6 +250,25 @@ dns_geo_routes() { # [save]
           # DNS сети обходит группу сам — с запасом в обе стороны
           if (hall[s] > 0 && (g == "-" ? hnet[s] * 2 > hall[s] : hnet[s] == hall[s])) { ch[s] = "-"; continue }
           if (g == "-") g = ""
+          # лучшее покрытие группы — среди обходящих домены, которыми пользуются
+          mx[s] = 0; mxf = 0; anyfit = 0
+          for (i = 1; i <= ns[s]; i++) { h = so[s, i]; if (cnt[s, h] >= nr && call[s, h] > mx[s]) mx[s] = call[s, h]; if (callf[s, h] > mxf) mxf = callf[s, h] }
+          for (i = 1; i <= ns[s]; i++) if (gfit(s, so[s, i])) anyfit = 1
+          if (usable(g) && gfit(s, g)) { ch[s] = g; continue }
+          # по старым данным сети — пока отвечает; одна неудачная частая
+          # проверка не снимает, если по полной обходит всё
+          if (usable(g) && !fresh) { ch[s] = g; continue }
+          if (usable(g) && ((s, g) in rst) && rst[s, g] < 2 && mxf && callf[s, g] * 10 >= mxf * 9) { ch[s] = g; continue }
+          # используемые не обходит никто — держится выбранный, пока отвечает
+          if (usable(g) && !anyfit) { ch[s] = g; continue }
+          # новый: годные (предпочтительные, надёжные), затем обходящие
+          # используемые и больше доменов, затем обходящие больше
+          best = ""
+          for (i = 1; i <= ns[s]; i++) { h = so[s, i]
+            tr = gfit(s, h) ? 2 : (cnt[s, h] >= nr ? 1 : 0)
+            p = (tr == 2 && ((s, h) in pref)) ? 1000 - pref[s, h] : 0; r = (tr == 2 && ((s, h) in rsc)) ? rsc[s, h] : .5
+            if (best == "" || tr > bt || (tr == bt && (p > bp || (p == bp && (r > br + .001 || (r > br - .001 && (call[s, h] > call[s, best] || (call[s, h] == call[s, best] && cnt[s, h] > cnt[s, best])))))))) { best = h; bt = tr; bp = p; br = r } }
+          ch[s] = best; continue
         } else {
           # обычный сайт: пул его обходит — своего сервера не нужно
           if (usable(pool) && ((s, pool) in cnt) && cnt[s, pool] >= nr) continue
@@ -290,34 +325,35 @@ dns_geo_routes_diff() {
       if (k > 5) out = out " и ещё " (k - 5); printf "%s", out }'
 }
 # Надёжность серверов для групп сайтов (<файл>.rel): после каждой проверки —
-# для каждой группы и каждого сервера, обходил ли он в этой проверке все
-# основные домены группы, которыми пользуются (частая проверка — её домены
-# группы, полная — основные сервисы DNS_GEO_HOT_BASE). Строка: «группа сервер
+# для каждой группы и каждого сервера, обходил ли он в этой проверке не меньше
+# 90% доменов группы от лучшего (частая проверка — её домены), для обычного
+# сайта — все его домены. Строка: «группа сервер
 # надёжность серия»: надёжность — скользящая доля удач (каждая проверка —
 # четверть веса), серия — сколько проверок подряд не обходил. По ней сервер
 # группы выбирается самый стабильный, а не самый быстрый, и не снимается
 # из-за одной неудачной проверки: за день на мобильной сервер Google менялся
 # шесть раз — серверы то отвечают, то нет, — и Gemini каждый раз получал
 # новый адрес выхода
-dns_geo_rel_update() { # <файл проверки> <hot|full>
+dns_geo_rel_update() { # <файл проверки>
   local f r; f=$(dns_geo_scan_file); r="$f.rel"
   [ -s "$1" ] || return 0
-  awk -F'\t' -v gf="$DNS_GEO_GROUPS" -v base="$DNS_GEO_HOT_BASE" -v mode="$2" -v rf="$r" '
+  awk -F'\t' -v gf="$DNS_GEO_GROUPS" -v rf="$r" '
     # сайт — как в dns_geo_routes: группа или две последние части имени
     # (раньше история была только у групп, и обычные сайты меняли сервер по
     # первой же неудачной проверке: Supercell — почти каждый час)
     function site(d,   x, i, n, a) { for (x = d; ; x = substr(x, i + 1)) { if (x in grp) return "@" grp[x]; if ((i = index(x, ".")) == 0) break }
       n = split(d, a, "."); return n < 2 ? d : a[n - 1] "." a[n] }
     BEGIN { while ((getline l < gf) > 0) { sub(/#.*/, "", l); n = split(tolower(l), a, " "); for (i = 2; i <= n; i++) grp[a[i]] = a[1] }
-      nb = split(base, bl, " "); for (i = 1; i <= nb; i++) basehot[bl[i]] = 1
       while ((getline l < rf) > 0) { split(l, a, "\t"); if (a[1] != "") { sc[a[1], a[2]] = a[3]; st[a[1], a[2]] = a[4]; key[a[1] SUBSEP a[2]] = 1 } } }
     !/^[#=+!?]/ && NF > 2 { srv[$1] = 1; next }
     /^=/ { d = substr($1, 2); s = site(d); if (s == "" || $2 == "-") next
-      if (mode == "full" && substr(s, 1, 1) == "@" && !(d in basehot)) next
       used[s]++; m = split($2, hs, ","); for (i = 1; i <= m; i++) hit[s, hs[i]]++ }
     END {
+      for (s in used) for (h in srv) if (hit[s, h] > best[s]) best[s] = hit[s, h]
       for (s in used) for (h in srv) {
-        ok = (hit[s, h] == used[s]) ? 1 : 0
+        # группа: не меньше 90% её доменов от лучшего, как в dns_geo_routes;
+        # обычный сайт — все его домены
+        ok = (substr(s, 1, 1) == "@" ? hit[s, h] > 0 && hit[s, h] * 10 >= best[s] * 9 : hit[s, h] == used[s]) ? 1 : 0
         old = ((s, h) in sc) ? sc[s, h] : .5
         sc[s, h] = old * .75 + ok * .25; st[s, h] = ok ? 0 : st[s, h] + 1; key[s SUBSEP h] = 1
       }
@@ -436,7 +472,7 @@ dns_geo_scan() { # [full|hot]
   rm -f "$DNS_RUN_DIR/geoscan.list"
   # частая: ответов нет — итог прежний, она повторится в свой срок
   if [ "$mode" = hot ]; then
-    if grep -q '	ok	' "$out"; then mv -f "$out" "$f.hot"; dns_geo_rel_update "$f.hot" hot; else rm -f "$out"; fi
+    if grep -q '	ok	' "$out"; then mv -f "$out" "$f.hot"; dns_geo_rel_update "$f.hot"; else rm -f "$out"; fi
     rmdir "$lock" 2>/dev/null
     dns_geo_pin_save
     after=$(dns_geo_pick | tr '\n' ' ')
@@ -464,7 +500,7 @@ dns_geo_scan() { # [full|hot]
     mv -f "$f.tmp" "$f"
   fi
   rmdir "$lock" 2>/dev/null
-  grep -q '	ok	' "$f" 2>/dev/null && dns_geo_rel_update "$f" full
+  grep -q '	ok	' "$f" 2>/dev/null && dns_geo_rel_update "$f"
   dns_geo_pin_save
   after=$(dns_geo_pick | tr '\n' ' ')
   # сводка маршрутов: сколько доменов у какого сервера, сколько — в DNS сети
@@ -473,6 +509,8 @@ dns_geo_scan() { # [full|hot]
   n=$(grep -c -v '^[#=+!?]' "$f" 2>/dev/null); ok=$(grep -c '	ok	' "$f" 2>/dev/null)
   local nb; nb=$(grep -c '^=.*	-	net$' "$f" 2>/dev/null)
   dns_log "проверка DNS обхода геоблока: ответили ${ok:-0} из ${n:-0}; пул — ${after:-пусто (остаётся Comss)}${routes:+; по доменам: $routes}$([ "${nb:-0}" -gt 0 ] && echo "; DNS сети сам обходит доменов: $nb — они остаются ему")"
+  # ответившие с оговоркой: только DoH (почему не DoT) или не на все домены
+  awk -F'\t' '!/^[#=+!?]/ && $2 == "ok" && $8 != "" { print $1 ": " $8 }' "$f" | while IFS= read -r l; do dns_log "  $l"; done
   [ "$before" != "$after$(dns_geo_routes | tr '\n\t' '  ')" ] && dns_apply_now
   echo "$(date +%s) ok" > "$DNS_RUN_DIR/geoscan.result"
   return 0

@@ -750,6 +750,8 @@ func scanServer(server string, names []string, boot string, wait time.Duration) 
 	}
 	h := dohScan(server, names, boot, wait)
 	if h.ok {
+		// DoT не прошёл — почему, видно в подробностях сервера и в журнале
+		h.err = "DoT: " + r.err
 		return h
 	}
 	r.err = "DoT: " + r.err + "; DoH: " + h.err
@@ -1391,8 +1393,24 @@ func formatScan(r scanResult) string {
 		}
 	}
 	line := fmt.Sprintf("%s\t%s\t%d\t%d\t%d\t%d\t%s", r.server, st, r.ms, p, len(r.marks), own, r.proto)
-	if r.err != "" {
-		line += "\t" + strings.ReplaceAll(r.err, "\t", " ")
+	note := r.err
+	// ответил не на все домены: «обходит N» — из ответивших, остальные — без данных
+	if r.ok {
+		got := 0
+		for _, g := range r.got {
+			if g {
+				got++
+			}
+		}
+		if got < len(r.marks) {
+			if note != "" {
+				note += "; "
+			}
+			note += fmt.Sprintf("ответил на %d из %d", got, len(r.marks))
+		}
+	}
+	if note != "" {
+		line += "\t" + strings.ReplaceAll(note, "\t", " ")
 	}
 	return line
 }

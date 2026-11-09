@@ -365,8 +365,8 @@ func TestGeoScanFallsBackToDoH(t *testing.T) {
 	if !res[0].ok || res[0].proto != "https" || string(res[0].marks) != "psp" {
 		t.Fatalf("DoH: %+v", res[0])
 	}
-	if l := formatScan(res[0]); !strings.HasSuffix(l, "\t2\t3\t0\thttps") {
-		t.Fatalf("строка: %q", l)
+	if l := formatScan(res[0]); !strings.Contains(l, "\t2\t3\t0\thttps\tDoT: ") {
+		t.Fatalf("строка — с причиной, почему не DoT: %q", l)
 	}
 }
 
@@ -614,5 +614,14 @@ func TestGeoScanUnansweredDomainIsUnknown(t *testing.T) {
 	}
 	if rt[2].known || rt[2].direct {
 		t.Fatalf("lost.example — без данных, а не «в DNS сети»: %+v", rt[2])
+	}
+}
+
+// Сервер ответил не на все домены — в строке итога это видно: «обходит N»
+// считается только из ответивших
+func TestFormatScanTellsUnansweredDomains(t *testing.T) {
+	r := scanResult{server: "s", ok: true, ms: 5, marks: []byte("pnn"), got: []bool{true, false, false}, share: []int{2, 0, 0}, proto: "tls"}
+	if l := formatScan(r); !strings.HasSuffix(l, "\t1\t3\t0\ttls\tответил на 1 из 3") {
+		t.Fatalf("строка: %q", l)
 	}
 }
