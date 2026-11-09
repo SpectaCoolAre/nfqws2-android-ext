@@ -109,10 +109,6 @@ local FROZEN_RTX = 3        -- столько переотправок одно�
 local FROZEN_IN = 12        -- входящих пакетов: дальше их может не быть видно (лимит очереди), и счёт нечем обнулять
 local NET_STUCK_IPS = 3     -- застряло у стольких разных серверов разом — это сеть, а не DPI
 local SILENT_SEC = 4        -- сек: ClientHello дошёл (переотправок нет), а сервер молчит — DPI съел ответ
--- Google (видео YouTube): кэш в сети оператора отвечает за 0,1–0,3 с, а
--- каждая секунда ожидания — стоп-кадр в ленте; молчание дольше 2 с — уже не
--- ответ (журнал 07.11.2026: сбои пачками, соединение висело 4–7 с до обрыва)
-local SILENT_SEC_SLOT = { google = 2 }
 local APP_UID = 10000       -- наблюдатель — только за приложениями
 local NODPI_VARIANTS = 4    -- ошибки хотя бы на стольких вариантах (и на половине набора), ни одной удачи — не DPI
 local NODPI_TIME = 6 * 3600
@@ -161,27 +157,6 @@ local function shared_zone(two)
 end
 -- Ключ сайта. Без имени — адрес, но только там, где имени и не будет
 -- (mtproto и прочее): у TLS, HTTP и QUIC имя приходит с первым пакетом данных
--- Видео YouTube приходит с двух разных мест: с кэшей Google в сети
--- оператора (у МТС — 212.188.x) и с серверов самого Google. Через ТСПУ к ним
--- проходят разные варианты (журналы 07.11.2026: на кэшах МТС hostfakesplit —
--- 94 из 94, на серверах Google он же то и дело молчит), а сайт для умного
--- режима был один — и вариант метался между ними. Теперь это два сайта:
--- googlevideo.com (серверы Google) и googlevideo.com~isp (кэши оператора)
-local GV_ISP = "googlevideo.com~isp"
-local GOOG4 = {}
-for _, n in ipairs({ "64.233", "64.15", "66.102", "66.249", "72.14", "74.125", "108.170", "108.177", "142.250", "142.251",
-	"172.217", "172.253", "173.194", "192.178", "192.179", "209.85", "216.58", "216.239" }) do GOOG4[n] = true end
-local function google_ip(ip)
-	if not ip then return true end
-	local a, b = ip:match("^(%d+)%.(%d+)%.")
-	if a then return GOOG4[a .. "." .. b] == true end
-	ip = ip:lower()
-	for _, p in ipairs({ "^2a00:1450:", "^2404:6800:", "^2607:f8b0:", "^2800:0?3f0:", "^2c0f:fb50:", "^2001:4860:" }) do
-		if ip:find(p) then return true end
-	end
-	return false
-end
-
 local function site_key(desync)
 	local h = desync.track and desync.track.hostname
 	if not h then
@@ -193,7 +168,6 @@ local function site_key(desync)
 	local two = dissect_nld(h, 2)
 	if not two then return h end
 	if shared_zone(two) then return dissect_nld(h, 3) or h end
-	if two == "googlevideo.com" and not google_ip(host_ip(desync)) then return GV_ISP end
 	return two
 end
 
@@ -581,8 +555,6 @@ local function check_net()
 	if t - SM.netcheck < NET_EVERY then return end
 	SM.netcheck = t
 	SM.pool_ext = readline(SM.home .. "/state/smart_pool") == "ext"
-	-- подбор стабильных узлов видео YouTube (настройка разработчика)
-	SM.gvpick = readline(SM.home .. "/state/smart_gvpick") == "1"
 	SM.bench = tonumber((readline(SM.home .. "/state/smart_bench") or ""):match("^(%d+)") or "")
 	local net = readline(SM.home .. "/state/smart_net") or "default"
 	net = net:gsub("[^%w%-_.]", "_")
@@ -606,9 +578,6 @@ local function check_net()
 	end
 	restat()
 	SM.conns = {}
-	-- узлы видео другой сети — другие: и счёт, и перенаправления заново
-	SM.gv, SM.gvr = {}, {}
-	if SM.home then os.remove(SM.home .. "/state/smart_gvnat") end
 end
 
 -- Лучший вариант в сети: самая высокая доля удач среди тех, у кого их хотя бы
@@ -671,65 +640,6 @@ local function network_suspect(key, t)
 	end
 	SM.suspect_since = nil
 	return false
-end
-
--- Исходы соединений по адресам сервера (state/smart_ipstat): их читает DNS
--- модуля. Прокси обхода геоблока (Comss и др.) проходит проверку DNS — один
--- TLS-сеанс помощника, — а соединения приложений на нём рвутся (журнал
--- 07.11.2026: Claude через 199.189.255.234 — 4 ответа на 38 соединений). По
--- этим исходам DNS уводит сайты на другой сервер обхода. Окно — полчаса;
--- в файл — адреса с тремя ошибками и больше
-local IPSTAT_WIN = 1800
-local IPSTAT_MAX = 2048
--- Счёт переживает перезапуск службы (читается из файла) и не обнуляется разом:
--- раз в полчаса — вдвое меньше. Иначе после перезапуска (журнал 08.11.2026:
--- включили BLOCK_QUIC) прокси bezmezhau с 0 удач из 6 через минуту был
--- «снова принимает», и сайты вернулись на него
-local function ipstat_load(t)
-	SM.ipst, SM.nipst = {}, 0
-	if not SM.home then return end
-	local f = io.open(SM.home .. "/state/smart_ipstat", "r")
-	if not f then return end
-	for l in f:lines() do
-		local ip, ok, err, lt = l:match("^(%S+) (%S+) (%S+) (%d+)$")
-		ok, err, lt = tonumber(ok), tonumber(err), tonumber(lt)
-		if ip and ok and err and lt and t - lt < IPSTAT_WIN then
-			SM.ipst[ip] = { ok = ok, err = err, t0 = lt, t = lt }
-			SM.nipst = SM.nipst + 1
-		end
-	end
-	f:close()
-end
-local function ipstat(c, ok, t)
-	if not (c and c.ip) or c.bench then return end
-	if not SM.ipst then ipstat_load(t) end
-	local x = SM.ipst[c.ip]
-	if not x then
-		SM.nipst = (SM.nipst or 0) + 1
-		if SM.nipst > IPSTAT_MAX then SM.ipst, SM.nipst = {}, 1 end
-		x = { ok = 0, err = 0, t0 = t }
-		SM.ipst[c.ip] = x
-	elseif t - x.t0 > IPSTAT_WIN then
-		x.ok, x.err, x.t0 = x.ok / 2, x.err / 2, t
-	end
-	if ok then x.ok = x.ok + 1 else x.err = x.err + 1 end
-	x.t = t
-	if not ok or x.err >= 3 then SM.ipdirty = true end
-end
-local function ipstat_flush(t)
-	if not SM.ipdirty or not SM.home or t - (SM.ipflush or 0) < 30 then return end
-	SM.ipdirty, SM.ipflush = false, t
-	local out = {}
-	for ip, x in pairs(SM.ipst or {}) do
-		if t - x.t > IPSTAT_WIN then SM.ipst[ip] = nil; SM.nipst = math.max(0, (SM.nipst or 1) - 1)
-		elseif x.err >= 3 then out[#out + 1] = ip .. " " .. string.format("%g %g", x.ok, x.err) .. " " .. x.t end
-	end
-	local p = SM.home .. "/state/smart_ipstat"
-	local f = io.open(p .. ".tmp", "w")
-	if not f then return end
-	f:write(table.concat(out, "\n"), #out > 0 and "\n" or "")
-	f:close()
-	os.rename(p .. ".tmp", p)
 end
 
 local function count(r, slot, field, v, d, t)
@@ -823,156 +733,8 @@ local function near_get(slot, ip, n, t)
 	return x.v
 end
 
--- ── Подбор стабильных узлов видео YouTube ───────────────────────────────
--- Видео идёт с узлов rrN---sn-….googlevideo.com — кэшей Google в сети
--- оператора или серверов самого Google; узел назначает YouTube. Часть узлов
--- принимает соединение и шифрование, но видео не отдаёт: короткий ответ
--- (1–7 КБ) — и закрытие. Плеер ждёт и повторяет, а ролик стоит 5–20 с
--- (журналы 07.11.2026, МТС: 4 узла из 9 — 22 соединения и ни одного ролика,
--- соседние в это время отдавали мегабайты). Узел, давший за 10 минут не
--- меньше GV_BAD коротких закрытий и ни одного соединения с видео (больше
--- GV_BIG), — плохой: новые соединения к нему служба перенаправляет (DNAT) на
--- стабильный узел того же рода (кэш оператора или сервер Google), ближе —
--- из той же /24, потом /16. Сертификат у всех узлов общий, *.googlevideo.com.
--- Через GV_HOLD перенаправление снимается и узел проверяется снова; не ожил
--- — следующее дольше. Не зависит ни от оператора, ни от DNS
-local GV_BIG = 12000        -- байт: видно в первых пакетах (дальше nfqws2 их не видит — лимит очереди)
-local GV_BIGCLOSE = 65536   -- байт за всё соединение — по подтверждению в пакете закрытия
-local GV_SHORT = 10240      -- меньше — короткий ответ
-local GV_WIN = 600
-local GV_BAD = 4
-local GV_HOLD = { 900, 1800, 3600 }
-SM.gv, SM.gvr = SM.gv or {}, SM.gvr or {}
-local function gv_ip(c) return c and c.key and c.ip and c.key:find("googlevideo.com", 1, true) and c.ip or nil end
-local function gv_write(t)
-	if not SM.home then return end
-	local out = {}
-	for ip, x in pairs(SM.gvr) do
-		if x.untl > t then out[#out + 1] = ip .. " " .. x.to .. " " .. x.untl else x.to = nil end
-	end
-	local p = SM.home .. "/state/smart_gvnat"
-	local f = io.open(p .. ".tmp", "w")
-	if not f then return end
-	f:write(table.concat(out, "\n"), #out > 0 and "\n" or "")
-	f:close()
-	os.rename(p .. ".tmp", p)
-end
--- лучший стабильный узел для замены ip
-local function gv_target(ip, x, t)
-	local b24, b16 = ip_block(ip), ip:match("^(%d+%.%d+)%.")
-	local best, bs
-	for y, z in pairs(SM.gv) do
-		local r = SM.gvr[y]
-		if y ~= ip and z.isp == x.isp and z.big >= 2 and z.short <= z.big and t - z.t <= GV_WIN
-			and not (r and r.to and r.untl > t) and (y:find(":") ~= nil) == (ip:find(":") ~= nil) then
-			local sc = z.big - z.short + (ip_block(y) == b24 and 100 or 0) + (b16 and y:match("^(%d+%.%d+)%.") == b16 and 50 or 0)
-			if not bs or sc > bs then best, bs = y, sc end
-		end
-	end
-	return best
-end
-local function gv_observe(c, big, t)
-	local ip = gv_ip(c)
-	if not ip or c.gvseen then return end
-	c.gvseen = true
-	local x = SM.gv[ip]
-	if not x or t - x.t0 > GV_WIN then
-		x = { big = 0, short = 0, t0 = t, isp = c.key:find("~isp", 1, true) ~= nil }
-		SM.gv[ip] = x
-	end
-	if big then x.big = x.big + 1 else x.short = x.short + 1 end
-	x.t = t
-	if not SM.gvpick or big or x.big > 0 or x.short < GV_BAD then return end
-	local r = SM.gvr[ip]
-	if r and r.to and r.untl > t then return end
-	local to = gv_target(ip, x, t)
-	if not to then
-		if t - (x.said or 0) >= GV_WIN then
-			x.said = t
-			SJ("googlevideo.com: узел " .. ip .. " не отдаёт видео (коротких ответов " .. x.short .. ", роликов 0), а стабильного узла на замену пока нет")
-		end
-		return
-	end
-	local lv = math.min(#GV_HOLD, ((r and r.lv) or 0) + 1)
-	SM.gvr[ip] = { to = to, untl = t + GV_HOLD[lv], lv = lv }
-	SJ("googlevideo.com: узел " .. ip .. " не отдаёт видео (коротких ответов " .. x.short .. ", роликов 0) — " ..
-		math.floor(GV_HOLD[lv] / 60) .. " мин соединения к нему идут на " .. to)
-	SM.gv[ip] = nil
-	gv_write(t)
-end
--- снять истёкшие перенаправления (узел проверится заново)
-local function gv_expire(t)
-	-- настройку выключили — перенаправлений больше нет
-	if not SM.gvpick then
-		if next(SM.gvr) then SM.gvr = {}; gv_write(t) end
-		return
-	end
-	local ch = false
-	for ip, x in pairs(SM.gvr) do
-		if x.to and x.untl <= t then x.to = nil; ch = true; SJ("googlevideo.com: узел " .. ip .. " — перенаправление снято, проверяю его снова") end
-		if not x.to and t - x.untl > 4 * 3600 then SM.gvr[ip] = nil end
-	end
-	if ch then gv_write(t) end
-end
-
--- Хронометраж соединений с узлами видео (smart/gvtrace.log, в архиве журналов):
--- когда соединение началось, через сколько мс после ClientHello пришёл
--- первый ответ, сколько байт за всё соединение, сколько оно жило и кто его
--- закрыл. Без отметок времени не видно, где теряются секунды перед роликом
-local function gv_trace(c, how, total, t)
-	if not (SM.home and c and c.ip and (gv_ip(c) or c.slot == "google")) or c.gvtraced then return end
-	c.gvtraced = true
-	local p = SM.home .. "/smart/gvtrace.log"
-	local f = io.open(p, "a")
-	if not f then return end
-	local ft = ftime()
-	local ttfb = (c.cht_f and c.tin1_f) and math.floor((c.tin1_f - c.cht_f) * 1000 + 0.5) or -1
-	local life = c.cht_f and math.floor((ft - c.cht_f) * 1000 + 0.5) or -1
-	f:write(os.date("%Y-%m-%d %H:%M:%S", t), "\t", c.ip, "\t", tostring(c.hn or c.key), "\t", "v", tostring(c.v),
-		"\tttfb=", ttfb, "\tlife=", life, "\tbytes=", tostring(total or -1), "\t", how, "\n")
-	local sz = f:seek("end")
-	f:close()
-	if sz and sz > 262144 then os.rename(p, p .. ".1") end
-end
-
--- Ненадёжный QUIC — сразу отказ. Пакеты QUIC, которые съел ТСПУ, просто
--- пропадают, и приложение ждёт таймаута, прежде чем перейти на TCP (YouTube:
--- данные плеера по QUIC — каждая пятая попытка без ответа, ролик стоит на
--- картинке). Адрес, где QUIC за полчаса не прошёл хотя бы QUIC_BAD раз и
--- прошёл меньше чем в половине случаев, служба на QUIC_HOLD отвечает на QUIC
--- отказом (REJECT): приложение тут же идёт по TCP, а TCP обход проходит
-local QUIC_BAD = 3
-local QUIC_HOLD = 1800
-SM.qst, SM.qno = SM.qst or {}, SM.qno or {}
-local function quic_write(t)
-	if not SM.home then return end
-	local out = {}
-	for ip, u in pairs(SM.qno) do if u > t then out[#out + 1] = ip .. " " .. u else SM.qno[ip] = nil end end
-	local p = SM.home .. "/state/smart_quicno"
-	local f = io.open(p .. ".tmp", "w")
-	if not f then return end
-	f:write(table.concat(out, "\n"), #out > 0 and "\n" or "")
-	f:close()
-	os.rename(p .. ".tmp", p)
-end
-local function quic_obs(slot, c, ok, t)
-	if not (c and c.ip and slot and slot:find("^quic")) then return end
-	local x = SM.qst[c.ip]
-	if not x or t - x.t0 > QUIC_HOLD then x = { ok = 0, err = 0, t0 = t }; SM.qst[c.ip] = x end
-	if ok then x.ok = x.ok + 1 else x.err = x.err + 1 end
-	if not ok and x.err >= QUIC_BAD and x.ok * 2 < x.err + x.ok and not (SM.qno[c.ip] and SM.qno[c.ip] > t) then
-		SM.qno[c.ip] = t + QUIC_HOLD
-		SJ(tostring(c.key) .. ": QUIC к " .. c.ip .. " не проходит (удач " .. x.ok .. ", ошибок " .. x.err .. ") — " ..
-			math.floor(QUIC_HOLD / 60) .. " мин на QUIC сразу отказ, приложение идёт по TCP")
-		SM.qst[c.ip] = nil
-		quic_write(t)
-	end
-end
-
 local function on_ok(slot, r, v, t, c)
 	count(r, slot, "ok", v, 1, t)
-	ipstat(c, true, t)
-	quic_obs(slot, c, true, t)
 	-- запоминаем только «особый» вариант: не лучший в сети (с лучшего новые
 	-- сайты и так начинают). На одних /24 у Cloudflare — тысячи чужих сайтов,
 	-- и общий вариант сети не должен из-за соседства подменяться чем попало
@@ -997,9 +759,6 @@ end
 -- после удачного начала: удача остаётся удачей (сайт на варианте открывался),
 -- а для «не похоже на блокировку» такие ошибки не в счёт
 local function on_err(slot, key, r, v, n, t, pass, mid, c)
-	-- исход по адресу — и тогда, когда сайт уже признан «не DPI»: так DNS
-	-- модуля узнаёт про прокси обхода геоблока, который не принимает соединений
-	if not mid and not SM.offline then ipstat(c, false, t); quic_obs(slot, c, false, t) end
 	-- уже ясно, что дело не в DPI: не считаем и не перебираем
 	if r.nodpi and r.nodpi > t then return end
 	if network_suspect(key, t) then
@@ -1230,9 +989,6 @@ local function kill_line(ip, lp) return (ip:find(":") and "6 " or "4 ") .. ip ..
 function smart_watch()
 	local ok, err = pcall(function()
 		local t = now()
-		ipstat_flush(t)
-		gv_expire(t)
-		for _, u in pairs(SM.qno) do if u <= t then quic_write(t); break end end
 		-- без трафика наблюдатель спит: таблицу читать незачем. Но пока живы
 		-- удачные соединения — смотрит, сколько они проработали
 		local busy = t - SM.lastconn <= 120
@@ -1294,7 +1050,7 @@ function smart_watch()
 		for lp, c in pairs(SM.conns) do
 			if c.cht and alive[lp] == c.ip and not stuck[lp] and not c.done and not c.ok
 				and not c.srv and c.maxin == 0 and (c.nin or 0) < FROZEN_IN and (c.nout or 0) < FROZEN_IN
-				and t - c.cht >= (SILENT_SEC_SLOT[c.slot] or SILENT_SEC) then
+				and t - c.cht >= SILENT_SEC then
 				silent[#silent + 1] = { c = c, ip = c.ip, lp = lp }
 			end
 		end
@@ -1305,8 +1061,6 @@ function smart_watch()
 			for _, h in ipairs(silent) do
 				local c, r = h.c, SM.db[h.c.key]
 				c.done, c.failed = true, true
-				if sn < NET_STUCK_IPS then gv_observe(c, false, t) end
-				gv_trace(c, "молчит-обрыв", 0, t)
 				-- молчат разом несколько серверов — это сеть, а не DPI: не считаем
 				if r and sn < NET_STUCK_IPS and not (r.nodpi and r.nodpi > t) then
 					DLOG("smart: " .. c.key .. ": connection :" .. h.lp .. " silent after ClientHello on variant " .. c.v)
@@ -1325,7 +1079,6 @@ function smart_watch()
 		for _, h in ipairs(hits) do
 			local c = h.c
 			c.stuck = true
-			gv_trace(c, c.ok and "застряло-посреди" or "застряло-до-ответа", -1, t)
 			if not network then
 				local r = SM.db[c.key]
 				if r and not c.done then
@@ -1390,10 +1143,6 @@ function smart(ctx, desync)
 	local pass = tonumber(desync.arg.pass)
 	local r = SM.db[key]
 	if not r then
-		-- старт — как у всех сайтов слота. Отдельный старт для серверов Google
-		-- (googlevideo #1, 15 из 15 в отладочном замере) себя не оправдал: в
-		-- живой ленте 08.11.2026 он молчал, и умный режим сам ушёл на
-		-- Youtube_circular #1 (36,7 удачи на 0,5 ошибки)
 		r = newrec(leader(slot, n, tonumber(desync.arg.first) or 1, pass))
 		SM.db[key] = r
 	end
@@ -1423,8 +1172,7 @@ function smart(ctx, desync)
 	if crec and not crec.smart then
 		-- новое соединение идёт на текущем варианте сайта; его итог засчитается
 		-- этому варианту, даже если сайт к тому времени перейдёт на другой
-		crec.smart = { maxin = 0, tin = t, v = r.cur, key = key, slot = slot, n = n, pass = pass, t = t, first = tonumber(desync.arg.first) or 1,
-			hn = desync.track and desync.track.hostname }
+		crec.smart = { maxin = 0, tin = t, v = r.cur, key = key, slot = slot, n = n, pass = pass, t = t, first = tonumber(desync.arg.first) or 1 }
 		-- прежнее соединение к этому сайту замерло на 14–17 КБ и браузер скоро
 		-- открыл новое — это обрыв по объёму. Ответ, который просто уложился в
 		-- эти размеры, так не выглядит: новое соединение сразу после него не нужно
@@ -1437,8 +1185,6 @@ function smart(ctx, desync)
 			on_err(slot, key, r, prev.v, n, t, pass, prev.ok, prev)
 		end
 		r.lastc = crec.smart
-		-- адрес сервера — и у QUIC (для отказа ненадёжному QUIC, см. quic_obs)
-		if desync.outgoing and not desync.dis.tcp then crec.smart.ip = desync.target and norm_ip(host_ip(desync)) end
 		-- для наблюдателя: по локальному порту он узнает сайт и вариант
 		if desync.dis.tcp and desync.outgoing then
 			crec.smart.ip = desync.target and norm_ip(host_ip(desync))
@@ -1455,8 +1201,6 @@ function smart(ctx, desync)
 		if tcp and not desync.outgoing and #desync.dis.payload > 0 then
 			local p = pos_get(desync, 'p')
 			if p > cs.maxin then cs.maxin = p end
-			if not cs.tin1_f then cs.tin1_f = ftime() end
-			if p >= GV_BIG and not cs.gvseen then gv_observe(cs, true, t) end
 			cs.tin = t
 			cs.srv = true
 			slowbps, slowbase = slow_sample(cs, p)
@@ -1491,7 +1235,7 @@ function smart(ctx, desync)
 					end
 				end
 				if len > 0 then
-					if not cs.cht and desync.l7payload == "tls_client_hello" then cs.cht = t; cs.cht_f = ftime() end
+					if not cs.cht and desync.l7payload == "tls_client_hello" then cs.cht = t end
 					local s = pos_get(desync, 's')
 					if (cs.ok or cs.maxin >= ANSWER) and cs.outmax and s < cs.outmax
 						and cs.maxin < 18000 and (cs.nin or 0) < FROZEN_IN then
@@ -1523,19 +1267,6 @@ function smart(ctx, desync)
 			-- сервер — это удача, даже если ответ был коротким (API, статистика).
 			-- Сброс, которым сервер отвечает на закрытие, — уже не DPI
 			cs.done = true
-			-- сколько пришло за всё соединение: у закрытия от телефона — по его
-			-- подтверждению, от сервера — по номеру его байта
-			local total
-			if desync.outgoing then
-				if cs.ack0 and tcp.th_ack then total = (tcp.th_ack - cs.ack0) % 4294967296 end
-			else
-				total = pos_get(desync, 'p')
-			end
-			if cs.cht and gv_ip(cs) then
-				if total and total >= GV_BIGCLOSE then gv_observe(cs, true, t)
-				elseif (total or cs.maxin) < GV_SHORT and cs.maxin < GV_BIG then gv_observe(cs, false, t) end
-			end
-			if cs.cht then gv_trace(cs, (desync.outgoing and "клиент-" or "сервер-") .. (fin and "FIN" or "RST"), total, t) end
 			if not cs.ok and cs.maxin >= ANSWER then
 				cs.ok = true
 				on_ok(slot, r, cs.v, t, cs)
@@ -1544,8 +1275,6 @@ function smart(ctx, desync)
 			-- сброс от сервера, когда он уже ответил: начало соединения DPI
 			-- пропустил, сбрасывает сам сервер — не ошибка обхода
 			cs.done = true
-			if cs.cht and cs.maxin < GV_BIG then gv_observe(cs, false, t) end
-			if cs.cht then gv_trace(cs, "сервер-RST", pos_get(desync, 'p'), t) end
 			DLOG("smart: " .. key .. ": server reset after " .. cs.maxin .. " bytes — not counted")
 		elseif not cs.ok then
 			local dd, a = detector_args(desync)

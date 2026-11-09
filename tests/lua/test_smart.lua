@@ -746,16 +746,6 @@ check((readall(HOME .. "/state/smart_kill") or ""):find(" " .. sc.port .. "\n", 
 check((readall(HOME .. "/logs/smart.log") or ""):find("silent.example: сервер 192.168.1.9 принял ClientHello и молчит", 1, true) ~= nil, "the smart log says so, with the server address")
 smart_watch()
 check((rec("silent.example").err[sv] or 0) <= 1.01, "counted once")
--- видео YouTube: кэш оператора отвечает за доли секунды — молчание
--- дольше 2 с уже стоп-кадр, обрываем раньше
-later(400); os.remove(HOME .. "/state/smart_kill")
-local gc = conn("video.example"); gc.ip = "192.168.1.9"; local gv = packet(gc, { slot = "google" })
-later(1); tcptable({ aliveline(gc.port, "0901A8C0") }); smart_watch()
-check(next(rec("video.example", "google").err) == nil, "Google: one second of silence is not judged yet")
-later(1); smart_watch()
-check((rec("video.example", "google").err[gv] or 0) > 0, "Google: after two seconds of silence the connection is cut")
-tcptable({})
-
 later(400); os.remove(HOME .. "/state/smart_kill")
 local tc = conn("talk.example"); tc.ip = "192.168.1.9"; packet(tc); packet(tc, { incoming = true, seq = 1, len = 1400 })
 later(5); tcptable({ aliveline(tc.port, "0901A8C0") }); smart_watch()
@@ -850,86 +840,6 @@ do
 	rawsend_payload_segmented, resolve_range, rawsend_opts, rawsend_opts_base, reconstruct_opts,
 		direction_check, payload_check, replay_first, replay_drop_set, direction_cutoff_opposite, genhost = unpack(keep)
 end
-
-section("YouTube video: operator caches and Google's own servers are learned apart")
-later(4000); os.remove(HOME .. "/state/smart_kill")
-host_ip = function(d) return d.track.ip or "104.244.42.1" end
-local gi = conn("rr5---sn-jvhnu5g-n8vk.googlevideo.com"); gi.ip = "212.188.35.16"; packet(gi)
-local go = conn("r3---sn-5uaeznlz.googlevideo.com"); go.ip = "173.194.11.136"; packet(go)
-check(rec("googlevideo.com~isp") ~= nil, "a node in the operator's network (212.188.x) is its own site")
-check(rec("googlevideo.com") ~= nil, "a Google server (173.194.x) is another one")
-local g6 = conn("rr1---sn-x.googlevideo.com"); g6.ip = "2a00:1450:4010:c05::c6"; packet(g6)
-check(rec("googlevideo.com") ~= nil and rec("googlevideo.com~isp") ~= nil, "an IPv6 Google address is Google's own")
--- Подбор стабильных узлов видео: узел, что принимает соединение, но видео не
--- отдаёт (короткий ответ и закрытие), — соединения к нему идут на узел,
--- который в это же время отдаёт видео
-writefile(HOME .. "/state/smart_gvpick", "1\n"); later(120); os.remove(HOME .. "/state/smart_gvnat")
-local function gvbig(ip) later(5); local c = conn("rr5---sn-abc-x1.googlevideo.com"); c.ip = ip; packet(c, { slot = "google" }); packet(c, { incoming = true, seq = 18000, slot = "google" }) end
-local function gvshort(ip) later(5); local c = conn("rr8---sn-abc-x1.googlevideo.com"); c.ip = ip; packet(c, { slot = "google" }); packet(c, { incoming = true, seq = 1, len = 1500, slot = "google" }); packet(c, { incoming = true, seq = 1501, len = 0, fin = true, slot = "google" }) end
-gvbig("10.9.9.1"); gvbig("10.9.9.1"); gvshort("10.9.9.1")
-for i = 1, 3 do gvshort("10.9.9.2") end
-check(readall(HOME .. "/state/smart_gvnat") == nil, "three short answers are not enough yet")
-gvshort("10.9.9.2")
-check((readall(HOME .. "/state/smart_gvnat") or ""):find("^10.9.9.2 10.9.9.1 ") ~= nil, "a node with four short answers and no video goes to a node that gives video")
-check((readall(HOME .. "/logs/smart.log") or ""):find("узел 10.9.9.2 не отдаёт видео (коротких ответов 4, роликов 0) — 15 мин соединения к нему идут на 10.9.9.1", 1, true) ~= nil, "the smart log says so")
-local gvt = readall(HOME .. "/smart/gvtrace.log") or ""
-check(gvt:find("10.9.9.2\trr8---sn-abc-x1.googlevideo.com\t", 1, true) ~= nil and gvt:find("\tbytes=1501\tсервер-FIN", 1, true) ~= nil and gvt:find("\tttfb=", 1, true) ~= nil,
-	"every video connection is timed in smart/gvtrace.log: first answer, life, bytes, who closed it")
-for i = 1, 4 do gvshort("173.194.9.9") end
-check((readall(HOME .. "/state/smart_gvnat") or ""):find("173.194.9.9", 1, true) == nil, "a Google server is not sent to an operator cache (another kind of node)")
-check((readall(HOME .. "/logs/smart.log") or ""):find("узел 173.194.9.9 не отдаёт видео", 1, true) ~= nil, "and it is said that there is no stable node to replace it yet")
-gvbig("10.9.9.3"); gvbig("10.9.9.3")
-for i = 1, 3 do gvshort("10.9.9.4") end; gvbig("10.9.9.4"); gvshort("10.9.9.4")
-check((readall(HOME .. "/state/smart_gvnat") or ""):find("10.9.9.4", 1, true) == nil, "a node that gave video even once is not called bad")
-later(900); tcptable({}); smart_watch()
-check((readall(HOME .. "/state/smart_gvnat") or "") == "", "after 15 minutes the redirect is lifted and the node is checked again")
-check((readall(HOME .. "/logs/smart.log") or ""):find("узел 10.9.9.2 — перенаправление снято", 1, true) ~= nil, "and the smart log says so")
-gvbig("10.9.9.1"); gvbig("10.9.9.1")
-for i = 1, 4 do gvshort("10.9.9.2") end
-check((readall(HOME .. "/logs/smart.log") or ""):find("— 30 мин соединения к нему идут на", 1, true) ~= nil, "still bad: the next redirect is longer")
-writefile(HOME .. "/state/smart_gvpick", "0\n"); later(120); gvbig("10.9.9.1"); smart_watch()
-check((readall(HOME .. "/state/smart_gvnat") or "") == "", "the setting off: no redirects")
-os.remove(HOME .. "/state/smart_gvpick"); os.remove(HOME .. "/state/smart_gvnat"); later(120)
-
-section("QUIC that does not get through is refused, so apps go to TCP at once")
-later(4000); os.remove(HOME .. "/state/smart_quicno")
-local function qconn(ip, ok)
-	later(); local c = conn("quicsite.example"); c.ip = ip
-	packet(c, { slot = "quic" })
-	if ok then packet(c, { incoming = true, seq = 18000, slot = "quic" }) else for k = 1, 3 do packet(c, { retrans = true, slot = "quic" }) end end
-end
-qconn("198.51.100.20", false); qconn("198.51.100.20", false)
-check(readall(HOME .. "/state/smart_quicno") == nil, "two failures are not enough")
-qconn("198.51.100.20", false)
-check((readall(HOME .. "/state/smart_quicno") or ""):find("^198.51.100.20 %d+") ~= nil, "three QUIC failures and no success: QUIC to that address is refused for a while")
-check((readall(HOME .. "/logs/smart.log") or ""):find("QUIC к 198.51.100.20 не проходит", 1, true) ~= nil, "the smart log says so")
-qconn("198.51.100.21", true); qconn("198.51.100.21", true); qconn("198.51.100.21", true); qconn("198.51.100.21", false); qconn("198.51.100.21", false); qconn("198.51.100.21", false)
-check((readall(HOME .. "/state/smart_quicno") or ""):find("198.51.100.21", 1, true) == nil, "QUIC that works half the time is left alone")
-later(1900); tcptable({}); smart_watch()
-check((readall(HOME .. "/state/smart_quicno") or "") == "", "after half an hour the refusal is lifted")
-os.remove(HOME .. "/state/smart_quicno")
-
-section("failing addresses are reported to the module's DNS")
--- прокси обхода геоблока проходит проверку DNS, а соединения приложений на нём
--- рвутся: DNS модуля узнаёт это из state/smart_ipstat и уводит сайты
-later(4000); os.remove(HOME .. "/state/smart_ipstat")
-host_ip = function(d) return d.track.ip or "104.244.42.1" end
-for i = 1, 4 do
-	later(); local c = conn("proxy" .. i .. ".example"); c.ip = "203.0.113.9"; packet(c)
-	for k = 1, 3 do packet(c, { retrans = true }) end
-end
-later(); local okc = conn("fine.example"); okc.ip = "203.0.113.10"; packet(okc); packet(okc, { incoming = true, seq = 18000 })
-later(40); tcptable({}); smart_watch()
-local ipst = readall(HOME .. "/state/smart_ipstat") or ""
-check(ipst:find("203.0.113.9 0 4 ", 1, true) ~= nil, "an address where every connection failed is written with its counts (" .. ipst:gsub("\n", "; ") .. ")")
-check(ipst:find("203.0.113.10 ", 1, true) == nil, "an address that works is not")
--- перезапуск службы: счёт в памяти пропал, но файл остался — он и читается
-SMART.ipst = nil
-later(); local c2 = conn("proxy9.example"); c2.ip = "203.0.113.9"; packet(c2)
-for k = 1, 3 do packet(c2, { retrans = true }) end
-later(40); smart_watch()
-ipst = readall(HOME .. "/state/smart_ipstat") or ""
-check(ipst:find("203.0.113.9 0 5 ", 1, true) ~= nil, "after a restart the counts go on from the file, not from zero (" .. ipst:gsub("\n", "; ") .. ")")
 
 io.write("\n", failed == 0 and "PASS" or "FAIL", "  ", total - failed, " of ", total, " checks passed\n")
 os.exit(failed == 0 and 0 or 1)

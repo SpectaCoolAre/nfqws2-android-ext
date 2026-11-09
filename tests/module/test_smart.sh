@@ -271,25 +271,6 @@ assert_contains "$(cat "$MOCK_DIR/ss.log")" "-K dst 104.244.42.1 sport = :40001"
 assert_contains "$(cat "$MOCK_IPT_STORE/ip6tables/filter/nfqws_smartkill" 2>/dev/null)" "-d 2a00:1450:4010:c05::64 --sport 40002" "an IPv6 one too"
 assert_not_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/nfqws_smartkill" 2>/dev/null)" "notaport" "garbage lines are skipped"
 assert_not_contains "$(cat "$SERVICE_LOG")" "оборвано" "the service log is not flooded with cut connections (they are in the smart mode log)"
-# подбор стабильных узлов видео: перенаправление — DNAT в nat OUTPUT; без
-# настройки, с истёкшим сроком и с мусором — не применяется
-printf '10.9.9.2 10.9.9.1 %s\n10.9.9.5 10.9.9.1 1\nbad line x\n' "$(( $(date +%s) + 600 ))" > "$SMART_GVNAT_FILE"
-sleep 4
-assert_not_contains "$(cat "$MOCK_IPT_STORE/iptables/nat/nfqws_gvnat" 2>/dev/null)" "DNAT" "video node redirects need the setting"
-ctl set SMART_GVPICK 1
-i=0; while [ "$i" -lt 40 ] && ! grep -q DNAT "$MOCK_IPT_STORE/iptables/nat/nfqws_gvnat" 2>/dev/null; do sleep 0.5; i=$((i + 1)); done
-assert_contains "$(cat "$MOCK_IPT_STORE/iptables/nat/OUTPUT" 2>/dev/null)" "-j nfqws_gvnat" "with it, the redirect chain is hooked into nat OUTPUT"
-assert_contains "$(cat "$MOCK_IPT_STORE/iptables/nat/nfqws_gvnat" 2>/dev/null)" "-p tcp -d 10.9.9.2 --dport 443 -j DNAT --to-destination 10.9.9.1:443" "a bad video node goes to the stable one"
-assert_contains "$(cat "$MOCK_IPT_STORE/iptables/nat/nfqws_gvnat" 2>/dev/null)" "-p udp -d 10.9.9.2 --dport 443" "QUIC too"
-assert_not_contains "$(cat "$MOCK_IPT_STORE/iptables/nat/nfqws_gvnat" 2>/dev/null)" "10.9.9.5" "an expired redirect is not applied"
-ctl set SMART_GVPICK 0
-# ненадёжный QUIC — отказ: приложение сразу идёт по TCP
-printf '198.51.100.20 %s\n198.51.100.21 1\n' "$(( $(date +%s) + 600 ))" > "$STATE_DIR/smart_quicno"
-i=0; while [ "$i" -lt 40 ] && ! grep -q REJECT "$MOCK_IPT_STORE/iptables/filter/nfqws_quicno" 2>/dev/null; do sleep 0.5; i=$((i + 1)); done
-assert_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/OUTPUT" 2>/dev/null)" "-j nfqws_quicno" "the QUIC refusal chain is hooked into OUTPUT"
-assert_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/nfqws_quicno" 2>/dev/null)" "-p udp -d 198.51.100.20 --dport 443 -j REJECT" "QUIC that does not get through is refused"
-assert_not_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/nfqws_quicno" 2>/dev/null)" "198.51.100.21" "an expired refusal is not"
-rm -f "$STATE_DIR/smart_quicno"
 svc stop
 # наблюдатели сети этого запуска песочнице больше не нужны: иначе netwatch с
 # заглушкой ip крутился бы в фоне и мешал соседним наборам тестов
@@ -297,8 +278,6 @@ for p in "$WD_PIDFILE" "$WN_PIDFILE"; do [ -f "$p" ] && kill "$(cat "$p")" 2>/de
 assert_no_file "$SK_PIDFILE" "stopping the service stops the helper"
 assert_no_file "$MOCK_IPT_STORE/iptables/filter/nfqws_smartkill" "and removes its chain"
 assert_not_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/OUTPUT" 2>/dev/null)" "nfqws_smartkill" "and the hook"
-assert_not_contains "$(cat "$MOCK_IPT_STORE/iptables/nat/OUTPUT" 2>/dev/null)" "nfqws_gvnat" "and the video redirect hook"
-rm -f "$SMART_GVNAT_FILE"
 
 section "every Google variant has a name and every name a variant"
 # Zapret-Manager 5.040 (StrYoutube Yv34, Yv35) — варианты 45, 46 слота google

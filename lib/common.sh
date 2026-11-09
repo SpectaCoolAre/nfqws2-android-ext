@@ -39,8 +39,6 @@ SMART_LEARN_FILE="$STATE_DIR/smart_learn"      # фоновое обучение
 SMART_LEARN_EVERY=120                          # сек между сайтами фонового обучения
 SMART_TURBO_FILE="$STATE_DIR/smart_turbo"      # до какого времени обучение ускорено (игра)
 SMART_POOL_FILE="$STATE_DIR/smart_pool"        # ext — умный режим перебирает и расширенный пул
-SMART_GVPICK_FILE="$STATE_DIR/smart_gvpick"    # 1 — подбор стабильных узлов видео YouTube
-SMART_GVNAT_FILE="$STATE_DIR/smart_gvnat"      # их пишет оркестратор: «плохой-узел хороший-узел до-когда»
 SMART_BENCH_FILE="$STATE_DIR/smart_bench"      # идёт отладочный замер: число его исполнителей
 BENCH_DIR="$STATE_DIR/bench"                   # рабочий каталог замера
 SMART_TURBO_EVERY=15
@@ -138,7 +136,6 @@ set_defaults() {
   : "${SMART_LEARN:=1}"
   : "${WL_PAUSE:=1}"
   : "${SMART_POOL:=0}"
-  : "${SMART_GVPICK:=0}"
   : "${PUSH_FIX:=0}"
 }
 
@@ -1032,8 +1029,8 @@ _firewall_start() {
   app_rules "$CMD"
 
   # «Блокировать QUIC» — отказом, а не молчаливым DROP: на пропавший пакет
-  # приложение ждёт таймаута, прежде чем перейти на TCP (ролики YouTube
-  # стояли на картинке), а на отказ переходит сразу
+  # приложение ждёт таймаута, прежде чем перейти на TCP, а на отказ
+  # переходит сразу
   if [ "$BLOCK_QUIC" = "1" ]; then
     $CMD -w -t filter -N $IPT_GROUP_QREJ 2>/dev/null
     $CMD -w -t filter -F $IPT_GROUP_QREJ 2>/dev/null
@@ -1562,7 +1559,7 @@ render_strategy() {
 
 # Module settings (same across strategies) are carried over whole from the live
 # config on strategy change/reset. NFQWS_EXTRA_ARGS only for standard $MODE_* refs.
-USER_KEYS="DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL SMART_LEARN WL_PAUSE SMART_POOL SMART_GVPICK PUSH_FIX NFQWS_EXTRA_ARGS"
+USER_KEYS="DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL SMART_LEARN WL_PAUSE SMART_POOL PUSH_FIX NFQWS_EXTRA_ARGS"
 merge_user_keys() { # <generated config> <settings source config>  -> stdout
   awk -v keys=" $USER_KEYS " -v src="$2" '
     function quotes(str,   t) { t = str; return gsub(/"/, "", t) }
@@ -1773,9 +1770,8 @@ smart_net_update() {
 # в несколько секунд — перезапуск не нужен
 smart_pool_sync() {
   if [ "$SMART_POOL" = "1" ]; then echo ext > "$SMART_POOL_FILE"; else rm -f "$SMART_POOL_FILE"; fi
-  # подбор стабильных узлов видео YouTube: тоже читает оркестратор
-  if [ "$SMART_GVPICK" = "1" ]; then echo 1 > "$SMART_GVPICK_FILE"; else rm -f "$SMART_GVPICK_FILE"; fi
-  rm -f "$STATE_DIR/smart_noggc"
+  # остатки убранных настроек тестовых сборок
+  rm -f "$STATE_DIR/smart_noggc" "$STATE_DIR/smart_gvpick" "$STATE_DIR/smart_gvnat" "$STATE_DIR/smart_quicno" "$STATE_DIR/smart_ipstat"
 }
 
 ssid_is_home() {

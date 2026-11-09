@@ -821,8 +821,8 @@ assert_rc 0 $? "a fresh check of an older version (samples only) is redone"
 DNS_GEO=0 dns_geo_scan_due
 assert_rc 1 $? "profiles mode needs no check"
 dns_geo_scan >/dev/null
-# Маршруты по доменам: каждый — к своим серверам (свой адрес прокси —
-# только к ним), никем не обходимый — в DNS сети, без данных — общий пул
+# Маршруты: группа (ChatGPT) — к своему серверу, сайт, который обходит пул,
+# — в пул, никем не обходимый — в DNS сети, без данных — в пул
 printf 'chatgpt.com\nab.chatgpt.com\nclashofclans.com\nintel.com\nmistral.ai\n' > "$DNS_GEO_LIST"
 { printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
   printf 'zapret.example\tok\t20\t2\t4\t0\ttls\n'
@@ -834,18 +834,18 @@ printf 'chatgpt.com\nab.chatgpt.com\nclashofclans.com\nintel.com\nmistral.ai\n' 
   printf '=gone.example\tdead.example\n'
   printf '?whoami\tnet=93.1.1.1/8359\tgoogle=93.1.1.1/8359\tcloudflare=-\tintercept=1\n'
 } > "$(dns_geo_scan_file)"
-assert_eq "ab.chatgpt.com	zapret.example	tls|chatgpt.com	zapret.example	tls|clashofclans.com	comss.example	https|intel.com	-" "$(dns_geo_routes | sort | tr '\n' '|' | sed 's/|$//')" "routes come from the check, one server a domain, with its protocol (a dead one is dropped; a group domain the check missed follows its group)"
+assert_eq "ab.chatgpt.com	zapret.example	tls|chatgpt.com	zapret.example	tls|intel.com	-" "$(dns_geo_routes | sort | tr '\n' '|' | sed 's/|$//')" "a group goes to its own server with its protocol (a domain the check missed follows its group), a site the pool bypasses needs no route, a domain no one bypasses goes to the network DNS"
 assert_eq "comss.example" "$(dns_geo_pick)" "the common pool: the one that bypasses the most (route lines are not servers)"
 dns_build
 up=$(cat "$DNS_RUN_DIR/upstreams.txt")
 assert_contains "$(grep '/ab.chatgpt.com/' "$DNS_RUN_DIR/upstreams.txt")" "]tls://zapret.example" "ChatGPT and its subdomains — to its servers"
-assert_contains "$(grep '/clashofclans.com/' "$DNS_RUN_DIR/upstreams.txt")" "]https://comss.example/dns-query" "the game — only to the one with its own proxy address"
+assert_contains "$(grep '/clashofclans.com/' "$DNS_RUN_DIR/upstreams.txt")" "]https://comss.example/dns-query" "the game — to the pool, the one with its own proxy address"
 assert_eq "1" "$(grep -c '/clashofclans.com/' "$DNS_RUN_DIR/upstreams.txt")" "and to no one else"
 assert_not_contains "$up" "/intel.com/" "a domain no server bypasses goes to the network DNS"
 assert_contains "$(grep '/mistral.ai/' "$DNS_RUN_DIR/upstreams.txt")" "]https://comss.example/dns-query" "a domain without data — to the common pool"
 assert_eq "geo" "$(dns_pid() { echo 1; }; dns_route chatgpt.com)" "a per-domain route still counts as the geo-block bypass"
 st=$(dns_state)
-assert_contains "$st" "geo_for_comss.example=1" "the screen learns how many domains go to a server"
+assert_contains "$st" "geo_for_zapret.example=2" "the screen learns how many domains go to a server"
 assert_contains "$st" "geo_direct=1" "and how many to the network DNS"
 assert_contains "$st" "geo_intercept=1" "and that the network intercepts plain DNS"
 assert_contains "$st" "geo_who_google=93.1.1.1/8359" "with who really answered"
@@ -919,7 +919,7 @@ assert_eq "accounts.google.com	b.example	tls|aistudio.google.com	b.example	tls|b
 printf '=accounts.google.com\tb.example,a.example\n' >> "$(dns_geo_scan_file)"
 assert_eq "accounts.google.com	a.example	tls|aistudio.google.com	a.example	tls|bard.google.com	a.example	tls" "$(dns_geo_routes | sort | tr '\n' '|' | sed 's/|$//')" "a pin as good as the best keeps the site"
 dns_geo_pin_save
-assert_contains "$(cat "$(dns_geo_scan_file).pin")" "@google a.example" "the pin is kept"
+assert_contains "$(cat "$DNS_GEO_SCAN_DIR/groups.pin")" "@google a.example" "the group pin is kept (groups.pin, shared by all networks)"
 # Группа сайтов (dns-geo-groups.list): Gemini — и google.com, и googleapis.com,
 # и gemini.google — один сервер на все, прежде всего на те, которыми
 # пользуются (частая проверка); сервер, не ответивший в частой, не берётся
@@ -956,24 +956,6 @@ assert_contains "$(cat "$DNS_GEO_SCAN_DIR/groups.pin" 2>/dev/null)" "@google -" 
 r=$(dns_geo_routes | sort | tr '\n' '|')
 assert_contains "$r" "gemini.google.com	-|" "and the pin «-» is not taken for a server"
 cp "$SANDBOX/scan.keep" "$(dns_geo_scan_file)"; rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).pin"
-# Прокси сервера проходит проверку DNS, а соединения приложений на нём рвутся
-# (умный режим пишет исходы по адресам): сайты группы уходят на другой сервер
-printf '+a.example\t198.51.100.1\t3\n' >> "$(dns_geo_scan_file)"
-printf '198.51.100.1 1 7 %s\n' "$(date +%s)" > "$DNS_GEO_IPSTAT"
-r=$(dns_geo_routes | cut -f2 | sort -u | tr '\n' ' ')
-assert_not_contains "$r" "a.example" "a server whose proxy takes almost no connections (1 of 8) is not used"
-assert_contains "$(dns_geo_bad)" "a.example	198.51.100.1	1/8" "and it is named with its address and counts"
-dns_geo_bad_check
-assert_contains "$(tail -n 3 "$DNS_LOG")" "a.example — 1/8 удач" "the DNS log says why the routes change"
-printf '198.51.100.1 1 7 %s\n' "$(( $(date +%s) - 4000 ))" > "$DNS_GEO_IPSTAT"
-assert_contains "$(dns_geo_routes | cut -f2 | sort -u | tr '\n' ' ')" "a.example" "old counts (over half an hour) do not count"
-printf '198.51.100.1 3 7 %s\n' "$(date +%s)" > "$DNS_GEO_IPSTAT"
-assert_contains "$(dns_geo_routes | cut -f2 | sort -u | tr '\n' ' ')" "a.example" "nor does a proxy that works a third of the time"
-printf '198.51.100.1 0 9 %s\n' "$(date +%s)" > "$DNS_GEO_IPSTAT"
-printf '+b.example\t198.51.100.2\t3\n+c.example\t198.51.100.3\t3\n' >> "$(dns_geo_scan_file)"
-printf '198.51.100.1 0 9 %s\n198.51.100.2 0 9 %s\n198.51.100.3 0 9 %s\n' "$(date +%s)" "$(date +%s)" "$(date +%s)" > "$DNS_GEO_IPSTAT"
-assert_contains "$(dns_geo_routes | cut -f2 | sort -u | tr '\n' ' ')" "a.example" "all of them failing is the network, not the proxies: nothing is dropped"
-rm -f "$DNS_GEO_IPSTAT"
 cp "$SANDBOX/scan.keep" "$(dns_geo_scan_file)"; rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).pin" "$DNS_RUN_DIR/geo-bad.last"
 { printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
   printf 'a.example\tok\t20\t1\t1\t0\ttls\n'
@@ -985,10 +967,7 @@ touch -d "@$(( $(date +%s) + 60 ))" "$(dns_geo_scan_file).hot" 2>/dev/null || { 
 r=$(dns_geo_routes | sort | tr '\n' '|')
 assert_contains "$r" "gemini.google.com	b.example" "the used domain decides the group's server"
 assert_contains "$r" "signaler-pa.clients6.google.com	b.example" "and the rest of the group follows it"
-# сервер группы этот домен не обходит, а другой обходит — к другому: иначе
-# сервер группы отдал бы настоящий адрес (Gemini, signaler-pa.googleapis.com,
-# журнал 09.11)
-assert_contains "$r" "gemini.google	a.example" "a group domain its server does not bypass goes to a server that does, not out with the real address"
+assert_contains "$r" "gemini.google	b.example" "even a domain it was not seen serving: the group goes through one server, as geodns on the router does"
 printf 'geminiweb-pa.clients6.google.com\nchatgpt.com\n' > "$SANDBOX/geo.saved"; cp "$DNS_GEO_LIST" "$SANDBOX/geo.keep"; cp "$SANDBOX/geo.saved" "$DNS_GEO_LIST"
 r=$(dns_geo_routes | sort | tr '\n' '|')
 assert_contains "$r" "geminiweb-pa.clients6.google.com	b.example" "a group domain the check does not know yet goes to the group server too"
@@ -1116,9 +1095,9 @@ rm -f "$hotf" "$(dns_geo_scan_file).rel" "$(dns_geo_scan_file).pin"
 } > "$(dns_geo_scan_file)"
 rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
 assert_contains "$(dns_geo_routes)" "gemini.google.com	-" "all main domains of the group bypassed by the network DNS: the group goes to it"
-# Запасной у dnsproxy для домена с геоблоком — тот же сервер: публичный DNS
-# отдал бы настоящий адрес (геоблок Claude после смены сети), другой сервер
-# обхода — другой адрес выхода посреди сессии (геоблок Gemini, 08.11 23:46)
+# Запасного у домена с геоблоком нет — быстрый отказ: публичный DNS отдал бы
+# настоящий адрес (геоблок Claude после смены сети, журнал 08.11), другой
+# сервер обхода — другой адрес выхода, повтор к тому же — ещё одно ожидание
 { printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
   printf 'a.example\tok\t20\t3\t3\t0\ttls\n'; printf 'b.example\tok\t30\t3\t3\t0\ttls\n'
   printf '=claude.ai\ta.example,b.example\n'
@@ -1127,11 +1106,9 @@ assert_contains "$(dns_geo_routes)" "gemini.google.com	-" "all main domains of t
 rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).pin"
 cp "$DNS_GEO_LIST" "$SANDBOX/geo.keep3"; printf 'claude.ai\ngemini.google.com\n' >> "$DNS_GEO_LIST"
 dns_build
-srv=$(grep '^\[/' "$DNS_RUN_DIR/upstreams.txt" | grep '/claude.ai/' | sed 's/.*\]//')
-assert_contains "$(grep '/claude.ai/' "$DNS_RUN_DIR/fallback.txt" | sed 's/.*\]//')" "$srv" "a geo-blocked domain falls back to its own bypass server (a retry), not to another one"
-assert_eq "1" "$(grep '/claude.ai/' "$DNS_RUN_DIR/fallback.txt" | sed 's/.*\]//' | sort -u | grep -c .)" "and to that one only"
-assert_contains "$(grep '/gemini.google.com/' "$DNS_RUN_DIR/fallback.txt")" "]192.168.1.1:53" "a domain the network DNS bypasses itself falls back to the network DNS, not to a public one"
-assert_not_contains "$(grep '/gemini.google.com/' "$DNS_RUN_DIR/fallback.txt")" "77.88.8.8" "never to a public DNS"
+assert_eq "]127.0.0.1:1" "$(grep '/claude.ai/' "$DNS_RUN_DIR/fallback.txt" | sed 's/.*\]/]/' | sort -u)" "a geo-blocked domain has no fallback server: a closed local port — an error at once, not the real address"
+assert_contains "$(grep '/gemini.google.com/' "$DNS_RUN_DIR/fallback.txt")" "]127.0.0.1:1" "a domain the network DNS bypasses itself too"
+assert_contains "$(cat "$DNS_RUN_DIR/args")" "--timeout=3s" "an answer longer than 3 s is an error, not a minute of waiting"
 assert_contains "$(grep -v '^\[/' "$DNS_RUN_DIR/fallback.txt")" "77.88.8.8:53" "other domains keep the usual fallback"
 # QUIC к прокси обхода — сразу отказ: прокси работают только по TCP, и
 # приложение ждало, прежде чем перейти на TCP (Gemini, журнал 09.11)

@@ -73,7 +73,6 @@ DNS_GEO_HOT_DAYS=7
 DNS_GEO_HOT_BASE="chatgpt.com claude.ai gemini.google.com gamea.clashofclans.com accounts.supercell.com spotify.com"
 DNS_GEO_POOL=3                # кандидатов в пул и маршрут домена; в работе — один (закреплённый)
 DNS_GEO_OFF="$CONFDIR/dns/geo-off.list"   # серверы, отключённые вручную
-DNS_GEO_IPSTAT="$STATE_DIR/smart_ipstat"  # исходы соединений по адресам (умный режим)
 DNS_GEO_FALLBACK="https://dns.comss.one/dns-query"
 DNS_GEO_SCAN_COOL=300        # ручная проверка — не чаще раза в 5 минут
 DNS_GEO_UPD_COOL=1800        # обновление списка — раз в 30 минут
@@ -108,50 +107,6 @@ dns_push_on() { [ "${DNS_PUSH:-1}" = 1 ] && [ "$(dns_default_used)" != net ]; }
 dns_enabled() { [ -f "$DNS_ENABLED_FILE" ] && [ -f "$DNS_BIN" ]; }
 dns_smart_on() { [ "${DNS_SMART:-1}" = 1 ]; }
 dns_geo_on() { [ "${DNS_GEO:-1}" = 1 ]; }
-# Серверы обхода, чьи прокси в этой сети почти не принимают соединений: по
-# исходам соединений умного режима (DNS_GEO_IPSTAT, полчаса) — на адресе
-# прокси сервера (строки «+сервер адрес» проверки) не меньше 4 ошибок и
-# удач меньше пятой части. Проверка DNS тут не помогает: один TLS-сеанс
-# помощника проходит, а соединения приложений рвутся (Claude через прокси
-# Comss: 4 ответа на 38 соединений, отправка файла — минуты и ошибка)
-dns_geo_bad() {
-  local f; f=$(dns_geo_scan_file)
-  [ -s "$DNS_GEO_IPSTAT" ] && [ -s "$f" ] || return 0
-  awk -v now="$(date +%s)" '
-    FNR == NR { if ($3 >= 4 && $2 * 4 < $3 && now - $4 < 1800) bad[$1] = $2 "/" ($2 + $3); next }
-    /^\+/ { s = substr($1, 2); if (($2 in bad) && !(s in seen)) { seen[s] = 1; print s "\t" $2 "\t" bad[$2] } }' "$DNS_GEO_IPSTAT" "$f" 2>/dev/null
-}
-# Отключённые: вручную (DNS_GEO_OFF) и те, чьи прокси не принимают соединений
-# (dns_geo_bad) — если без них останется хоть один ответивший сервер.
-# -> путь к списку
-dns_geo_offf() {
-  local o="$DNS_RUN_DIR/geo-off.all" f; f=$(dns_geo_scan_file)
-  mkdir -p "$DNS_RUN_DIR"
-  { cat "$DNS_GEO_OFF" 2>/dev/null; echo; } > "$o"
-  dns_geo_bad | cut -f1 > "$o.bad"
-  if [ -s "$o.bad" ] && awk -F'\t' -v of="$o" -v bf="$o.bad" '
-      BEGIN { while ((getline l < of) > 0) off[l] = 1; while ((getline l < bf) > 0) off[l] = 1 }
-      !/^[#=+!?]/ && $2 == "ok" && $4 > 0 && !($1 in off) { n++ } END { exit !n }' "$f" 2>/dev/null; then
-    cat "$o.bad" >> "$o"
-  fi
-  rm -f "$o.bad"
-  echo "$o"
-}
-# Изменился список серверов с неработающими прокси — применить маршруты сразу
-dns_geo_bad_check() {
-  local now last
-  dns_geo_on || return 0
-  now=$(dns_geo_bad | sort)
-  last=$(cat "$DNS_RUN_DIR/geo-bad.last" 2>/dev/null)
-  [ "$now" = "$last" ] && return 0
-  printf '%s\n' "$now" > "$DNS_RUN_DIR/geo-bad.last"
-  if [ -n "$now" ]; then
-    dns_log "умный режим: прокси обхода почти не принимают соединений ($(printf '%s\n' "$now" | awk -F'\t' '{ printf "%s%s — %s удач", (k++ ? ", " : ""), $1, $3 }')) — их сайты уходят на другие серверы"
-  else
-    dns_log "умный режим: прокси обхода снова принимают соединения — маршруты как по проверке"
-  fi
-  ( dns_apply_now >/dev/null 2>&1 & ) 2>/dev/null
-}
 dns_geo_count() { list_count "$DNS_GEO_LIST"; }
 # DNS для обхода геоблока выбирает сам модуль, как умный режим обхода —
 # вариант: раз в несколько часов тихо проверяет DoT-серверы из defaults/dns-
@@ -190,7 +145,7 @@ dns_geo_scan_time() { sed -n '1s/^#time=\([0-9]*\).*/\1/p' "$(dns_geo_scan_file)
 # идут по своим маршрутам (dns_geo_routes)
 dns_geo_pool() { # -> «мс сервер протокол» пула, лучшие сверху (закреплённый — первым)
   local f; f=$(dns_geo_scan_file); [ -s "$f" ] || return 0
-  awk -F'\t' -v of="$(dns_geo_offf)" -v pf="$f.pin" '
+  awk -F'\t' -v of="$DNS_GEO_OFF" -v pf="$f.pin" '
     BEGIN { while ((getline l < of) > 0) { gsub(/[[:space:]]/, "", l); if (l != "") off[l] = 1 }
       while ((getline l < pf) > 0) { split(l, a, " "); if (a[1] == "*") pin = a[2] } }
     !/^[#=+!?]/ && $2 == "ok" && $4 > 0 && !($1 in off) { c++; h[c] = $1; ms[c] = $3; pr[c] = ($7 == "https" ? "https" : "tls"); p[c] = $4 + 0; if (p[c] > max) max = p[c] }
@@ -207,152 +162,119 @@ dns_geo_pick() { dns_geo_pool | head -n 1 | cut -f2; }
 dns_geo_pick_up() {
   dns_geo_pool | head -n 1 | awk -F'\t' '{ print ($3 == "https" ? "https://" $2 "/dns-query" : "tls://" $2) }'
 }
-# Маршруты по доменам — итог проверки: каждый домен списка — к серверам,
-# у которых для него прокси, а со своим адресом у домена — только к ним
-# (общий прокси разбирает имя сайта, и протокол без имени — игра — уходит не
-# туда); «-» — никто не обходит, домен идёт в DNS сети. Выбор — в
-# nfqws2-helper (planRoutes), здесь — протокол каждого сервера
-dns_geo_routes() { # [save] -> «домен<TAB>сервер<TAB>протокол» или «домен<TAB>-»
+# Маршруты обхода геоблока — по образцу geodns на роутере, где Gemini и
+# остальное работают стабильно: у группы сайтов (dns-geo-groups.list: Google,
+# OpenAI, Anthropic, xAI) — один сервер, у всего остального списка — один
+# сервер пула (dns_geo_pick), и только сайту, которого пул не обходит, —
+# свой сервер. Выбранный сервер держится, пока не подвёл две проверки
+# подряд (<файл>.rel) и отвечает: смена сервера — новый адрес выхода посреди
+# сессии и перезапуск dnsproxy с пустым кэшем. Раньше маршруты строились по
+# каждому домену и переставлялись после каждой проверки — за сутки 33 смены
+# и 59 перезапусков, gamea.clashofclans.com сменил сервер восемь раз.
+#   - сервер группы годится, если обходит все её основные домены, которыми
+#     пользуются; новый выбирается среди годных: сначала предпочтительные
+#     (dns-geo-prefer.list), затем самый надёжный по истории, затем
+#     обходящий больше; сервер группы общий для всех сетей (groups.pin);
+#   - группа уходит к DNS сети (роутер дома сам обходит), когда тот обходит
+#     все её основные домены, и возвращается, когда перестал обходить
+#     большинство;
+#   - по старым данным сети (проверка старше часа) выбранный не меняется,
+#     пока отвечает;
+#   - отключённые вручную (DNS_GEO_OFF) не берутся.
+# -> «домен<TAB>сервер<TAB>протокол» или «домен<TAB>-» (в DNS сети); домены
+# без строки идут в пул
+dns_geo_routes() { # [save]
   local f h; f=$(dns_geo_scan_file); [ -s "$f" ] || return 0
-  # частая проверка свежее полной — её маршруты для её доменов главнее
+  # частая проверка свежее полной — её данные для её доменов главнее
   h=""; [ -s "$f.hot" ] && [ "$f.hot" -nt "$f" ] && h="$f.hot"
-  # свежие ли данные этой сети (проверка не старше часа): по старым общий
-  # сервер группы не снимается — см. ниже
   local fresh=0 ft
   ft=$(sed -n '1s/^#time=\([0-9]*\).*/\1/p' "${h:-$f}" 2>/dev/null)
   [ -n "$ft" ] && [ $(( $(date +%s) - ft )) -lt $(( DNS_GEO_HOT_EVERY * 2 )) ] && fresh=1
-  # У домена — один сервер, у всех доменов сайта — по возможности один и тот
-  # же (как с пулом: разные прокси в одной сессии — разные адреса выхода, и
-  # сайт видит подозрительный трафик). Сайт — две последние части имени или
-  # группа из dns-geo-groups.list (Gemini — это и google.com, и googleapis.com,
-  # и gemini.google). Сервер сайта — тот, что годится большинству его доменов,
-  # прежде всего тех, которыми пользуются (частая проверка): у Gemini —
-  # gemini.google.com, а не fitbit-pa.googleapis.com;
-  # закреплённый (<файл>.pin) держится, пока годится не меньше чем 90% от
-  # этого. Домену, которому выбранный не годится, — его первый. Группе — без
-  # исключений: все её домены из списка, и те, которых проверка не знает
-  # (добавлены после неё), — к её серверу. Так делает geodns на роутере, и с
-  # ним Gemini работает; с исключениями одна сессия Gemini шла через четыре
-  # прокси: geminiweb-pa — через пул, signaler-pa — через свой единственный.
-  # Сервер группы — общий для всех сетей (groups.pin): телефон то и дело
-  # переходит с Wi‑Fi на мобильную и обратно, и со своим сервером в каждой
-  # сети Gemini посреди чата получал другой адрес выхода — первый запрос
-  # проходил, следующий упирался в геоблок. Общий держится, пока в этой сети
-  # обходит все домены группы, которыми пользуются (без них — 90% от лучшего).
-  # По старым данным сети (её проверка старше часа) общий сервер держится,
-  # пока в ней отвечает: сразу после перехода с мобильной на Wi‑Fi маршруты
-  # строились по проверке Wi‑Fi многочасовой давности, где общего сервера среди
-  # обходящих Gemini не было, — сервер группы сменился, а через полминуты
-  # свежая проверка вернула прежний: Gemini дважды за полминуты менял адрес
-  # выхода и упирался в геоблок.
-  # У группы могут быть предпочтительные серверы (dns-geo-prefer.list): пока
-  # хоть один из них обходит её основные домены, выбор — только среди них.
-  # Отключённые вручную (DNS_GEO_OFF) не берутся
-  awk -F'\t' -v prf="$DNS_GEO_PREFER" -v of="$(dns_geo_offf)" -v pf="$f.pin" -v gpf="$DNS_GEO_SCAN_DIR/groups.pin" -v rf="$f.rel" -v fresh="$fresh" -v base="$DNS_GEO_HOT_BASE" -v gf="$DNS_GEO_GROUPS" -v gl="$DNS_GEO_LIST" -v hf="$h" -v save="$1" '
+  awk -F'\t' -v prf="$DNS_GEO_PREFER" -v of="$DNS_GEO_OFF" -v pf="$f.pin" -v gpf="$DNS_GEO_SCAN_DIR/groups.pin" -v rf="$f.rel" -v fresh="$fresh" -v base="$DNS_GEO_HOT_BASE" -v gf="$DNS_GEO_GROUPS" -v gl="$DNS_GEO_LIST" -v hf="$h" -v save="$1" -v pool="$(dns_geo_pick)" '
     function site(d,   n, a, x, i) {
       for (x = d; ; x = substr(x, i + 1)) { if (x in grp) return "@" grp[x]; if ((i = index(x, ".")) == 0) break }
       n = split(d, a, "."); return n < 2 ? d : a[n - 1] "." a[n] }
+    function usable(h) { return h != "" && (h in pr) && !(h in off) }
     function out(d, x) { if (x == "-") print d "\t-"; else print d "\t" x "\t" pr[x] }
     BEGIN { while ((getline l < of) > 0) { gsub(/[[:space:]]/, "", l); if (l != "") off[l] = 1 }
       while ((getline l < pf) > 0) { split(l, a, " "); if (a[1] != "") pin[a[1]] = a[2] }
       while ((getline l < gf) > 0) { sub(/#.*/, "", l); n = split(tolower(l), a, " "); for (i = 2; i <= n; i++) grp[a[i]] = a[1] }
       while ((getline l < gpf) > 0) { split(l, a, " "); if (a[1] != "") gpin[a[1]] = a[2] }
-      while ((getline l < prf) > 0) { sub(/#.*/, "", l); n = split(tolower(l), a, " "); for (i = 2; i <= n; i++) pref["@" a[1], a[i]] = i; if (n > 1) hasp["@" a[1]] = 1 }
-      # основные сервисы (gemini.google.com…) — «используемые» всегда, есть
-      # частая проверка или нет: иначе правило выбора сервера группы менялось
-      # с появлением её данных, и сервер прыгал
+      while ((getline l < prf) > 0) { sub(/#.*/, "", l); n = split(tolower(l), a, " "); for (i = 2; i <= n; i++) pref["@" a[1], a[i]] = i }
+      # основные сервисы — «используемые» всегда, есть частая проверка или нет
       nb = split(base, bl, " "); for (i = 1; i <= nb; i++) basehot[bl[i]] = 1
       while ((getline l < rf) > 0) { split(l, a, "\t"); if (a[1] != "") { rsc[a[1], a[2]] = a[3] + 0; rst[a[1], a[2]] = a[4] + 0 } }
       n = 0 }
     !/^[#=+!?]/ && $2 == "ok" { pr[$1] = ($7 == "https" ? "https" : "tls"); next }
-    # частая проверка свежее: сервер, не ответивший в ней, сейчас недоступен —
-    # маршрут из полной проверки на него не ведёт (иначе домен получал ошибку)
+    # сервер, не ответивший в частой проверке, сейчас недоступен
     !/^[#=+!?]/ && $2 == "fail" && FILENAME == hf { delete pr[$1]; next }
-    /^=/ { d = substr($1, 2); if (!(d in rt)) ord[++n] = d; rt[d] = $2; netb[d] = ($3 == "net"); if (FILENAME == hf || (d in basehot)) hot[d] = 1
-      # какие серверы домен обходят по полной проверке (не по частой)
-      if (FILENAME != hf) { fullseen[d] = 1; m = split($2, hs, ","); for (i = 1; i <= m; i++) full[d, hs[i]] = 1 } }
+    /^=/ { d = substr($1, 2); if (!(d in rt)) ord[++n] = d; rt[d] = $2; netb[d] = ($3 == "net"); if (FILENAME == hf || (d in basehot)) hot[d] = 1 }
     END {
+      # кто какой домен обходит; вес домена, которым пользуются, — 1000
       for (k = 1; k <= n; k++) {
-        d = ord[k]
-        if (d in hot) { hall[site(d)]++; if (netb[d]) hnet[site(d)]++ }
+        d = ord[k]; s = site(d); dom[s, ++nd[s]] = d
+        if (d in hot) { hall[s]++; if (netb[d]) hnet[s]++ }
         if (rt[d] == "-") continue
-        m = split(rt[d], hs, ","); nc[d] = 0
-        for (i = 1; i <= m; i++) if ((hs[i] in pr) && !(hs[i] in off)) { c[d, ++nc[d]] = hs[i]; s = site(d); if (!((s, hs[i]) in cnt)) so[s, ++ns[s]] = hs[i]; cnt[s, hs[i]] += (d in hot) ? 1000 : 1 }
-        if (d in hot) hotn[site(d)]++
-      }
-      for (s in ns) {
-        # предпочтительные: годится ли хоть один (основным доменам — все,
-        # без частой проверки — хоть что-то обходит); да — только они
-        po = 0
-        if (s in hasp) for (i = 1; i <= ns[s]; i++) { h = so[s, i]
-          if (((s, h) in pref) && (hotn[s] ? cnt[s, h] >= hotn[s] * 1000 : cnt[s, h] > 0)) po = 1 }
-        best = ""
-        for (i = 1; i <= ns[s]; i++) { h = so[s, i]; if (po && !((s, h) in pref)) continue
-          if (best == "" || cnt[s, h] > cnt[s, best]) best = h }
-        # группа: из обходящих основные домены (вес ≥ 1000 за каждый) — самый
-        # надёжный по истории проверок этой сети; без истории — 0,5
-        if (substr(s, 1, 1) == "@" && hotn[s]) {
-          rb = ""
-          for (i = 1; i <= ns[s]; i++) { h = so[s, i]; if (cnt[s, h] < hotn[s] * 1000 || (po && !((s, h) in pref))) continue
-            r = ((s, h) in rsc) ? rsc[s, h] : .5
-            if (rb == "" || r > rr + .001 || (r > rr - .001 && cnt[s, h] > cnt[s, rb])) { rb = h; rr = r } }
-          if (rb != "") best = rb
+        m = split(rt[d], hs, ",")
+        for (i = 1; i <= m; i++) if (usable(hs[i])) {
+          by[d, hs[i]] = 1; if (!nby[d]++) { first[d] = hs[i]; nk[s]++ }
+          if (!((s, hs[i]) in cnt)) so[s, ++ns[s]] = hs[i]
+          cnt[s, hs[i]] += (d in hot) ? 1000 : 1
         }
-        if ((s in pin) && ((s, pin[s]) in cnt) && cnt[s, pin[s]] * 10 >= cnt[s, best] * 9 && (!po || ((s, pin[s]) in pref))) best = pin[s]
-        # сайт не из группы: закреплённый держится, пока не подводил две
-        # проверки подряд (домены, которые он сейчас не обходит, всё равно идут
-        # к своим серверам — см. ниже). Предпочтительные — только для нового
-        # выбора: работающий сервер они не вытесняют
-        else if (substr(s, 1, 1) != "@" && (s in pin) && ((s, pin[s]) in cnt) && ((s, pin[s]) in rst) && rst[s, pin[s]] < 2) best = pin[s]
-        g = (s in gpin) ? gpin[s] : ""
-        if (substr(s, 1, 1) == "@" && g != "" && ((s, g) in cnt) &&
-            (hotn[s] ? cnt[s, g] >= hotn[s] * 1000 : cnt[s, g] * 10 >= cnt[s, best] * 9)) best = g
-        else if (substr(s, 1, 1) == "@" && g != "" && !fresh && (g in pr) && !(g in off)) best = g
-        # одна неудачная проверка — не повод менять адрес выхода: общий сервер
-        # группы снимается, только если не обходил её две проверки подряд
-        else if (substr(s, 1, 1) == "@" && g != "" && (g in pr) && !(g in off) && ((s, g) in rst) && rst[s, g] < 2) best = g
+        if (d in hot) hotn[s]++
+      }
+      for (s in nd) {
+        isg = substr(s, 1, 1) == "@"
+        # годен: обходит все домены сайта, которыми пользуются (частой
+        # проверки нет — все известные)
+        nr = hotn[s] ? hotn[s] * 1000 : (nk[s] ? nk[s] : 1)
+        ch[s] = ""
+        if (isg) {
+          g = (s in gpin) ? gpin[s] : ""
+          # DNS сети обходит группу сам — с запасом в обе стороны
+          if (hall[s] > 0 && (g == "-" ? hnet[s] * 2 > hall[s] : hnet[s] == hall[s])) { ch[s] = "-"; continue }
+          if (g == "-") g = ""
+        } else {
+          # обычный сайт: пул его обходит — своего сервера не нужно
+          if (usable(pool) && ((s, pool) in cnt) && cnt[s, pool] >= nr) continue
+          g = (s in pin) ? pin[s] : ""
+        }
+        # выбранный держится, пока годен, не подвёл две проверки подряд и
+        # отвечает; по старым данным сети — пока отвечает
+        if (usable(g) && ((s, g) in cnt ? cnt[s, g] >= nr : 0)) { ch[s] = g; continue }
+        if (usable(g) && (!fresh || (((s, g) in rst) && rst[s, g] < 2))) { ch[s] = g; continue }
+        # новый: годные — предпочтительные, надёжные по истории, обходящие больше
+        best = ""; bp = 0; br = -1
+        for (i = 1; i <= ns[s]; i++) { h = so[s, i]; if (cnt[s, h] < nr) continue
+          p = ((s, h) in pref) ? 1000 - pref[s, h] : 0; r = ((s, h) in rsc) ? rsc[s, h] : .5
+          if (best == "" || p > bp || (p == bp && (r > br + .001 || (r > br - .001 && cnt[s, h] > cnt[s, best])))) { best = h; bp = p; br = r } }
+        # годных нет — тот, что обходит больше всех
+        if (best == "") for (i = 1; i <= ns[s]; i++) { h = so[s, i]; if (best == "" || cnt[s, h] > cnt[s, best]) best = h }
+        if (!isg && best == pool) best = ""
         ch[s] = best
       }
-      # DNS сети (роутер) сам обходит большинство основных доменов группы —
-      # вся группа остаётся ему: свой сервер модуля для части доменов дал бы
-      # сайту второй адрес выхода (остальные домены Gemini идут через роутер)
-      # С запасом, чтобы не прыгать каждые полчаса (так было ночью 08.11):
-      # перейти к DNS сети — когда он обходит все основные домены группы,
-      # вернуться к своему серверу — когда перестал обходить большинство
-      for (s in hall) if (substr(s, 1, 1) == "@" && (gpin[s] == "-" ? hnet[s] * 2 > hall[s] : (hall[s] > 0 && hnet[s] == hall[s]))) ch[s] = "-"
-
       for (k = 1; k <= n; k++) {
         d = ord[k]; s = site(d)
-        if (rt[d] == "-" || ch[s] == "-") { out(d, "-"); continue }
-        # домен группы — к её серверу; но если тот этот домен не обходит
-        # вообще (по полной проверке), а другой обходит, — к другому (из
-        # обходящих — к тому, что годится большему числу доменов группы).
-        # Иначе сервер группы отдавал настоящий адрес: signaler-pa.googleapis.com
-        # обходил только bezmezhau, группа была на wlrus — и приложение Gemini
-        # ходило к Google с российского адреса (журнал 09.11.2026). Промах в
-        # одной частой проверке и старые данные сети домен не уводят: адрес
-        # выхода важнее
-        if (substr(s, 1, 1) == "@" && ch[s] != "") {
-          x = ch[s]
-          if (fresh && nc[d] && fullseen[d] && !((d, x) in full)) { x = c[d, 1]; for (i = 2; i <= nc[d]; i++) if (cnt[s, c[d, i]] > cnt[s, x]) x = c[d, i] }
-          out(d, x); continue
-        }
-        if (!nc[d]) continue
-        x = c[d, 1]
-        for (i = 1; i <= nc[d]; i++) if (c[d, i] == ch[s]) x = ch[s]
-        out(d, x)
+        if (ch[s] == "-") { out(d, "-"); continue }
+        # группа — целиком через свой сервер (один адрес выхода); у обычного
+        # сайта к его серверу — домены, которые тот обходит, остальные — в пул
+        if (ch[s] != "" && (substr(s, 1, 1) == "@" || ((d, ch[s]) in by))) { out(d, ch[s]); continue }
+        # и пул его не обходит — к тому, кто обходит
+        if (nby[d] && !((d, pool) in by)) { out(d, first[d]); continue }
+        # домен, который не обходит никто или обходит сам DNS сети (роутер), —
+        # в DNS сети
+        if (rt[d] == "-") out(d, "-")
       }
+      # домены групп, которых проверка ещё не знает, — к серверу группы
       while ((getline l < gl) > 0) {
         sub(/[[:space:]]*#.*/, "", l); gsub(/[[:space:]]/, "", l); d = tolower(l)
         if (d == "" || (d in rt) || (d in done)) continue
         done[d] = 1; s = site(d)
-        if (ch[s] == "-") out(d, "-")
-        else if (substr(s, 1, 1) == "@" && ch[s] != "") out(d, ch[s])
+        if (substr(s, 1, 1) == "@" && ch[s] != "") out(d, ch[s])
       }
       if (save == "save") {
         if ("*" in pin) print "* " pin["*"] > pf
-        for (s in ch) if (ch[s] != "" && ch[s] != "-") print s, ch[s] > pf
-        # группа на DNS сети закрепляется как «-»: от этого зависит запас выше
+        for (s in ch) if (ch[s] != "" && ch[s] != "-" && substr(s, 1, 1) != "@") print s, ch[s] > pf
         for (s in ch) if (substr(s, 1, 1) == "@" && ch[s] != "") gpin[s] = ch[s]
         for (s in gpin) if (gpin[s] != "") print s, gpin[s] > gpf
       }
@@ -918,17 +840,16 @@ dns_build() {
     local gp gs gm gb
     gm=$(dns_geo_due); [ -n "$gm" ] && dns_geo_scan_bg "$gm"
     gs=$(dns_geo_servers)
-    # Запасной у dnsproxy для домена с геоблоком — тот же сервер (повтор
-    # запроса), у домена, который обходит DNS сети, — DNS сети. Общий
-    # запасной (DNS сети и публичные) отдавал настоящий адрес: после перехода
-    # с Wi‑Fi на мобильную Claude получил адрес Anthropic — геоблок (журнал
-    # 08.11.2026, 22:31). Другой сервер обхода в запасных — тоже плохо: Gemini
-    # посреди сессии получал прокси то wlrus, то zapret, и Google видел
-    # подозрительный трафик (журнал 08.11.2026, 23:46). Не ответил свой сервер —
-    # ошибка, приложение повторит, а адрес выхода тот же
+    # Запасного у домена с геоблоком нет: не ответил его сервер — сразу
+    # ошибка (127.0.0.1:1 — закрытый порт, отказ мгновенный), приложение
+    # повторит. Общий запасной (DNS сети и публичные) отдавал настоящий адрес:
+    # после перехода с Wi‑Fi на мобильную Claude получил адрес Anthropic —
+    # геоблок до конца срока записи (журнал 08.11.2026, 22:31); другой сервер
+    # обхода — другой адрес выхода посреди сессии; повтор к тому же — ещё
+    # одно ожидание
     dns_geo_routes | awk -F'\t' '{ u = ($2 == "-" ? "-" : ($3 == "https" ? "https://" $2 "/dns-query" : "tls://" $2)); s[$1] = s[$1] (s[$1] == "" ? "" : " ") u }
       END { for (d in s) print d "\t" s[d] }' > "$DNS_RUN_DIR/geo.routes"
-    gb=$(for ip in $(printf '%s' "$net" | tr ',' ' '); do dns_addr_port "$ip"; printf ' '; done | sed 's/ $//')
+    gb="127.0.0.1:1"
     : > "$DNS_RUN_DIR/fallback.rules"
     {
       dns_profile_domains own
@@ -952,9 +873,9 @@ dns_build() {
       {
         d = $0; r = srv; hit = 0
         while (1) { if (d in skip) next; if ((d in rt) && !hit) { r = rt[d]; hit = 1 }; if ((i = index(d, ".")) == 0) break; d = substr(d, i + 1) }
-        # запасной — тот же сервер; у «-» — DNS сети (gb)
-        fb = (r == "-") ? gb : r
-        if (fb != "") { if (!(fb in fcnt)) { fkey[++nf] = fb; fcnt[fb] = 0 }; fdom[fb, ++fcnt[fb]] = $0 }
+        # запасной — быстрый отказ (gb)
+        fb = gb
+        if (!(fb in fcnt)) { fkey[++nf] = fb; fcnt[fb] = 0 }; fdom[fb, ++fcnt[fb]] = $0
         # «-» — никто из серверов домен не обходит: он в DNS сети (при DNS по
         # умолчанию не из сети — правилом к ней)
         if (r == "-" && nu != "") r = nu
@@ -1017,7 +938,7 @@ dns_build() {
   fi
 
   # Запасные серверы — если основные не ответили: DNS сети, затем публичные;
-  # у доменов с геоблоком — свой запасной сервер обхода (fallback.rules)
+  # у доменов с геоблоком — быстрый отказ (fallback.rules): не настоящий адрес
   : > "$DNS_RUN_DIR/fallback.txt"
   for ip in $(printf '%s' "$net" | tr ',' ' ') $DNS_PUBLIC; do
     dns_addr_port "$ip" >> "$DNS_RUN_DIR/fallback.txt"; echo >> "$DNS_RUN_DIR/fallback.txt"
@@ -1036,7 +957,9 @@ dns_build() {
     for ip in $(printf '%s' "$net" | tr ',' ' ') $DNS_PUBLIC; do echo "-b"; dns_addr_port "$ip"; echo; done
     echo "--cache"
     dns_smart_on && echo "--cache-optimistic"
-    echo "--timeout=5s"
+    # ответ сервера дольше 3 с — уже ожидание в приложении (Clash of Clans
+    # стоял на загрузке), лучше быстрая ошибка и повтор
+    echo "--timeout=3s"
     # parallel: запрос — всем серверам профиля, ответ — от первого ответившего.
     # В load_balance он уходил одному случайному, и молчащий сервер (часть DNS
     # с геоблоком не отвечает на запросы типа HTTPS) давал ошибку и ожидание
@@ -1755,7 +1678,6 @@ _dns_check() {
       dns_rules_add || dns_fail "не удалось восстановить перехват"
     elif [ "${DNS_PROBE:-1}" = 1 ]; then
       dns_probe_check
-      dns_geo_bad_check
       gm=$(dns_geo_due); [ -n "$gm" ] && dns_geo_scan_bg "$gm"
     fi
   elif dns_pid >/dev/null || dns_rules_ok; then
