@@ -36,6 +36,7 @@ rm -f "$MODPATH"/*.zip
 
 for f in \
   service.sh action.sh boot-completed.sh uninstall.sh lib/common.sh lib/dns.sh lib/hosts.sh bin/nfqws2-ctl \
+  lib/geo-pool.awk lib/geo-routes.awk lib/geo-rel.awk \
   system/bin/nfqws2-ctl defaults/nfqws2.conf \
   "binaries/$BIN/nfqws2" "binaries/$BIN/dnsproxy"
 do

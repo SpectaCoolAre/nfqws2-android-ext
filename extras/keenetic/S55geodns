@@ -1,0 +1,6 @@
+#!/bin/sh
+# Служба geodns (Entware): обход геоблока через DNS
+case "$1" in
+  start|stop|restart|status) /opt/bin/geodns "$1" ;;
+  *) echo "S55geodns start|stop|restart|status" ;;
+esac

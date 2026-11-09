@@ -1,0 +1,398 @@
+#!/bin/sh
+# geodns — обход геоблока через DNS на роутере Keenetic (Entware).
+#
+# Та же логика, что в умном DNS модуля nfqws2-android-ext на телефоне, — тем
+# же кодом: проверка серверов — nfqws2-helper -geoscan (по всему списку, по
+# DoH: роутер ходит к серверам через https-dns-proxy), выбор серверов —
+# geo-pool.awk, geo-routes.awk, geo-rel.awk из модуля. Поэтому дома телефон и
+# роутер выбирают одинаково, а модуль за роутером видит, что роутер обходит
+# группу сам, и оставляет её ему (один адрес выхода на всех устройствах).
+#
+#   устройства -> dnsmasq (порт 53 роутера)
+#     домены списка геоблока -> https-dns-proxy 127.0.0.1:<порт сервера> -> сервер обхода
+#     группа сайтов (groups.list: Google, OpenAI, Anthropic, xAI) — целиком
+#                               через один сервер
+#     домен, который не обходит никто, и всё остальное -> DNS провайдера, а с
+#                               DEFAULT_DOH — https-dns-proxy 127.0.0.1:DEFAULT_PORT
+#                               -> честный DoH (провайдер не подменит ответ)
+#
+#   geodns start|stop|restart   — обычно через /opt/etc/init.d/S55geodns
+#   geodns status               — что работает, какие серверы, последние записи журнала
+#   geodns scan                 — полная проверка серверов сейчас (и применить)
+#   geodns check                — частая проверка основных сервисов сейчас (и применить)
+#   geodns routes               — маршруты: «домен сервер» (как в модуле — для сравнения)
+#   geodns test <домен>         — куда идёт домен, ответ роутера и провайдера
+#   geodns update               — скачать свежий список геоблока (itdoginfo)
+#   geodns log                  — журнал целиком
+
+R=${GEODNS_ROOT:-}                 # тесты подменяют корень
+D=$R/opt/etc/geodns
+CONF=$D/geodns.conf
+LIST=$D/geoblock.list
+OWN=$D/own.list
+GROUPS=$D/groups.list              # = defaults/dns-geo-groups.list модуля
+PREFER=$D/prefer.list              # = defaults/dns-geo-prefer.list модуля
+SERVERS_LIST=$D/servers.list       # = defaults/dns-geo-servers.list модуля
+OFF=$D/off.list                    # серверы, отключённые вручную
+GEO_CONF=$D/dnsmasq-geo.conf
+UP_CONF=$D/upstream.conf
+ST=$R/opt/var/lib/geodns           # итоги проверок — переживают перезагрузку
+RUN=$R/opt/var/run/geodns
+LOG=$R/opt/var/log/geodns.log
+HELPER=${HELPER:-$R/opt/bin/nfqws2-helper}
+LIST_URL="https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Categories/geoblock.lst"
+
+PROVIDER_DNS=""; BOOTSTRAP="77.88.8.8,1.1.1.1"; PORT=5053; ALIVE_EVERY=60
+DEFAULT_DOH=""; DEFAULT_PORT=5099
+# как в модуле (lib/dns.sh): полная проверка — раз в 4 часа, частая — раз в
+# полчаса, основные сервисы — всегда в частой
+SCAN_EVERY=14400; HOT_EVERY=1800
+HOT_BASE="chatgpt.com claude.ai gemini.google.com gamea.clashofclans.com accounts.supercell.com spotify.com"
+REF="https://common.dot.dns.yandex.net/dns-query,77.88.8.8:53"
+SCAN_VER=4
+[ -f "$CONF" ] && . "$CONF"
+DOH_URL="${DOH_URL:-https://%s/dns-query}"   # тесты подменяют
+mkdir -p "$RUN" "$ST" "${LOG%/*}"
+SCAN=$ST/scan.tsv
+
+log() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"
+  # журнал не растёт бесконечно: внутренняя память роутера маленькая
+  if [ "$(wc -l < "$LOG")" -gt 600 ]; then tail -n 400 "$LOG" > "$LOG.tmp" && mv -f "$LOG.tmp" "$LOG"; fi
+}
+
+# ---------------------------------------------------------------- dnsmasq
+# Служба dnsmasq из Entware (обычно S56dnsmasq). Её может и не быть (пакет
+# без службы) — тогда dnsmasq запускается напрямую с нашим конфигом
+dnsmasq_init() { ls "$R"/opt/etc/init.d/S*dnsmasq* 2>/dev/null | head -n 1; }
+dnsmasq_bin() { [ -x "$R/opt/sbin/dnsmasq" ] && echo "$R/opt/sbin/dnsmasq" || command -v dnsmasq; }
+dnsmasq_restart() {
+  local svc bin out
+  bin=$(dnsmasq_bin)
+  [ -n "$bin" ] || { log "dnsmasq не установлен (opkg install dnsmasq-full)"; return 1; }
+  out=$("$bin" --test -C "$R/opt/etc/dnsmasq.conf" 2>&1)
+  case "$out" in *OK*) ;; *) log "ошибка в конфиге dnsmasq: $out"; return 1 ;; esac
+  svc=$(dnsmasq_init)
+  if [ -n "$svc" ]; then out=$("$svc" restart 2>&1)
+  else killall dnsmasq 2>/dev/null; sleep 1; out=$("$bin" -C "$R/opt/etc/dnsmasq.conf" 2>&1); fi
+  sleep 1
+  if pidof dnsmasq >/dev/null; then log "dnsmasq запущен (${svc:-$bin})"
+  else log "dnsmasq не запустился (${svc:-$bin}): $out"; return 1; fi
+}
+
+# IPv4-адреса из ответа busybox nslookup (оба формата вывода)
+ips() { # <имя> <сервер>
+  nslookup "$1" "$2" 2>/dev/null | awk '
+    /^Name:/ { n = 1; next }
+    n { while (match($0, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) { print substr($0, RSTART, RLENGTH); $0 = substr($0, RSTART + RLENGTH) } }' |
+    sort -u
+}
+
+# DNS провайдера: из настройки, иначе из Keenetic (RCI), иначе Яндекс
+provider() {
+  local p
+  p=$(echo "$PROVIDER_DNS" | tr ',' ' ' | awk '{ print $1 }')
+  if [ -z "$p" ]; then
+    p=$(curl -s --max-time 5 http://127.0.0.1:79/rci/show/ip/name-server 2>/dev/null |
+      grep -o '"address": *"[0-9.]*"' | grep -o '[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*' |
+      grep -v -E '^(127\.|0\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)' | head -n 1)
+  fi
+  echo "${p:-77.88.8.8}"
+}
+providers_all() {
+  if [ -n "$PROVIDER_DNS" ]; then echo "$PROVIDER_DNS" | tr ',' ' '; else provider; fi
+}
+dns_alive() { [ -n "$(ips ya.ru 127.0.0.1)" ]; }
+net_alive() { [ -n "$(ips ya.ru "$(provider)")" ]; }
+
+# DoH-запрос прямо к серверу (для DEFAULT_DOH и geodns test): запрос — байтами
+# через printf, ответ — разбор od. -> адреса A
+doh() { # <сервер> <имя>
+  local f="$RUN/q.$$" url
+  awk -v n="$2" 'BEGIN {
+    for (i = 1; i < 128; i++) ord[sprintf("%c", i)] = i
+    s = "\\022\\064\\001\\000\\000\\001\\000\\000\\000\\000\\000\\000"
+    k = split(n, L, ".")
+    for (i = 1; i <= k; i++) { s = s sprintf("\\%03o", length(L[i])); for (j = 1; j <= length(L[i]); j++) s = s sprintf("\\%03o", ord[substr(L[i], j, 1)]) }
+    printf "%s\\000\\000\\001\\000\\001", s }' > "$f.fmt"
+  printf "$(cat "$f.fmt")" > "$f.q"
+  url=$(echo "$DOH_URL" | sed "s|%s|$1|")
+  curl -s --max-time 6 -H 'content-type: application/dns-message' -H 'accept: application/dns-message' \
+    --data-binary @"$f.q" "$url" -o "$f.r" 2>/dev/null
+  { od -An -tu1 -v "$f.r" 2>/dev/null || hexdump -v -e '1/1 "%u "' "$f.r" 2>/dev/null; } | awk '
+    { for (i = 1; i <= NF; i++) b[++N] = $i }
+    function skip(p) { while (p <= N) { if (b[p] == 0) return p + 1; if (b[p] >= 192) return p + 2; p += b[p] + 1 } return p }
+    END {
+      if (N < 12) exit
+      an = b[7] * 256 + b[8]; p = skip(13) + 4
+      for (i = 0; i < an && p <= N; i++) {
+        p = skip(p); ty = b[p] * 256 + b[p + 1]; rl = b[p + 8] * 256 + b[p + 9]; p += 10
+        if (ty == 1 && rl == 4) print b[p] "." b[p + 1] "." b[p + 2] "." b[p + 3]
+        p += rl
+      }
+    }' | sort -u
+  rm -f "$f.fmt" "$f.q" "$f.r"
+}
+
+# ---------------------------------------------------------------- проверка серверов
+# Домены списка: geoblock.list и свои (own.list), без комментариев
+names() {
+  { cat "$LIST" 2>/dev/null; cat "$OWN" 2>/dev/null; } | tr -d '\r' | tr 'A-Z' 'a-z' |
+    sed 's/[[:space:]]*#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//' |
+    grep -E '^[a-z0-9.-]+\.[a-z0-9-]+$' | sort -u
+}
+servers() { grep -v '^[[:space:]]*#' "$SERVERS_LIST" 2>/dev/null | awk 'NF { print $1 }' | tr '\n' ',' | sed 's/,$//'; }
+scan_time() { sed -n '1s/^#time=\([0-9]*\).*/\1/p' "$1" 2>/dev/null; }
+# Проверка — как dns_geo_scan модуля, тем же nfqws2-helper. full — весь
+# список раз в 4 часа; hot — основные сервисы раз в полчаса и по факту
+# (сертификат сайта по адресу прокси, «unusual traffic»)
+scan() { # full|hot
+  local out boot n
+  [ -x "$HELPER" ] || { log "нет $HELPER — проверка невозможна (geodns ставится вместе с ним)"; return 1; }
+  net_alive || { log "нет интернета (провайдер не отвечает) — проверку пропускаю"; return 1; }
+  mkdir "$RUN/scan.lock" 2>/dev/null || { log "проверка уже идёт"; return 1; }
+  boot="$(provider):53"
+  if [ "$1" = hot ]; then
+    echo "$HOT_BASE" | tr ' ' '\n' > "$RUN/samples"; out=$SCAN.hot.tmp
+    { echo "#time=$(date +%s) boot=$boot v=$SCAN_VER"
+      "$HELPER" -geoscan "$(servers)" -samples "@$RUN/samples" -boot "$boot" -ref "$REF" -wait 20s -max 3 \
+        -groups "$GROUPS" -asncache "$ST/asn.cache" -shared "$SCAN" -verify -doh 2>/dev/null
+    } > "$out"
+  else
+    names > "$RUN/samples"; out=$SCAN.tmp
+    { echo "#time=$(date +%s) boot=$boot v=$SCAN_VER"
+      "$HELPER" -geoscan "$(servers)" -samples "@$RUN/samples" -boot "$boot" -ref "$REF" -wait 40s -max 3 \
+        -groups "$GROUPS" -asncache "$ST/asn.cache" -doh 2>/dev/null
+    } > "$out"
+  fi
+  rmdir "$RUN/scan.lock" 2>/dev/null
+  # ни один сервер не ответил — прежний итог остаётся
+  if ! grep -q '	ok	' "$out"; then rm -f "$out"; log "проверка ($1): ни один сервер не ответил — остаётся прежний итог"; return 1; fi
+  if [ "$1" = hot ]; then mv -f "$out" "$SCAN.hot"; rel_update "$SCAN.hot"
+  else mv -f "$out" "$SCAN"; rm -f "$SCAN.hot"; rel_update "$SCAN"; fi
+  n=$(grep -c '	ok	' "$SCAN" 2>/dev/null)
+  [ "$1" = hot ] || log "полная проверка: ответили ${n:-0} из $(grep -c -v '^[#=+!?]' "$SCAN")"
+  # ответившие с оговоркой: не на все домены (DoH ограничивает частоту)
+  awk -F'\t' '!/^[#=+!?]/ && $2 == "ok" && $8 != "" { print $1 ": " $8 }' "${out%.tmp}" | while IFS= read -r n; do log "  $n"; done
+  return 0
+}
+scan_due() { # <файл> <секунд> — пора проверять?
+  local t; t=$(scan_time "$1")
+  [ -n "$t" ] || return 0
+  head -n 1 "$1" | grep -q " v=$SCAN_VER\$" || return 0
+  [ $(( $(date +%s) - t )) -ge "$2" ]
+}
+
+# ---------------------------------------------------------------- выбор — общий код модуля
+rel_update() { awk -F'\t' -v gf="$GROUPS" -v rf="$SCAN.rel" -f "$D/geo-rel.awk" "$1"; }
+pool() { [ -s "$SCAN" ] || return 0; awk -F'\t' -v of="$OFF" -v pf="$SCAN.pin" -f "$D/geo-pool.awk" "$SCAN" | sort -n | head -n 3; }
+pick() { pool | head -n 1 | cut -f2; }
+routes() { # [save] -> «домен<TAB>сервер<TAB>протокол» | «домен<TAB>-»
+  local h="" fresh=0 ft
+  [ -s "$SCAN" ] || return 0
+  [ -s "$SCAN.hot" ] && [ "$SCAN.hot" -nt "$SCAN" ] && h=$SCAN.hot
+  ft=$(scan_time "${h:-$SCAN}")
+  [ -n "$ft" ] && [ $(( $(date +%s) - ft )) -lt $(( HOT_EVERY * 2 )) ] && fresh=1
+  names > "$RUN/names"
+  awk -F'\t' -v prf="$PREFER" -v of="$OFF" -v pf="$SCAN.pin" -v gpf="$ST/groups.pin" -v rf="$SCAN.rel" \
+    -v fresh="$fresh" -v base="$HOT_BASE" -v gf="$GROUPS" -v gl="$RUN/names" -v hf="$h" -v save="$1" -v pool="$(pick)" \
+    -f "$D/geo-routes.awk" "$SCAN" $h
+}
+pin_save() {
+  local p; p=$(pick)
+  { [ -n "$p" ] && echo "* $p"; grep -v '^[*] ' "$SCAN.pin" 2>/dev/null; } > "$SCAN.pin.tmp"
+  mv -f "$SCAN.pin.tmp" "$SCAN.pin"
+  routes save > /dev/null
+}
+
+# ---------------------------------------------------------------- применение
+# Серверы — порты: сервер пула на $PORT, остальные — $PORT+1, +2… (мимо DEFAULT_PORT)
+ports() { # -> «сервер порт»
+  { pick; awk -F'\t' '$2 != "-" { print $2 }' "$RUN/routes" 2>/dev/null; } |
+    awk -v p="$PORT" -v dp="$DEFAULT_PORT" 'NF && !s[$1]++ { if (p + n == dp) n++; print $1, p + n++ }'
+}
+port_of() { awk -v h="$1" '$1 == h { print $2; exit }' "$RUN/ports" 2>/dev/null; }
+build() {
+  local p pp
+  : > "$UP_CONF.tmp"
+  if default_on; then echo "server=127.0.0.1#$DEFAULT_PORT" >> "$UP_CONF.tmp"
+  else for p in $(providers_all); do echo "server=$p" >> "$UP_CONF.tmp"; done; fi
+  mv -f "$UP_CONF.tmp" "$UP_CONF"
+  routes > "$RUN/routes"
+  ports > "$RUN/ports"
+  pp=$(port_of "$(pick)")
+  # домен — к серверу своего маршрута; «-» (никто не обходит) — к провайдеру,
+  # без строки; без маршрута — к серверу пула
+  names | awk -v rf="$RUN/routes" -v pf="$RUN/ports" -v pp="$pp" '
+    BEGIN { while ((getline l < pf) > 0) { split(l, a, " "); P[a[1]] = a[2] }
+      while ((getline l < rf) > 0) { split(l, a, "\t"); T[a[1]] = a[2] } }
+    { d = $0
+      if (d in T) { if (T[d] != "-" && (T[d] in P)) print "server=/" d "/127.0.0.1#" P[T[d]]; next }
+      if (pp != "") print "server=/" d "/127.0.0.1#" pp }' > "$GEO_CONF.tmp"
+  mv -f "$GEO_CONF.tmp" "$GEO_CONF"
+}
+
+proxy_alive() { netstat -lnu 2>/dev/null | grep -q "127\.0\.0\.1:$1 "; }
+proxy_start() { # <сервер> <порт>
+  local out
+  out=$(https-dns-proxy -a 127.0.0.1 -p "$2" -r "https://$1/dns-query" -b "$BOOTSTRAP" -d 2>&1 | grep -v -i -E 'root|^-+$')
+  sleep 1
+  proxy_alive "$2" || log "прокси $1 (порт $2) не запустился: ${out:-без сообщений}"
+}
+proxies_start() {
+  local h p
+  killall https-dns-proxy 2>/dev/null; sleep 1
+  while read -r h p; do proxy_start "$h" "$p"; done < "$RUN/ports"
+  default_start
+}
+proxies_keep() {   # упавшие — поднять
+  local h p
+  while read -r h p; do proxy_alive "$p" || { log "прокси $h (порт $p) упал — перезапуск"; proxy_start "$h" "$p"; }; done < "$RUN/ports"
+}
+# Новый выбор — в работу: что сменилось, видно в журнале
+apply() {
+  local old
+  old=$(cat "$GEO_CONF" "$RUN/ports" 2>/dev/null | md5sum)
+  cp -f "$RUN/routes" "$RUN/routes.before" 2>/dev/null
+  pin_save; build
+  [ "$old" = "$(cat "$GEO_CONF" "$RUN/ports" 2>/dev/null | md5sum)" ] && return 0
+  log "серверы обхода: $(summary)$(routes_diff)"
+  proxies_start; dnsmasq_restart
+}
+summary() { # «пул — X; по доменам: X — 120, Y — 30, к провайдеру — 40»
+  awk -F'\t' -v p="$(pick)" '$2 == "-" { net++; next } { n[$2]++ }
+    END { printf "пул — %s; по доменам: ", (p == "" ? "нет" : p); for (h in n) printf "%s%s — %d", (k++ ? ", " : ""), h, n[h]; if (net) printf "%sк провайдеру — %d", (k ? ", " : ""), net }' "$RUN/routes"
+}
+routes_diff() { # группы и основные сервисы, у которых сменился сервер
+  [ -s "$RUN/routes.before" ] || return 0
+  awk -F'\t' -v base="$HOT_BASE" 'BEGIN { n = split(base, b, " "); for (i = 1; i <= n; i++) B[b[i]] = 1 }
+    FNR == NR { o[$1] = $2; next } ($1 in B) && ($1 in o) && o[$1] != $2 { printf "%s%s %s → %s", (k++ ? ", " : "; сменились: "), $1, o[$1], $2 }' \
+    "$RUN/routes.before" "$RUN/routes"
+}
+
+# ---------------------------------------------------------------- DoH по умолчанию
+# Всё, что не из списков, — не обычным DNS (порт 53), а через https-dns-proxy
+# к честному DoH. Провайдер вроде Дом.ру перехватывает обычный DNS (даже к
+# 8.8.8.8 и 77.88.8.8) и на заблокированные сайты отдаёт адрес своего сервера.
+# DoH он не подменит. Не отвечает DoH — временно DNS провайдера (метка
+# $RUN/default.down): без DNS дома не открылось бы ничего
+default_on() { [ -n "$DEFAULT_DOH" ] && [ ! -f "$RUN/default.down" ]; }
+default_start() {
+  [ -n "$DEFAULT_DOH" ] || return 0
+  proxy_alive "$DEFAULT_PORT" || proxy_start "$DEFAULT_DOH" "$DEFAULT_PORT"
+}
+default_ok() { [ -n "$(doh "$DEFAULT_DOH" ya.ru | grep -v '[^0-9.]')" ]; }
+default_keep() {
+  [ -n "$DEFAULT_DOH" ] || return 0
+  default_start
+  if [ ! -f "$RUN/default.down" ]; then
+    if ! default_ok && net_alive; then
+      : > "$RUN/default.down"
+      log "DoH по умолчанию ($DEFAULT_DOH) не отвечает — временно DNS провайдера"
+      build; dnsmasq_restart
+    fi
+  elif default_ok; then
+    rm -f "$RUN/default.down"
+    log "DoH по умолчанию ($DEFAULT_DOH) снова отвечает — всё, что не из списков, снова через него"
+    build; dnsmasq_restart
+  fi
+}
+default_text() {
+  if default_on; then echo "DoH $DEFAULT_DOH"
+  elif [ -n "$DEFAULT_DOH" ]; then echo "DNS провайдера $(providers_all | tr '\n' ' ')(DoH $DEFAULT_DOH не отвечает)"
+  else echo "DNS провайдера $(providers_all | tr '\n' ' ')"; fi
+}
+
+# ---------------------------------------------------------------- сторож
+watch() {
+  echo $$ > "$RUN/watch.pid"
+  sleep 20   # после загрузки — дать WAN подняться
+  while :; do
+    default_keep
+    if ! pidof dnsmasq >/dev/null || ! dns_alive; then
+      if net_alive || ! pidof dnsmasq >/dev/null; then log "dnsmasq не отвечает — перезапуск"; dnsmasq_restart; fi
+    fi
+    proxies_keep
+    if scan_due "$SCAN" "$SCAN_EVERY"; then scan full && apply
+    elif scan_due "$SCAN.hot" "$HOT_EVERY" && [ "$(scan_time "$SCAN")" -lt $(( $(date +%s) - 60 )) ]; then scan hot && apply
+    fi
+    sleep "$ALIVE_EVERY"
+  done
+}
+watch_pid() { local p; p=$(cat "$RUN/watch.pid" 2>/dev/null); [ -n "$p" ] && kill -0 "$p" 2>/dev/null && echo "$p"; }
+
+# ---------------------------------------------------------------- команды
+start() {
+  rmdir "$RUN/scan.lock" 2>/dev/null
+  rm -f "$RUN/default.down"
+  build; proxies_start; dnsmasq_restart
+  [ -n "$(watch_pid)" ] || { "$0" watch </dev/null >/dev/null 2>&1 & }
+  log "запуск: $(default_text), доменов $(grep -c . "$GEO_CONF"), $(summary)"
+  echo "geodns запущен; журнал: $LOG"
+}
+stop() {
+  local p
+  for p in $(watch_pid) $(ps 2>/dev/null | grep '[g]eodns watch' | awk '{ print $1 }'); do kill "$p" 2>/dev/null; done
+  killall https-dns-proxy 2>/dev/null
+  rm -f "$RUN/watch.pid"; rmdir "$RUN/scan.lock" 2>/dev/null
+  log "остановлен"
+  echo "geodns остановлен (dnsmasq продолжает работать)"
+}
+status() {
+  local h p g
+  echo "серверы обхода: $(summary)"
+  while read -r h p; do echo "прокси $h (порт $p): $(proxy_alive "$p" && echo работает || echo НЕ ЗАПУЩЕН)"; done < "$RUN/ports"
+  for g in $(awk '!/^#/ && NF { print $1 }' "$GROUPS" 2>/dev/null); do
+    echo "группа $g: $(awk -v g="@$g" '$1 == g { print $2 }' "$ST/groups.pin" 2>/dev/null)"
+  done
+  echo "dnsmasq:  $(pidof dnsmasq >/dev/null && echo работает || echo НЕ ЗАПУЩЕН)"
+  echo "сторож:   $([ -n "$(watch_pid)" ] && echo работает || echo НЕ ЗАПУЩЕН)"
+  echo "всё остальное: $(default_text)"
+  echo "проверка: полная $(date -d "@$(scan_time "$SCAN")" '+%d.%m %H:%M' 2>/dev/null || echo —), частая $(date -d "@$(scan_time "$SCAN.hot")" '+%d.%m %H:%M' 2>/dev/null || echo —)"
+  awk -F'\t' '!/^[#=+!?]/ && NF > 2 { printf "  %s: %s%s\n", $1, ($2 == "ok" ? "обходит " $4 " из " $5 : "не отвечает"), ($8 != "" ? " (" $8 ")" : "") }' "$SCAN" 2>/dev/null
+  echo "--- последние записи журнала:"
+  tail -n 10 "$LOG" 2>/dev/null
+}
+test_domain() {
+  local x s
+  [ -n "$1" ] || { echo "geodns test <домен>"; return 1; }
+  echo "через роутер:   $(ips "$1" 127.0.0.1 | tr '\n' ' ')"
+  echo "у провайдера:   $(ips "$1" "$(provider)" | tr '\n' ' ')"
+  [ -n "$DEFAULT_DOH" ] && echo "DoH $DEFAULT_DOH: $(doh "$DEFAULT_DOH" "$1" | tr '\n' ' ')"
+  x=$1
+  while :; do
+    s=$(grep "^server=/$x/" "$GEO_CONF" 2>/dev/null | head -n 1)
+    [ -n "$s" ] && { echo "в списке: $x → ${s##*#} ($(awk -v p="${s##*#}" '$2 == p { print $1 }' "$RUN/ports"))"; return 0; }
+    case "$x" in *.*) x=${x#*.} ;; *) break ;; esac
+  done
+  echo "в списке: нет — идёт к провайдеру"
+}
+update() {
+  local n
+  curl -s -f --max-time 30 "$LIST_URL" -o "$LIST.dl" || { rm -f "$LIST.dl"; echo "не скачалось — список не тронут"; return 1; }
+  n=$(grep -c -E '^[a-zA-Z0-9.-]+\.[a-zA-Z0-9-]+$' "$LIST.dl")
+  [ "$n" -ge 50 ] || { rm -f "$LIST.dl"; echo "скачался странный файл ($n доменов) — список не тронут"; return 1; }
+  { cat "$LIST" "$LIST.dl"; } | tr -d '\r' | tr 'A-Z' 'a-z' | grep -E '^[a-z0-9.-]+\.[a-z0-9-]+$' | sort -u > "$LIST.new"
+  rm -f "$LIST.dl"; mv -f "$LIST.new" "$LIST"
+  build; dnsmasq_restart
+  log "список обновлён: $(grep -c . "$GEO_CONF") доменов"
+  echo "готово: $(grep -c . "$GEO_CONF") доменов; новые домены проверятся при полной проверке (geodns scan)"
+}
+
+case "$1" in
+  start) start ;;
+  stop) stop ;;
+  restart) stop; sleep 1; start ;;
+  status) status ;;
+  scan) scan full && apply; tail -n 3 "$LOG" ;;
+  check) scan hot && apply; tail -n 3 "$LOG" ;;
+  routes) routes ;;
+  test) test_domain "$2" ;;
+  update) update ;;
+  build) build ;;
+  apply) apply ;;
+  watch) watch ;;
+  doh) doh "$2" "$3" ;;
+  log) cat "$LOG" ;;
+  *) echo "geodns start|stop|restart|status|scan|check|routes|test <домен>|update|log" ;;
+esac

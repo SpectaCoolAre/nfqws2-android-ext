@@ -625,3 +625,17 @@ func TestFormatScanTellsUnansweredDomains(t *testing.T) {
 		t.Fatalf("строка: %q", l)
 	}
 }
+
+// -doh (роутер): сервер, у которого работает только DoT, не годится — роутер
+// ходит к серверам через https-dns-proxy
+func TestGeoScanDoHOnly(t *testing.T) {
+	boot := netDNS(t, func(string) net.IP { return ip("93.184.216.34") }, true, nil)
+	dot := fakeDoT(t, func(string) net.IP { return ip("5.5.5.5") })
+	dohPort = "1"
+	t.Cleanup(func() { dohPort = "443"; dohOnly = false })
+	dohOnly = true
+	res := geoScan([]string{dot}, []string{"a.example"}, boot, 4*time.Second)
+	if res[0].ok || !strings.HasPrefix(res[0].err, "DoH: ") {
+		t.Fatalf("только DoT — не годится: %+v", res[0])
+	}
+}

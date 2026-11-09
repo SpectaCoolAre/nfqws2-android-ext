@@ -87,7 +87,7 @@ sandbox_init() {
   cp "$REPO_DIR/lib/common.sh"         "$MODDIR/lib/common.sh"
   # extended: DNS по профилям
   if [ -f "$REPO_DIR/lib/dns.sh" ]; then
-    cp "$REPO_DIR/lib/dns.sh" "$MODDIR/lib/dns.sh"
+    cp "$REPO_DIR/lib/dns.sh" "$REPO_DIR"/lib/geo-*.awk "$MODDIR/lib/"
     mkdir -p "$MODDIR/defaults/dns-presets"
     cp -R "$REPO_DIR"/defaults/dns-presets/. "$MODDIR/defaults/dns-presets/"
     cp "$REPO_DIR/defaults/dns-cdn.list" "$REPO_DIR/defaults/dns-geo-never.list" "$REPO_DIR/defaults/dns-geo-servers.list" "$REPO_DIR/defaults/dns-geo-groups.list" "$REPO_DIR/defaults/dns-geo-prefer.list" "$MODDIR/defaults/" 2>/dev/null || true

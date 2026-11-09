@@ -743,7 +743,18 @@ func dohScan(server string, names []string, boot string, wait time.Duration) sca
 var dohPort = "443"
 
 // scanServer — DoT; не прошёл — DoH. Обе ошибки — в итог
+// dohOnly — проверять только DoH (-doh): роутер ходит к серверам через
+// https-dns-proxy, и прошедший только DoT ему не годится
+var dohOnly bool
+
 func scanServer(server string, names []string, boot string, wait time.Duration) scanResult {
+	if dohOnly {
+		h := dohScan(server, names, boot, wait)
+		if !h.ok && h.err != "" {
+			h.err = "DoH: " + h.err
+		}
+		return h
+	}
 	r := dotScan(server, names, boot, wait)
 	if r.ok {
 		return r
