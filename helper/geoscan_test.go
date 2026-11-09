@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -49,6 +50,14 @@ func reply(q []byte, ip net.IP) []byte {
 // подставляется в tlsRoots); answer — адрес для имени
 func fakeDoT(t *testing.T, answer func(name string) net.IP) string {
 	t.Helper()
+	return fakeDoTSlow(t, answer, nil)
+}
+
+// fakeDoTSlow — то же, но запросы обрабатываются параллельно, как у
+// настоящих серверов: ответ на имя — через delay(имя); отрицательная —
+// запрос теряется
+func fakeDoTSlow(t *testing.T, answer func(name string) net.IP, delay func(name string) time.Duration) string {
+	t.Helper()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	tpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "dot"},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
@@ -77,6 +86,7 @@ func fakeDoT(t *testing.T, answer func(name string) net.IP) string {
 			}
 			go func(c net.Conn) {
 				defer c.Close()
+				var wmu sync.Mutex
 				lb := make([]byte, 2)
 				for {
 					if _, err := io.ReadFull(c, lb); err != nil {
@@ -86,11 +96,27 @@ func fakeDoT(t *testing.T, answer func(name string) net.IP) string {
 					if _, err := io.ReadFull(c, q); err != nil {
 						return
 					}
-					r := reply(q, answer(qname(q)))
-					out := make([]byte, 2+len(r))
-					binary.BigEndian.PutUint16(out, uint16(len(r)))
-					copy(out[2:], r)
-					c.Write(out)
+					send := func(q []byte) {
+						r := reply(q, answer(qname(q)))
+						out := make([]byte, 2+len(r))
+						binary.BigEndian.PutUint16(out, uint16(len(r)))
+						copy(out[2:], r)
+						wmu.Lock()
+						c.Write(out)
+						wmu.Unlock()
+					}
+					if delay == nil {
+						send(q)
+						continue
+					}
+					go func(q []byte) {
+						d := delay(qname(q))
+						if d < 0 {
+							return
+						}
+						time.Sleep(d)
+						send(q)
+					}(q)
 				}
 			}(c)
 		}
@@ -545,5 +571,48 @@ func TestNetBypassMarks(t *testing.T) {
 	out := formatRoutes(res, []string{"gemini.google.com", "facebook.com"}, rt)
 	if len(out) != 2 || out[0] != "=gemini.google.com\t-\tnet" || out[1] != "=facebook.com\t" {
 		t.Fatalf("маршруты: %q", out)
+	}
+}
+
+// Сервер, который на часть доменов отвечает медленно (рекурсия до
+// настоящего сервера): проверка доходит до конца списка, а не обрывается
+// на первых сотнях доменов (d.webshiftvpn.ru 06–09.11 — до «f»)
+func TestGeoScanSlowServerAnswersTheWholeList(t *testing.T) {
+	boot := netDNS(t, func(string) net.IP { return ip("93.184.216.34") }, true, nil)
+	dot := fakeDoTSlow(t, func(string) net.IP { return ip("5.5.5.5") }, func(n string) time.Duration {
+		if strings.HasSuffix(n, "0.example") {
+			return 2500 * time.Millisecond
+		}
+		return 0
+	})
+	names := make([]string, 700)
+	for i := range names {
+		names[i] = "d" + strconv.Itoa(i) + ".example"
+	}
+	res := geoScan([]string{dot}, names, boot, 16*time.Second)
+	if !strings.HasSuffix(formatScan(res[0]), "\t700\t700\t0\ttls") {
+		t.Fatalf("все 700 — прокси: %q", formatScan(res[0]))
+	}
+}
+
+// Домен, на который сервер не ответил, — «нет данных», а не «никто не
+// обходит»: в DNS сети (настоящий адрес — геоблок) он не уходит
+func TestGeoScanUnansweredDomainIsUnknown(t *testing.T) {
+	boot := netDNS(t, func(string) net.IP { return ip("93.184.216.34") }, true, nil)
+	honest := fakeDoT(t, func(string) net.IP { return ip("93.184.216.34") })
+	lossy := fakeDoTSlow(t, func(string) net.IP { return ip("5.5.5.5") }, func(n string) time.Duration {
+		if n == "lost.example" {
+			return -1
+		}
+		return 0
+	})
+	names := []string{"a.example", "b.example", "lost.example"}
+	res := geoScan([]string{honest, lossy}, names, boot, 16*time.Second)
+	rt := planRoutes(res, len(names), 3, nil)
+	if !rt[0].known || len(rt[0].servers) != 1 {
+		t.Fatalf("a.example — через сервер с прокси: %+v", rt[0])
+	}
+	if rt[2].known || rt[2].direct {
+		t.Fatalf("lost.example — без данных, а не «в DNS сети»: %+v", rt[2])
 	}
 }

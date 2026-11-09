@@ -54,6 +54,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -389,6 +390,7 @@ type scanResult struct {
 	ms     int64
 	marks  []byte
 	ans    [][]net.IP // адреса по доменам (nil — нет ответа)
+	got    []bool     // сервер ответил на этот домен (пусть и NXDOMAIN)
 	share  []int      // сколько сайтов делят адрес прокси (см. shareCounts)
 	proto  string     // tls — DoT, https — DoH (DoT не прошёл), "-" — ни один
 	err    string
@@ -469,7 +471,7 @@ func serverAddr(host, boot string, wait time.Duration) (string, error) {
 }
 
 func newResult(server string, n int) scanResult {
-	r := scanResult{server: server, marks: make([]byte, n), ans: make([][]net.IP, n), share: make([]int, n), proto: "-"}
+	r := scanResult{server: server, marks: make([]byte, n), ans: make([][]net.IP, n), got: make([]bool, n), share: make([]int, n), proto: "-"}
 	for i := range r.marks {
 		r.marks[i] = 'f'
 	}
@@ -480,7 +482,20 @@ func newResult(server string, n int) scanResult {
 // серверы ограничивают очередь соединения, лишнее теряют молча
 const dotBatch = 50
 
-// dotScan — одно соединение DoT с сервером, запросы пачками по dotBatch
+// dotConns — соединений с сервером на одну проверку: сервер обхода, который
+// отвечает на домены без прокси медленно (рекурсия до настоящего сервера),
+// одним соединением за отведённое время успевал пройти только начало
+// списка — d.webshiftvpn.ru в журналах 06–09.11 доходил до «f», и домены
+// дальше по алфавиту выходили «никто не обходит»
+const dotConns = 4
+
+// dotLost — сколько ждать ответа, когда новых запросов нет: не пришедшие
+// за это время — потеряны
+const dotLost = 3 * time.Second
+
+// dotScan — проверка по DoT: имена — вперемешку по dotConns соединениям, в
+// каждом — скользящее окно в dotBatch запросов. Ответ на домен отмечается
+// (got), даже пустой: «не ответил» — это «нет данных», а не «не обходит»
 func dotScan(server string, names []string, boot string, wait time.Duration) scanResult {
 	r := newResult(server, len(names))
 	host, port := server, "853"
@@ -488,78 +503,160 @@ func dotScan(server string, names []string, boot string, wait time.Duration) sca
 		host, port = h, p
 	}
 	deadline := time.Now().Add(wait)
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
-	defer cancel()
 	addr, err := serverAddr(host, boot, 3*time.Second)
 	if err != nil {
 		r.err = err.Error()
 		return r
 	}
+	parts := (len(names) + dotBatch - 1) / dotBatch
+	if parts > dotConns {
+		parts = dotConns
+	}
+	if parts < 1 {
+		parts = 1
+	}
 	t0 := time.Now()
+	var mu sync.Mutex
+	errs := make([]error, parts)
+	var wg sync.WaitGroup
+	for p := 0; p < parts; p++ {
+		var idx []int
+		for i := p; i < len(names); i += parts {
+			idx = append(idx, i)
+		}
+		wg.Add(1)
+		go func(p int, idx []int) {
+			defer wg.Done()
+			errs[p] = dotConn(host, addr, port, names, idx, deadline, func(i int, ips []net.IP) {
+				mu.Lock()
+				defer mu.Unlock()
+				if !r.ok {
+					r.ok, r.proto = true, "tls"
+					r.ms = time.Since(t0).Milliseconds()
+				}
+				r.got[i], r.ans[i] = true, ips
+			})
+		}(p, idx)
+	}
+	wg.Wait()
+	if !r.ok {
+		for _, e := range errs {
+			if e != nil {
+				r.err = certErr(e)
+				break
+			}
+		}
+		if r.err == "" {
+			r.err = "нет ответа"
+		}
+	}
+	return r
+}
+
+// dotConn — одно соединение DoT: имена names[idx], не больше dotBatch
+// запросов без ответа. Ответ — answer(номер имени, адреса; nil — пусто или
+// ошибка). Ошибка — только если не пришло ни одного ответа
+func dotConn(host, addr, port string, names []string, idx []int, deadline time.Time, answer func(int, []net.IP)) error {
+	var msgs [][]byte
+	var who []int
+	base := uint16(time.Now().UnixNano())
+	for _, i := range idx {
+		q, err := dnsQuery(base+uint16(len(msgs)), names[i])
+		if err != nil {
+			continue
+		}
+		msg := make([]byte, 2+len(q))
+		binary.BigEndian.PutUint16(msg, uint16(len(q)))
+		copy(msg[2:], q)
+		msgs, who = append(msgs, msg), append(who, i)
+	}
+	if len(msgs) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
 	d := tls.Dialer{NetDialer: &net.Dialer{}, Config: &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12, RootCAs: rootPool()}}
 	c, err := d.DialContext(ctx, "tcp", net.JoinHostPort(addr, port))
 	if err != nil {
-		r.err = certErr(err)
-		return r
+		return err
 	}
 	defer c.Close()
-	base := uint16(time.Now().UnixNano())
-	lb := make([]byte, 2)
-	for start := 0; start < len(names); start += dotBatch {
-		end := start + dotBatch
-		if end > len(names) {
-			end = len(names)
-		}
+	slots := make(chan struct{}, dotBatch)
+	stop := make(chan struct{})
+	var sent int32
+	werr := make(chan error, 1)
+	go func() {
 		c.SetWriteDeadline(deadline)
-		for i := start; i < end; i++ {
-			q, err := dnsQuery(base+uint16(i), names[i])
-			if err != nil {
-				continue
+		for _, m := range msgs {
+			select {
+			case slots <- struct{}{}:
+			case <-stop:
+				werr <- nil
+				return
 			}
-			msg := make([]byte, 2+len(q))
-			binary.BigEndian.PutUint16(msg, uint16(len(q)))
-			copy(msg[2:], q)
-			if _, err := c.Write(msg); err != nil {
-				if !r.ok {
-					r.err = err.Error()
-				}
-				return r
+			if _, err := c.Write(m); err != nil {
+				werr <- err
+				return
 			}
+			atomic.AddInt32(&sent, 1)
 		}
-		// ответы пачки; не пришедшие за 3 секунды — потеряны (f)
-		until := time.Now().Add(3 * time.Second)
+		werr <- nil
+	}()
+	seen := make([]bool, len(msgs))
+	lb := make([]byte, 2)
+	n := 0
+	var rerr error
+	for n < len(msgs) {
+		until := time.Now().Add(dotLost)
 		if until.After(deadline) {
 			until = deadline
 		}
 		c.SetReadDeadline(until)
-		for got := start; got < end; got++ {
-			if _, err := io.ReadFull(c, lb); err != nil {
-				if !r.ok {
-					r.err = err.Error()
-					return r
+		k, err := io.ReadFull(c, lb)
+		if err != nil {
+			var ne net.Error
+			// тишина dotLost: запросы без ответа потеряны — их места в окне
+			// свободны; всё отправлено и тишина — ждать больше нечего
+			if k == 0 && errors.As(err, &ne) && ne.Timeout() && time.Now().Before(deadline) && int(atomic.LoadInt32(&sent)) < len(msgs) {
+				for len(slots) > 0 {
+					<-slots
 				}
-				break
-			}
-			m := make([]byte, binary.BigEndian.Uint16(lb))
-			if _, err := io.ReadFull(c, m); err != nil {
-				break
-			}
-			if !r.ok {
-				r.ok, r.proto = true, "tls"
-				r.ms = time.Since(t0).Milliseconds()
-			}
-			id, rcode, ips, err := dnsAnswerA(m)
-			i := int(id - base)
-			if i < 0 || i >= len(names) || err != nil || rcode != 0 {
 				continue
 			}
-			r.ans[i] = ips
-		}
-		if time.Now().After(deadline) {
+			rerr = err
 			break
 		}
+		m := make([]byte, binary.BigEndian.Uint16(lb))
+		if _, err := io.ReadFull(c, m); err != nil {
+			rerr = err
+			break
+		}
+		select {
+		case <-slots:
+		default:
+		}
+		id, rcode, ips, err := dnsAnswerA(m)
+		q := int(id - base)
+		if err != nil || q < 0 || q >= len(msgs) || seen[q] {
+			continue
+		}
+		seen[q] = true
+		n++
+		if rcode != 0 {
+			ips = nil
+		}
+		answer(who[q], ips)
 	}
-	return r
+	close(stop)
+	c.Close()
+	e := <-werr
+	if n > 0 {
+		return nil
+	}
+	if e != nil {
+		return e
+	}
+	return rerr
 }
 
 // dohScan — то же по DoH (https://сервер/dns-query, POST): так ходит и
@@ -621,7 +718,7 @@ func dohScan(server string, names []string, boot string, wait time.Duration) sca
 		return r
 	}
 	r.ok, r.proto, r.ms = true, "https", time.Since(t0).Milliseconds()
-	r.ans[0] = ips
+	r.ans[0], r.got[0] = ips, true
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 16)
 	for i := 1; i < len(names); i++ {
@@ -634,7 +731,7 @@ func dohScan(server string, names []string, boot string, wait time.Duration) sca
 				return
 			}
 			if ips, err := ask(names[i]); err == nil {
-				r.ans[i] = ips
+				r.ans[i], r.got[i] = ips, true
 			}
 		}(i)
 	}
@@ -1119,6 +1216,12 @@ func geoScan(servers, names []string, boot string, wait time.Duration) []scanRes
 			}
 		}
 		shareCounts(r, names)
+		// не ответил на домен за отведённое время — о нём ничего не известно
+		for i := range r.marks {
+			if r.ok && !r.got[i] {
+				r.marks[i] = 'n'
+			}
+		}
 	}
 	if verifyCerts {
 		verifyRoutes(res, names, 4*time.Second)
@@ -1216,7 +1319,7 @@ func planRoutes(res []scanResult, n, max int, wide []bool) []route {
 	out := make([]route, n)
 	for i := 0; i < n; i++ {
 		var cand []int
-		real := false
+		real, unk := false, false
 		for k, r := range res {
 			if !r.ok {
 				continue
@@ -1226,10 +1329,14 @@ func planRoutes(res []scanResult, n, max int, wide []bool) []route {
 				cand = append(cand, k)
 			case 's':
 				real = true
+			case 'n':
+				unk = true
 			}
 		}
+		// «никто не обходит» — только если ответили все: не ответивший мог
+		// и обходить, домен без данных идёт в общий пул
 		if len(cand) == 0 {
-			out[i] = route{direct: real, known: real}
+			out[i] = route{direct: real && !unk, known: real && !unk}
 			continue
 		}
 		less := func(a, b int) bool {
