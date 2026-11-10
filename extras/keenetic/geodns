@@ -50,7 +50,12 @@ SCAN_EVERY=14400; HOT_EVERY=1800
 HOT_BASE="chatgpt.com claude.ai gemini.google.com gamea.clashofclans.com accounts.supercell.com spotify.com"
 REF="https://common.dot.dns.yandex.net/dns-query,77.88.8.8:53"
 SCAN_VER=4
+# пока проверки не было (или ни один сервер не ответил) — весь список сюда, а
+# не к провайдеру: иначе дома до первой удачной проверки геоблок везде
+FALLBACK="dns.bezmezhau.com"
 [ -f "$CONF" ] && . "$CONF"
+# Go ищет корневые сертификаты и по SSL_CERT_FILE: в Entware они здесь
+[ -f "$R/opt/etc/ssl/certs/ca-certificates.crt" ] && export SSL_CERT_FILE="$R/opt/etc/ssl/certs/ca-certificates.crt"
 DOH_URL="${DOH_URL:-https://%s/dns-query}"   # тесты подменяют
 mkdir -p "$RUN" "$ST" "${LOG%/*}"
 SCAN=$ST/scan.tsv
@@ -156,18 +161,26 @@ scan() { # full|hot
     echo "$HOT_BASE" | tr ' ' '\n' > "$RUN/samples"; out=$SCAN.hot.tmp
     { echo "#time=$(date +%s) boot=$boot v=$SCAN_VER"
       "$HELPER" -geoscan "$(servers)" -samples "@$RUN/samples" -boot "$boot" -ref "$REF" -wait 20s -max 3 \
-        -groups "$GROUPS" -asncache "$ST/asn.cache" -shared "$SCAN" -verify -doh 2>/dev/null
+        -groups "$GROUPS" -asncache "$ST/asn.cache" -shared "$SCAN" -verify -doh 2>"$RUN/helper.err"
     } > "$out"
   else
     names > "$RUN/samples"; out=$SCAN.tmp
     { echo "#time=$(date +%s) boot=$boot v=$SCAN_VER"
       "$HELPER" -geoscan "$(servers)" -samples "@$RUN/samples" -boot "$boot" -ref "$REF" -wait 40s -max 3 \
-        -groups "$GROUPS" -asncache "$ST/asn.cache" -doh 2>/dev/null
+        -groups "$GROUPS" -asncache "$ST/asn.cache" -doh 2>"$RUN/helper.err"
     } > "$out"
   fi
   rmdir "$RUN/scan.lock" 2>/dev/null
   # ни один сервер не ответил — прежний итог остаётся
-  if ! grep -q '	ok	' "$out"; then rm -f "$out"; log "проверка ($1): ни один сервер не ответил — остаётся прежний итог"; return 1; fi
+  if ! grep -q '	ok	' "$out"; then
+    # почему: ошибки серверов (первые три) или сообщение самого nfqws2-helper
+    log "проверка ($1): ни один сервер не ответил — остаётся прежний итог; повтор через 10 минут"
+    awk -F'\t' '!/^[#=+!?]/ && $2 == "fail" && n++ < 3 { print "  " $1 ": " $8 }' "$out" | while IFS= read -r n; do log "$n"; done
+    [ -s "$RUN/helper.err" ] && log "  nfqws2-helper: $(tail -n 3 "$RUN/helper.err" | tr '\n' ' ')"
+    grep -q -v '^#' "$out" || log "  nfqws2-helper ничего не вывел"
+    rm -f "$out"; : > "$RUN/scan.failed"; return 1
+  fi
+  rm -f "$RUN/scan.failed"
   if [ "$1" = hot ]; then mv -f "$out" "$SCAN.hot"; rel_update "$SCAN.hot"
   else mv -f "$out" "$SCAN"; rm -f "$SCAN.hot"; rel_update "$SCAN"; fi
   n=$(grep -c '	ok	' "$SCAN" 2>/dev/null)
@@ -177,7 +190,10 @@ scan() { # full|hot
   return 0
 }
 scan_due() { # <файл> <секунд> — пора проверять?
-  local t; t=$(scan_time "$1")
+  local t
+  # неудачная проверка — повтор не раньше чем через 10 минут
+  [ -n "$(find "$RUN/scan.failed" -mmin -10 2>/dev/null)" ] && return 1
+  t=$(scan_time "$1")
   [ -n "$t" ] || return 0
   head -n 1 "$1" | grep -q " v=$SCAN_VER\$" || return 0
   [ $(( $(date +%s) - t )) -ge "$2" ]
@@ -187,6 +203,7 @@ scan_due() { # <файл> <секунд> — пора проверять?
 rel_update() { awk -F'\t' -v gf="$GROUPS" -v rf="$SCAN.rel" -f "$D/geo-rel.awk" "$1"; }
 pool() { [ -s "$SCAN" ] || return 0; awk -F'\t' -v of="$OFF" -v pf="$SCAN.pin" -f "$D/geo-pool.awk" "$SCAN" | sort -n | head -n 3; }
 pick() { pool | head -n 1 | cut -f2; }
+pick_or_fallback() { local p; p=$(pick); echo "${p:-$FALLBACK}"; }
 routes() { # [save] -> «домен<TAB>сервер<TAB>протокол» | «домен<TAB>-»
   local h="" fresh=0 ft
   [ -s "$SCAN" ] || return 0
@@ -208,7 +225,7 @@ pin_save() {
 # ---------------------------------------------------------------- применение
 # Серверы — порты: сервер пула на $PORT, остальные — $PORT+1, +2… (мимо DEFAULT_PORT)
 ports() { # -> «сервер порт»
-  { pick; awk -F'\t' '$2 != "-" { print $2 }' "$RUN/routes" 2>/dev/null; } |
+  { pick_or_fallback; awk -F'\t' '$2 != "-" { print $2 }' "$RUN/routes" 2>/dev/null; } |
     awk -v p="$PORT" -v dp="$DEFAULT_PORT" 'NF && !s[$1]++ { if (p + n == dp) n++; print $1, p + n++ }'
 }
 port_of() { awk -v h="$1" '$1 == h { print $2; exit }' "$RUN/ports" 2>/dev/null; }
@@ -220,7 +237,7 @@ build() {
   mv -f "$UP_CONF.tmp" "$UP_CONF"
   routes > "$RUN/routes"
   ports > "$RUN/ports"
-  pp=$(port_of "$(pick)")
+  pp=$(port_of "$(pick_or_fallback)")
   # домен — к серверу своего маршрута; «-» (никто не обходит) — к провайдеру,
   # без строки; без маршрута — к серверу пула
   names | awk -v rf="$RUN/routes" -v pf="$RUN/ports" -v pp="$pp" '
@@ -260,13 +277,19 @@ apply() {
   proxies_start; dnsmasq_restart
 }
 summary() { # «пул — X; по доменам: X — 120, Y — 30, к провайдеру — 40»
-  awk -F'\t' -v p="$(pick)" '$2 == "-" { net++; next } { n[$2]++ }
-    END { printf "пул — %s; по доменам: ", (p == "" ? "нет" : p); for (h in n) printf "%s%s — %d", (k++ ? ", " : ""), h, n[h]; if (net) printf "%sк провайдеру — %d", (k ? ", " : ""), net }' "$RUN/routes"
+  awk -F'\t' -v p="$(pick)" -v fb="$FALLBACK" '$2 == "-" { net++; next } { n[$2]++ }
+    END { x = p; if (x == "") x = fb " (запасной: проверки ещё не было)"
+      out = "пул — " x "; по доменам: "; sep = ""
+      for (h in n) { out = out sep h " — " n[h]; sep = ", " }
+      if (net) out = out sep "к провайдеру — " net
+      print out }' "$RUN/routes"
 }
 routes_diff() { # группы и основные сервисы, у которых сменился сервер
   [ -s "$RUN/routes.before" ] || return 0
   awk -F'\t' -v base="$HOT_BASE" 'BEGIN { n = split(base, b, " "); for (i = 1; i <= n; i++) B[b[i]] = 1 }
-    FNR == NR { o[$1] = $2; next } ($1 in B) && ($1 in o) && o[$1] != $2 { printf "%s%s %s → %s", (k++ ? ", " : "; сменились: "), $1, o[$1], $2 }' \
+    FNR == NR { o[$1] = $2; next }
+    ($1 in B) && ($1 in o) && o[$1] != $2 { sep = "; сменились: "; if (k++) sep = ", "; out = out sep $1 " " o[$1] " → " $2 }
+    END { printf "%s", out }' \
     "$RUN/routes.before" "$RUN/routes"
 }
 
@@ -349,7 +372,7 @@ status() {
   echo "сторож:   $([ -n "$(watch_pid)" ] && echo работает || echo НЕ ЗАПУЩЕН)"
   echo "всё остальное: $(default_text)"
   echo "проверка: полная $(date -d "@$(scan_time "$SCAN")" '+%d.%m %H:%M' 2>/dev/null || echo —), частая $(date -d "@$(scan_time "$SCAN.hot")" '+%d.%m %H:%M' 2>/dev/null || echo —)"
-  awk -F'\t' '!/^[#=+!?]/ && NF > 2 { printf "  %s: %s%s\n", $1, ($2 == "ok" ? "обходит " $4 " из " $5 : "не отвечает"), ($8 != "" ? " (" $8 ")" : "") }' "$SCAN" 2>/dev/null
+  awk -F'\t' '!/^[#=+!?]/ && NF > 2 { x = "не отвечает"; if ($2 == "ok") x = "обходит " $4 " из " $5; if ($8 != "") x = x " (" $8 ")"; print "  " $1 ": " x }' "$SCAN" 2>/dev/null
   echo "--- последние записи журнала:"
   tail -n 10 "$LOG" 2>/dev/null
 }

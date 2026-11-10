@@ -406,7 +406,9 @@ var tlsRoots *x509.CertPool
 // conscrypt, /system — прежнее место, cacerts-added — добавленные
 // пользователем. Go сам смотрит только /system/etc/security/cacerts и пути
 // Linux, а SSL_CERT_DIR в окружении (бывает у оболочки WebUI) заменяет их все
-var androidCertDirs = []string{"/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts", "/data/misc/user/0/cacerts-added"}
+// Корневые сертификаты: Android, затем Entware на роутере (пакет
+// ca-certificates/ca-bundle: /opt/etc/ssl/certs) — в прошивке Keenetic своих нет
+var androidCertDirs = []string{"/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts", "/data/misc/user/0/cacerts-added", "/opt/etc/ssl/certs"}
 
 var rootsOnce sync.Once
 var roots *x509.CertPool

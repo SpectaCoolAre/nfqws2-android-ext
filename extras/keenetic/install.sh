@@ -13,6 +13,9 @@ case "$(uname -m)" in
     if [ "$(printf '\001\000' | od -An -tu2 | tr -d ' ')" = 1 ]; then a=mipsle; else a=mips; fi ;;
   *) echo "неизвестная архитектура: $(uname -m)"; exit 1 ;;
 esac
+# корневые сертификаты — без них проверка серверов (TLS) не пройдёт
+[ -s /opt/etc/ssl/certs/ca-certificates.crt ] || opkg install ca-bundle ca-certificates >/dev/null 2>&1 ||
+  echo "нет /opt/etc/ssl/certs/ca-certificates.crt — установите: opkg install ca-bundle"
 cp -f "nfqws2-helper.$a" /opt/bin/nfqws2-helper
 chmod 755 /opt/bin/nfqws2-helper
 /opt/bin/nfqws2-helper -h >/dev/null 2>&1 || [ $? -le 2 ] || { echo "nfqws2-helper ($a) не запускается на этом роутере"; exit 1; }

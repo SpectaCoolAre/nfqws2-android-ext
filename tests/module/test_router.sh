@@ -32,6 +32,21 @@ printf '#!/bin/sh\nexit 1\n' > "$MOCKBIN/pidof"
 chmod 0755 "$RT/opt/bin/nfqws2-helper" "$MOCKBIN"/*
 geodns() { GEODNS_ROOT="$RT" sh "$REPO_DIR/extras/keenetic/geodns" "$@"; }
 
+section "router geodns: no check yet or every server failed"
+# 10.11: на роутере ни один сервер не ответил (сертификатов Entware helper не
+# знал), и без итога проверки весь список уходил к провайдеру — геоблок везде
+printf '#!/bin/sh\nprintf "dns.example\\tfail\\t0\\t0\\t740\\t0\\t-\\tDoH: x509: certificate signed by unknown authority\\n"\necho "boom" >&2\n' > "$RT/opt/bin/nfqws2-helper"
+geodns scan > /dev/null 2>&1
+L="$RT/opt/var/log/geodns.log"
+assert_contains "$(cat "$L")" "dns.example: DoH: x509: certificate signed by unknown authority" "the log says why no server answered"
+assert_contains "$(cat "$L")" "nfqws2-helper: boom" "and what the helper said"
+geodns build
+assert_contains "$(grep '/claude.ai/' "$G/dnsmasq-geo.conf")" "127.0.0.1#5053" "without a check the list goes to the fallback server, not to the provider"
+assert_contains "$(cat "$RT/opt/var/run/geodns/ports")" "dns.bezmezhau.com 5053" "the fallback server gets the pool port"
+assert_contains "$(geodns status 2>/dev/null)" "запасной" "and the status says it is the fallback"
+rm -f "$RT/opt/var/run/geodns/scan.failed"
+printf '#!/bin/sh\ngrep -v "^#" "%s"\n' "$FIX" > "$RT/opt/bin/nfqws2-helper"
+
 section "router geodns: full check with the module's scanner and route code"
 geodns scan > /dev/null 2>&1
 S="$RT/opt/var/lib/geodns"
