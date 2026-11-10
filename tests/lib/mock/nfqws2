@@ -9,6 +9,11 @@
 #
 # The received argv is saved so tests can assert the assembled startup arguments.
 # Known options for unsupported_opts detection: lua-desync filter-tcp payload lua-init dry-run hostlist hostlist-exclude ipset
+# Фоновая копия держит PID-файл живым; в её командной строке — --pidfile, как
+# у настоящего демона: is_running() проверяет, что PID наш (pid_is_ours)
+case "${1:-}" in
+  __stay) trap 'exit 0' TERM INT HUP; while :; do sleep 1; done ;;
+esac
 :
 
 [ -n "$MOCK_NFQWS_ARGS_FILE" ] && printf '%s\n' "$*" > "$MOCK_NFQWS_ARGS_FILE"
@@ -35,7 +40,7 @@ case "$MOCK_NFQWS_FAIL" in
 esac
 
 if [ -n "$pidfile" ]; then
-  sleep 86400 &
+  sh "$0" __stay "--pidfile=$pidfile" &
   printf '%s\n' "$!" > "$pidfile"
 fi
 

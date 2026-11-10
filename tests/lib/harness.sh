@@ -74,6 +74,9 @@ sandbox_init() {
   SANDBOX=$(mktemp -d "${NFQWS_TEST_TMP:-/tmp}/nfqws2-test.XXXXXX") || exit 1
   SANDBOX=$(cd "$SANDBOX" && pwd)
   MODDIR="$SANDBOX/mod"
+  # настройки ядра (sysctl_apply) — в песочнице: тесты идут от root и иначе
+  # меняли бы настоящий /proc/sys машины
+  PROC_SYS_ROOT="$SANDBOX/procsys"; export PROC_SYS_ROOT; mkdir -p "$PROC_SYS_ROOT"
   CONFDIR="$SANDBOX/conf"
   MOCKBIN="$SANDBOX/bin"
   MOCK_DIR="$SANDBOX/mock"
@@ -227,4 +230,18 @@ ipt_rules() { # chain [table] [binary]
 
 ipt_count() { # chain [table] [binary]
   ipt_rules "$1" "$2" "$3" | grep -c . || true
+}
+
+# Живой «наш» nfqws2 для PID-файла: в командной строке — --pidfile модуля, как у
+# настоящего демона (is_running проверяет, что PID наш). -> PID
+fake_daemon() { # <pidfile>
+  local p i=0
+  sh "$TESTS_DIR/lib/mock/nfqws2" __stay "--pidfile=$1" > /dev/null 2>&1 &
+  p=$!
+  # до exec у фонового процесса командная строка ещё родителя — дождаться своей
+  while [ "$i" -lt 50 ] && ! tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -qF -- "--pidfile=$1"; do
+    sleep 0.05; i=$((i + 1))
+  done
+  echo "$p" > "$1"
+  echo "$p"
 }

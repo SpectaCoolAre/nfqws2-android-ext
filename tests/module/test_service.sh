@@ -754,4 +754,14 @@ assert_rc 1 $? "switching it off stops it at once"
 assert_no_file "$PF_PIDFILE" "and its PID file is gone"
 rm -f "$MOCKBIN/am"; unset NFQWS_SYSNET
 
+section "watchdog: the restart streak survives a restarted watchdog"
+wfc() { sh -c '. "$MODDIR/lib/common.sh"; load_conf >/dev/null 2>&1; eval "$(sed -n "/^watchdog_fail_count()/,/^}/p; /^watchdog_fail_set()/p" "$MODDIR/service.sh")"; '"$1"; }
+rm -f "$STATE_DIR/watchdog_fails"
+assert_eq "0" "$(wfc watchdog_fail_count)" "no streak at first"
+wfc 'watchdog_fail_set 4'
+assert_eq "4" "$(wfc watchdog_fail_count)" "a new watchdog continues the streak (no fast retries again)"
+echo "6 $(( $(date +%s) - 4000 ))" > "$STATE_DIR/watchdog_fails"
+assert_eq "0" "$(wfc watchdog_fail_count)" "a streak older than an hour is a new problem"
+rm -f "$STATE_DIR/watchdog_fails"
+
 harness_finish

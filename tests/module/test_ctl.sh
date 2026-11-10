@@ -72,9 +72,7 @@ conf_reset
 # A live PID in the pidfile is enough for the running branch; actually starting
 # the service would build ~260 iptables rules through the stub, which costs
 # minutes on this machine and is covered by test_service.sh instead.
-sleep 300 &
-FAKE_PID=$!
-printf '%s\n' "$FAKE_PID" > "$CONFDIR/state/nfqws2.pid"
+FAKE_PID=$(fake_daemon "$CONFDIR/state/nfqws2.pid")
 date +%s > "$CONFDIR/state/started_at"
 
 ctl is-running
@@ -98,9 +96,7 @@ section "json-status: a broken started_at never reaches the arithmetic"
 # json-status is the contract the whole WebUI parses. An empty or non-numeric
 # word is worse still in a quieter way: arithmetic reads it as 0, so uptime comes
 # out as `now`, i.e. "57 years". Both have to degrade to a plain 0.
-sleep 300 &
-BROKEN_PID=$!
-printf '%s\n' "$BROKEN_PID" > "$CONFDIR/state/nfqws2.pid"
+BROKEN_PID=$(fake_daemon "$CONFDIR/state/nfqws2.pid")
 for bad in '' 'garbage' '-5' '12x' '1+' '(' '2 2'; do
   printf '%s' "$bad" > "$CONFDIR/state/started_at"
   ctl json-status
@@ -726,7 +722,7 @@ exit "$(cat "$MOCK_DIR/via.rc")"
 X
 chmod 0755 "$MOCKBIN/curl"
 iptables -w -t mangle -N nfqws_post 2>/dev/null
-sleep 30 & fakesvc=$!; echo "$fakesvc" > "$PIDFILE"
+fakesvc=$(fake_daemon "$PIDFILE")
 echo 35 > "$MOCK_DIR/via.rc"; echo 0 > "$MOCK_DIR/nb.rc"; echo '900000 2500.000' > "$MOCK_DIR/speed"; : > "$MOCK_DIR/nb.log"
 ctl domain-check blocked-by-bypass.example
 assert_match "$ctl_out" "N	ok" "the same address without the bypass is tried too"

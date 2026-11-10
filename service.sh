@@ -123,8 +123,7 @@ _start() {
   # permitted»). Свой — по --pidfile модуля в командной строке: nfqws2 других
   # модулей не трогаем
   local op
-  for op in $(pidof nfqws2 2>/dev/null); do
-    tr '\0' ' ' < "/proc/$op/cmdline" 2>/dev/null | grep -qF -- "--pidfile=$PIDFILE" || continue
+  for op in $(our_pids); do
     log_msg "Найден потерянный nfqws2 (PID $op) — держит очередь $NFQUEUE_NUM, останавливаю"
     kill -KILL "$op" 2>/dev/null
     wait_for_process "$op" down 8
@@ -150,7 +149,7 @@ _start() {
   local pid="" i=0
   while [ "$i" -lt 24 ]; do
     [ -f "$PIDFILE" ] && pid=$(cat "$PIDFILE" 2>/dev/null)
-    [ -n "$pid" ] || pid=$(pidof nfqws2 2>/dev/null | awk '{print $1}')
+    [ -n "$pid" ] || pid=$(our_pids | head -n 1)
     [ -n "$pid" ] && break
     sleep 0.05; i=$((i + 1))
   done
@@ -199,6 +198,8 @@ stop() {
     smartkill_chain del
   fi
   firewall_stop
+  # настройки ядра, которые меняли под обход, — как были (из оригинала, 4b1d629)
+  sysctl_restore
   if [ -f "$PIDFILE" ]; then
     local pid
     pid=$(cat "$PIDFILE" 2>/dev/null)
@@ -208,10 +209,10 @@ stop() {
     fi
     rm -f "$PIDFILE"
   fi
-  # оставшиеся демоны (двойной запуск, потерянный PID-файл); -x — ровно nfqws2
-  if pidof nfqws2 >/dev/null 2>&1; then
-    pkill -9 -x nfqws2 2>/dev/null || kill -9 $(pidof nfqws2) 2>/dev/null
-  fi
+  # оставшиеся наши демоны (двойной запуск, потерянный PID-файл) — nfqws2
+  # других модулей не трогаем
+  local lo
+  for lo in $(our_pids); do kill -9 "$lo" 2>/dev/null; done
 
   # a leftover chain still jumps to NFQUEUE with no listener, so the kernel
   # drops that traffic: stopped must mean rules gone
@@ -272,7 +273,9 @@ ensure_watchdog() {
   ensure_helper "$WL_PIDFILE" wlwatch wl_wanted
   ensure_helper "$PF_PIDFILE" pushfix pushfix_wanted
   watchers_wanted || return 0
-  ensure_helper "$WD_PIDFILE" watchdog || return 0
+  # сторож уже работает — netwatch всё равно проверить: упавший netwatch
+  # иначе не поднимался, пока жив сторож (оригинал, cc78417)
+  ensure_helper "$WD_PIDFILE" watchdog
   ensure_netwatch
 }
 
@@ -598,6 +601,17 @@ netwatch() {
   rm -f "$WN_PIDFILE" "$fifo" "$STATE_DIR/conf_seen.$$"
 }
 
+# Серия автоперезапусков — в файле «число время»: серия старше часа — новая беда
+watchdog_fail_count() {
+  local n=0 t=0
+  [ -f "$STATE_DIR/watchdog_fails" ] && read -r n t < "$STATE_DIR/watchdog_fails"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  case "$t" in ''|*[!0-9]*) t=0 ;; esac
+  [ $(( $(date +%s) - t )) -gt 3600 ] && n=0
+  echo "$n"
+}
+watchdog_fail_set() { echo "$1 $(date +%s)" > "$STATE_DIR/watchdog_fails"; }
+
 watchdog() {
   echo $$ > "$WD_PIDFILE"
   # убитый извне — без PID-файла, иначе следующий запуск верил бы мёртвому PID (оригинал, 00c1a16)
@@ -658,21 +672,25 @@ watchdog() {
     [ -f "$DESIRED_FILE" ] || continue
 
     if ! is_running; then
-      fails=$((fails + 1))
+      # серия — на диске: перезагрузка или перезапуск сторожа не превращают
+      # сломанную конфигурацию в вечные частые перезапуски (из оригинала, 5f2433e)
+      fails=$(( $(watchdog_fail_count) + 1 ))
+      watchdog_fail_set "$fails"
       log_msg "watchdog: nfqws2 упал, автоперезапуск (#$fails)..."
       firewall_stop
       start
-      if [ "$fails" -ge 5 ]; then
-        log_msg "watchdog: частые сбои службы (#$fails), пауза 60s..."
-        sleep 60
-      else
-        sleep 2
-      fi
+      # первые попытки — быстро (сбой обычно разовый), дальше — реже
+      case "$fails" in
+        1|2|3) sleep 2 ;;
+        4) log_msg "watchdog: $fails перезапуска подряд — пауза минута"; sleep 60 ;;
+        5) log_msg "watchdog: $fails перезапусков подряд — пауза 5 минут"; sleep 300 ;;
+        *) log_msg "watchdog: $fails перезапусков подряд — пауза 15 минут"; sleep 900 ;;
+      esac
       continue
     fi
 
-    # survived a full cycle: reset the fail counter
-    fails=0
+    # целый цикл без падения — серия кончилась
+    if [ "$fails" -ne 0 ]; then fails=0; rm -f "$STATE_DIR/watchdog_fails"; fi
 
     # Защита от LMK: периодически поддерживаем иммунитет демона и вотчдога
     dpid=$(cat "$PIDFILE" 2>/dev/null)

@@ -174,7 +174,30 @@ echo "999999" > "$PIDFILE"
 is_running; assert_rc 1 $? "dead pid is rejected"
 
 echo "$$" > "$PIDFILE"
-is_running; assert_rc 0 $? "live pid is accepted"
+is_running; assert_rc 1 $? "a live pid of someone else's process is rejected (PID reused after a reboot)"
+fpid=$(fake_daemon "$PIDFILE")
+is_running; assert_rc 0 $? "live pid of our nfqws2 is accepted"
+kill "$fpid" 2>/dev/null
+
+section "kernel settings: tuned for the bypass, put back on stop"
+mkdir -p "$PROC_SYS_ROOT/net/core" "$PROC_SYS_ROOT/net/netfilter" "$PROC_SYS_ROOT/net/ipv4"
+echo 212992 > "$PROC_SYS_ROOT/net/core/rmem_max"; echo 1 > "$PROC_SYS_ROOT/net/netfilter/nf_conntrack_checksum"; echo 1 > "$PROC_SYS_ROOT/net/ipv4/tcp_timestamps"
+rm -f "$SYSCTL_STATE"
+sysctl_apply net.core.rmem_max 8388608
+sysctl_apply net.netfilter.nf_conntrack_checksum 0
+sysctl_apply net.ipv4.tcp_timestamps 1
+sysctl_apply net.core.no_such_key 1
+assert_eq "8388608" "$(cat "$PROC_SYS_ROOT/net/core/rmem_max")" "the value is applied"
+assert_not_contains "$(cat "$SYSCTL_STATE")" "tcp_timestamps" "a value already as needed is not remembered"
+assert_no_file "$PROC_SYS_ROOT/net/core/no_such_key" "a key this kernel lacks is skipped"
+sysctl_apply net.core.rmem_max 8388608
+assert_eq "1" "$(grep -c rmem_max "$SYSCTL_STATE")" "the previous value is remembered once"
+# кто-то другой поменял checksum, пока модуль работал — его значение не трогаем
+echo 1 > "$PROC_SYS_ROOT/net/netfilter/nf_conntrack_checksum"
+sysctl_restore
+assert_eq "212992" "$(cat "$PROC_SYS_ROOT/net/core/rmem_max")" "stop puts our change back"
+assert_eq "1" "$(cat "$PROC_SYS_ROOT/net/netfilter/nf_conntrack_checksum")" "a value changed by someone else meanwhile stays"
+assert_no_file "$SYSCTL_STATE" "and forgets the saved values"
 
 # ── app_uid_count ─────────────────────────────────────────────────────────────
 section "app_uid_count"

@@ -261,6 +261,22 @@ is_running() {
   IFS= read -r pid < "$PIDFILE" || [ -n "$pid" ] || return 1
   case "$pid" in ''|0|*[!0-9]*) return 1 ;; esac
   kill -0 "$pid" 2>/dev/null || return 1
+  pid_is_ours "$pid"
+}
+
+# PID из PID-файла после перезагрузки может достаться чужому процессу, а
+# nfqws2 бывает и у других модулей: служба тогда числилась бы запущенной, а
+# обхода не было (из оригинала, 4b1d629). Свой — с --pidfile модуля в командной
+# строке (так же ищется потерянный nfqws2 при запуске). /proc не читается —
+# остаётся прежняя проверка
+pid_is_ours() { # <pid>
+  [ -r "/proc/$1/cmdline" ] || return 0
+  tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -qF -- "--pidfile=$PIDFILE"
+}
+# PID наших nfqws2 — не чужих с тем же именем
+our_pids() {
+  local p
+  for p in $(pidof nfqws2 2>/dev/null); do pid_is_ours "$p" && echo "$p"; done
   return 0
 }
 
@@ -1228,8 +1244,7 @@ firewall_start() {
   # Учёт трафика conntrack — до правил: connbytes (лимит первых пакетов
   # соединения) без него не видит счётчиков, и в очередь ничего не попадает.
   # На части ядер выключен по умолчанию (из nfqws2-keenetic 1.3.2, 8c5607a)
-  sysctl -w net.netfilter.nf_conntrack_acct=1 >/dev/null 2>&1 ||
-    { [ -w /proc/sys/net/netfilter/nf_conntrack_acct ] && echo 1 > /proc/sys/net/netfilter/nf_conntrack_acct 2>/dev/null; }
+  sysctl_apply net.netfilter.nf_conntrack_acct 1
   FW_RESTORE_DIR="$STATE_DIR/firewall-restore"
   mkdir -p "$FW_RESTORE_DIR" 2>/dev/null
   if command -v iptables-restore >/dev/null 2>&1; then
@@ -1302,16 +1317,48 @@ release_wakelock() {
   return 0
 }
 
+# Настройки ядра под обход — с запоминанием прежнего значения: остановленный
+# модуль не должен оставлять телефону другие netfilter и буферы сокетов (из
+# оригинала, 4b1d629). Возвращается только то, что меняли мы и что с тех пор
+# никто не трогал. Узлы /proc/sys — напрямую, без sysctl на каждый ключ: лишние
+# процессы при каждом запуске заметно его замедляли (оригинал, 8a7808c)
+SYSCTL_STATE="$STATE_DIR/sysctls"
+PROC_SYS_ROOT="${PROC_SYS_ROOT:-/proc/sys}"   # тесты подменяют
+sysctl_apply() { # <ключ> <значение>
+  local key="$1" want="$2" node cur=""
+  node="$PROC_SYS_ROOT/$(printf '%s' "$key" | tr '.' '/')"
+  [ -r "$node" ] || return 0
+  read -r cur < "$node" 2>/dev/null
+  case "$cur" in ''|*[!0-9]*) cur="" ;; esac
+  [ "$cur" = "$want" ] && return 0
+  if [ -n "$cur" ]; then
+    grep -q "^$key " "$SYSCTL_STATE" 2>/dev/null || echo "$key $cur $want" >> "$SYSCTL_STATE"
+  fi
+  echo "$want" > "$node" 2>/dev/null
+  return 0
+}
+sysctl_restore() {
+  local key old set now node
+  [ -f "$SYSCTL_STATE" ] || return 0
+  while read -r key old set; do
+    if [ -z "$key" ] || [ -z "$old" ]; then continue; fi
+    node="$PROC_SYS_ROOT/$(printf '%s' "$key" | tr '.' '/')"
+    now=""; read -r now < "$node" 2>/dev/null
+    # всё ещё наше значение — вернуть прежнее; изменил кто-то другой — не трогать
+    [ -n "$now" ] && [ "$now" = "${set:-$now}" ] && [ "$now" != "$old" ] && echo "$old" > "$node" 2>/dev/null
+  done < "$SYSCTL_STATE"
+  rm -f "$SYSCTL_STATE"
+  return 0
+}
+
 system_config() {
-  sysctl -w net.netfilter.nf_conntrack_checksum=0 >/dev/null 2>&1
-  sysctl -w net.netfilter.nf_conntrack_tcp_be_liberal=1 >/dev/null 2>&1
-  sysctl -w net.ipv4.tcp_timestamps=1 >/dev/null 2>&1 || {
-    [ -w /proc/sys/net/ipv4/tcp_timestamps ] && echo 1 > /proc/sys/net/ipv4/tcp_timestamps 2>/dev/null
-  }
-  sysctl -w net.core.rmem_max=8388608 >/dev/null 2>&1
-  sysctl -w net.core.wmem_max=8388608 >/dev/null 2>&1
-  sysctl -w net.core.rmem_default=2097152 >/dev/null 2>&1
-  sysctl -w net.core.netdev_max_backlog=16384 >/dev/null 2>&1
+  sysctl_apply net.netfilter.nf_conntrack_checksum 0
+  sysctl_apply net.netfilter.nf_conntrack_tcp_be_liberal 1
+  sysctl_apply net.ipv4.tcp_timestamps 1
+  sysctl_apply net.core.rmem_max 8388608
+  sysctl_apply net.core.wmem_max 8388608
+  sysctl_apply net.core.rmem_default 2097152
+  sysctl_apply net.core.netdev_max_backlog 16384
 
   # Время жизни простаивающего TCP-соединения в conntrack — не укорачиваем.
   # Раньше здесь стояло 1200 с, «как на эталонном роутере», но телефон — не
@@ -1328,7 +1375,7 @@ system_config() {
   fi
   if [ -n "$cur_max" ] && [ "$cur_max" -lt 16384 ] 2>/dev/null; then
     log_msg "conntrack: nf_conntrack_max было $cur_max, поднимаем до 16384 (как на эталонном роутере)"
-    sysctl -w net.netfilter.nf_conntrack_max=16384 >/dev/null 2>&1
+    sysctl_apply net.netfilter.nf_conntrack_max 16384
   fi
   setup_cli_symlinks
   return 0
