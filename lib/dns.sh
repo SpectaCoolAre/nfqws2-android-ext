@@ -75,7 +75,7 @@ DNS_GEO_POOL=3                # кандидатов в пул и маршрут
 DNS_GEO_OFF="$CONFDIR/dns/geo-off.list"   # серверы, отключённые вручную
 # до первой проверки — сервер, который в замерах обходил больше всех в обеих
 # сетях (Comss с ноября не обходит ИИ-сервисы — убран из пула)
-DNS_GEO_FALLBACK="tls://dns.bezmezhau.com"
+DNS_GEO_FALLBACK="tls://sync.bezmezhau.com"
 DNS_GEO_SCAN_COOL=300        # ручная проверка — не чаще раза в 5 минут
 DNS_GEO_UPD_COOL=1800        # обновление списка — раз в 30 минут
 DNS_GEO_NEVER="$MODDIR/defaults/dns-geo-never.list"
@@ -122,6 +122,16 @@ dns_geo_label() {
   if [ -n "$p" ]; then echo "$p"; else echo "bezmezhau — до первой проверки"; fi
 }
 # Серверы обхода геоблока через пробел: пул проверки, пока её не было — DoH Comss
+# Адреса из списка серверов (без «[Сервис]» и комментариев) -> по строке
+dns_geo_cand() {
+  tr -d '\r' < "$DNS_GEO_CAND" 2>/dev/null | sed 's/[[:space:]]*#.*//; s/[[:space:]]//g' | awk 'NF && !/^\[/'
+}
+# Сервис каждого адреса: «адрес<TAB>Название» (адрес вне «[…]» — сам себе сервис)
+dns_geo_services() {
+  tr -d '\r' < "$DNS_GEO_CAND" 2>/dev/null | sed 's/[[:space:]]*#.*//' | awk '
+    /^[[:space:]]*\[/ { s = $0; sub(/^[[:space:]]*\[/, "", s); sub(/\][[:space:]]*$/, "", s); next }
+    NF { print $1 "\t" (s != "" ? s : $1) }'
+}
 dns_geo_servers() {
   local h; h=$(dns_geo_pick_up | tr '\n' ' ' | sed 's/ $//')
   echo "${h:-$DNS_GEO_FALLBACK}"
@@ -306,7 +316,7 @@ dns_geo_scan() { # [full|hot]
   mkdir "$lock" 2>/dev/null || return 3   # идёт другая проверка
   boot=$(dns_net_servers | tr ',' '\n' | awk '/^[0-9]+(\.[0-9]+)(\.[0-9]+)(\.[0-9]+)$/ { print; exit }')
   boot="${boot:-77.88.8.8}:53"
-  cand=$(tr -d '\r' < "$DNS_GEO_CAND" | sed 's/[[:space:]]*#.*//; s/[[:space:]]//g' | awk NF | tr '\n' ',' | sed 's/,$//')
+  cand=$(dns_geo_cand | tr '\n' ',' | sed 's/,$//')
   f=$(dns_geo_scan_file); dns_geo_routes > "$DNS_RUN_DIR/geo-routes.before" 2>/dev/null
   before=$(dns_geo_pick | tr '\n' ' ')$(tr '\n\t' '  ' < "$DNS_RUN_DIR/geo-routes.before")
   # частая — без полной не бывает: общие адреса прокси она берёт из неё
@@ -1644,11 +1654,12 @@ dns_state() {
   # доменов без настоящего сертификата (частая проверка свежее — её данные)
   f=$(dns_geo_scan_file)
   # отключённые вручную серверы: geo_off=a b
+  dns_geo_services | awk -F'\t' '{ print "geo_svc_" $1 "=" $2 }'
   echo "geo_off=$(tr '\n' ' ' 2>/dev/null < "$DNS_GEO_OFF" | sed 's/ $//')"
   # перехват обычного DNS сетью (whoami.akamai.net): geo_intercept=1
   # и кто ответил на каждый: geo_who_<net|google|cloudflare>=адрес/AS
   awk -F'\t' '/^\?whoami/ { for (i = 2; i <= NF; i++) if ($i ~ /^intercept=/) print "geo_" $i; else print "geo_who_" $i }' "$f" 2>/dev/null
-  cat "$f" "$f.hot" 2>/dev/null | awk -F'\t' '/^!/ { h = substr($1, 2); t[h] = $2; c[h] = $3 } END { for (h in t) print "geo_try_" h "=" t[h] "\ngeo_cert_" h "=" c[h] }'
+  cat "$f" "$f.hot" 2>/dev/null | awk -F'\t' '/^!/ { h = substr($1, 2); t[h] = $2; c[h] = $3; if ($4 != "") a[h] = $4 } END { for (h in t) print "geo_try_" h "=" t[h] "\ngeo_cert_" h "=" c[h]; for (h in a) print "geo_addr_" h "=" a[h] }'
   # маршруты: geo_for_<сервер>=сколько доменов к нему идёт, geo_direct — в DNS сети
   dns_geo_routes | awk -F'\t' '$2 == "-" { net++; next } { n[$2]++ } END { for (h in n) print "geo_for_" h "=" n[h]; print "geo_direct=" net + 0 }'
   echo "geo_domains=$(dns_geo_count)"
@@ -1779,11 +1790,14 @@ dns_ctl() {
       dns_geo_scan_req ;;
     dns-geo-scan-wait) dns_geo_scan_wait "$1" ;;
     dns-geo-scan-run) dns_geo_scan_run "$1" ;;
-    # отключить или вернуть сервер обхода геоблока вручную: <сервер> <1|0>
+    # отключить или вернуть сервер обхода геоблока вручную: <сервер[,сервер…]> <1|0>
+    # (несколько — все адреса одного сервиса разом)
     dns-geo-off)
-      case "$1" in ''|*[!A-Za-z0-9.:-]*) echo "Неверное имя сервера" >&2; return 1 ;; esac
+      case "$1" in ''|*[!A-Za-z0-9.:/,_-]*) echo "Неверное имя сервера" >&2; return 1 ;; esac
       mkdir -p "${DNS_GEO_OFF%/*}"
-      { grep -vx "$1" "$DNS_GEO_OFF" 2>/dev/null; [ "$2" = 1 ] && echo "$1"; } > "$DNS_GEO_OFF.tmp"
+      printf '%s\n' "$1" | tr ',' '\n' | awk NF > "$DNS_GEO_OFF.req"
+      { grep -vxF -f "$DNS_GEO_OFF.req" "$DNS_GEO_OFF" 2>/dev/null; [ "$2" = 1 ] && cat "$DNS_GEO_OFF.req"; } > "$DNS_GEO_OFF.tmp"
+      rm -f "$DNS_GEO_OFF.req"
       mv -f "$DNS_GEO_OFF.tmp" "$DNS_GEO_OFF"
       [ -s "$DNS_GEO_OFF" ] || rm -f "$DNS_GEO_OFF"
       dns_geo_pin_save; dns_apply_now

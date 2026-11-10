@@ -69,8 +69,11 @@ window.__presets = ${JSON.stringify(PRESETS)};
       'max_profiles=32', 'max_servers=8', 'max_domains=1000', 'smart=' + (window.__smart === 0 ? 0 : 1),
       'cdn=' + (st.enabled && window.__smart !== 0 ? 'running' : ''),
       'geo=' + (window.__geo !== 0 ? 'on' : 'off'), 'geo_domains=' + st.geoN, 'geo_updated=' + st.geoAt, 'geo_pool=dns.fast.example', 'geo_for_dns.fast.example=600', 'geo_for_dns.ai.example=12', 'geo_direct=110', 'geo_try_dns.ai.example=2/3', 'geo_intercept=1', 'geo_off=' + (st.geoOff || ''), 'geo_who_net=213.87.1.1/8359', 'geo_who_google=213.87.1.1/8359', 'geo_who_cloudflare=-', 'geo_cert_dns.ai.example=4', 'geo_overlap_x=2', 'geo_scan_time=1767225600',
+      'geo_svc_dns.fast.example=Fast', 'geo_svc_doh.fast.example/sync=Fast', 'geo_svc_dns.ai.example=dns.ai.example', 'geo_svc_dns.dead.example=Dead',
+      'geo_svc_new.example=New', 'geo_addr_dns.fast.example=198.51.100.7',
       '#geoscan', 'dns.fast.example\tok\t40\t610\t722\t5\ttls', 'dns.ai.example\tok\t20\t40\t722\t12\ttls',
-      'dns.dead.example\tfail\t0\t0\t722\t0\t-\ttimeout', '#status'];
+      'doh.fast.example/sync\tok\t90\t300\t722\t1\thttps\tDoT: dial tcp 1.2.3.4:853: i/o timeout',
+      'dns.dead.example\tfail\t0\t0\t722\t0\t-\ttimeout', 'dns.gone.example\tfail\t0\t0\t722\t0\t-\ttimeout', '#status'];
     Object.keys(st.profiles).forEach(id => { out.push('#profile ' + id); out = out.concat(st.profiles[id].split('\\n')); });
     window.__presets.forEach(p => { out.push('#preset ' + p.id); out = out.concat(p.text.trim().split('\\n')); });
     return out.join('\\n');
@@ -86,7 +89,7 @@ window.__presets = ${JSON.stringify(PRESETS)};
       case 'dns-profile-enable': st.profiles[a[1]] = st.profiles[a[1]].replace(/ENABLED=\\d/, 'ENABLED=' + a[2]); return [0, 'OK'];
       case 'dns-geo-scan': return [0, '1767225600'];
       case 'dns-geo-scan-wait': return [0, 'dns.fast.example'];
-      case 'dns-geo-off': st.geoOff = a[2] === '1' ? a[1] : ''; return [0, 'OK'];
+      case 'dns-geo-off': st.geoOff = a[2] === '1' ? a[1].split(',').join(' ') : ''; return [0, 'OK'];
       case 'dns-geo-update': st.geoN = 731; st.geoAt = 1767225600; return [0, '731'];
       case 'dns-delete': a.slice(1).forEach(id => { delete st.profiles[id]; if (st.def === id) st.def = 'net'; }); return [0, 'OK'];
     }
@@ -224,16 +227,30 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     eq('Обход геоблока', await page.textContent('#app-title'), 'with its own title');
     let geoTxt = await page.textContent('#dns-geo');
     await shot('geo');
-    truthy(geoTxt.includes('40 мс · обходит 610 из 722 · в пуле'), 'unfolded: each checked server in one short line');
+    truthy(geoTxt.includes('40 мс · обходит 610 из 722 · работают 2 из 2 · в пуле'), 'unfolded: each checked server in one short line');
     truthy(geoTxt.includes('20 мс · обходит 40 из 722 · через раз · доменов: 12'), 'a server outside the pool says how many domains go to it, and that it answers now and then');
     truthy(geoTxt.includes('не отвечает') && !geoTxt.includes('timeout'), 'a dead one just says it does not answer');
+    truthy(geoTxt.includes('Fast') && !geoTxt.includes('doh.fast.example') && geoTxt.includes('работают 2 из 2'), 'services are shown by name, with how many of their variants work');
+    truthy(geoTxt.includes('ещё не проверялся'), 'a service new in the list says it was not checked yet');
+    eq(false, geoTxt.includes('dns.gone.example'), 'a server left out of the list is not shown from an old check');
+    await page.click('#dns-geo .list-item:has(.li-primary:text-is("Fast"))');
+    await page.waitForSelector('#dialog-wrap.open');
+    const svc = await page.textContent('#dialog-wrap');
+    truthy(svc.includes('tls://dns.fast.example') && svc.includes('https://doh.fast.example/sync') && svc.includes('Адрес: 198.51.100.7'), 'a tap on a service shows each variant: DoT or DoH by its own path, and the address');
+    truthy(svc.includes('DoT не прошёл (нет ответа) — работает по DoH'), 'and why a variant goes over DoH');
+    await page.click('#d-ok'); await idle(); await page.waitForTimeout(400);
+    truthy(await page.evaluate(() => window.__dns.calls.includes('dns-geo-off dns.fast.example,doh.fast.example/sync 1')), 'switching off takes every variant of the service');
+    truthy((await page.textContent('#dns-geo')).includes('отключён вручную'), 'the service says it is off');
+    await page.click('#dns-geo .list-item:has(.li-primary:text-is("Fast"))'); await page.waitForSelector('#dialog-wrap.open');
+    await page.click('#d-ok'); await idle(); await page.waitForTimeout(400);
+    truthy(await page.evaluate(() => window.__dns.calls.includes('dns-geo-off dns.fast.example,doh.fast.example/sync 0')), 'and back on');
     await page.click('#dns-geo .list-item:has-text("dns.ai.example")');
     await page.waitForSelector('#dialog-wrap.open');
     const info = await page.textContent('#dialog-wrap');
     truthy(info.includes('Обходит геоблок для 40 из 722 доменов списка') && info.includes('Из них своим адресом: 12') && info.includes('Направлено к нему доменов: 12') && info.includes('Отвечает через раз: 2 из 3') && info.includes('для 4 доменов'), 'a tap on a server shows what it bypasses, what goes to it and how reliable it is');
     truthy((await page.textContent('#d-ok')).includes('Не использовать'), 'a server can be switched off by hand from there');
     await page.click('#d-cancel'); await page.waitForTimeout(400);
-    eq(false, await page.evaluate(() => window.__dns.calls.some(c => c.startsWith('dns-geo-off'))), 'closing the dialog changes nothing');
+    eq(false, await page.evaluate(() => window.__dns.calls.some(c => c.startsWith('dns-geo-off dns.ai.example'))), 'closing the dialog changes nothing');
     await page.click('#dns-geo .list-item:has-text("dns.ai.example")');
     await page.waitForSelector('#dialog-wrap.open');
     await page.click('#d-ok'); await idle(); await page.waitForTimeout(400);

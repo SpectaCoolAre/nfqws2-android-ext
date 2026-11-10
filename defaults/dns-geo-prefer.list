@@ -4,5 +4,8 @@
 # среди всех. Для Google — набор geodns на роутере: с ним Gemini работает
 # стабильно, а прокси других серверов (d.webshiftvpn.ru, dns.dagami.ru)
 # проверку DNS и сертификата проходили, но Gemini через них отвечал геоблоком.
-# Comss убран (с ноября не обходит Gemini), magicdns — его адрес de.magicdns.ru
-google de.magicdns.ru dns.zapret.moe dns.malw.link dns.dns-ai.ru dns.bezmezhau.com sync.bezmezhau.com
+# Comss убран (с ноября не обходит Gemini), magicdns — его адрес de.magicdns.ru,
+# dns.bezmezhau.com не отвечает (10–11.11) — остался sync.bezmezhau.com
+google de.magicdns.ru dns.zapret.moe dns.malw.link dns.dns-ai.ru sync.bezmezhau.com
+# Supercell: dns.nullsproxy.com отвечает почти всегда, и у игры один адрес выхода
+supercell dns.nullsproxy.com

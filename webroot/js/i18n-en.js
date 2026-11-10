@@ -1094,5 +1094,14 @@ EN = {
   "только DNS · служба не работает": "DNS only · service not running",
   "nfqws2 · пик {0} МБ": "nfqws2 · peak {0} MB",
   "Долгое нажатие на профиль — выбор нескольких.": "Long-press a profile to select several.",
-  "Сервисы из списка геоблока идут через DNS, которые их обходят: модуль сам проверяет серверы и для каждого сайта держит один закреплённый.": "Services from the geo-block list go through DNS servers that bypass it: the module checks the servers itself and keeps one pinned server per site."
+  "Сервисы из списка геоблока идут через DNS, которые их обходят: модуль сам проверяет серверы и для каждого сайта держит один закреплённый.": "Services from the geo-block list go through DNS servers that bypass it: the module checks the servers itself and keeps one pinned server per site.",
+  "работают {0} из {1}": "{0} of {1} work",
+  "ещё не проверялся": "not checked yet",
+  "имени сервера больше нет": "the server name no longer exists",
+  "сертификат недействителен": "invalid certificate",
+  "адрес закрыт": "address closed",
+  "нет ответа": "no answer",
+  "Ещё не проверялся в этой сети": "Not checked on this network yet",
+  "DoT не прошёл ({0}) — работает по DoH": "DoT failed ({0}) — works over DoH",
+  "Адрес: {0}": "Address: {0}"
 };

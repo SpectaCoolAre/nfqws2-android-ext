@@ -589,7 +589,7 @@ printf '# сервисы с геоблоком\nchatgpt.com\nClaude.ai\ninstagra
 : > "$DNS_RUN_DIR/geo.args"; : > "$DNS_RUN_DIR/main_port"
 dns_build
 geo=$(grep '/chatgpt.com/' "$DNS_RUN_DIR/upstreams.txt")
-assert_contains "$geo" "[/chatgpt.com/claude.ai/]tls://dns.bezmezhau.com" "before the first check of the bypass DNS the list goes to the fallback server (bezmezhau DoT)"
+assert_contains "$geo" "[/chatgpt.com/claude.ai/]tls://sync.bezmezhau.com" "before the first check of the bypass DNS the list goes to the fallback server (bezmezhau DoT)"
 assert_eq "1" "$(printf '%s\n' "$geo" | grep -c .)" "only it: the first answer of several led Claude to a proxy that does not work here"
 assert_eq "bezmezhau — до первой проверки" "$(dns_geo_label)" "the DNS log names the bypass DNS"
 # Profile overlap: an enabled profile of its own with domains of the list
@@ -792,7 +792,7 @@ dns_geo_scan_due
 assert_rc 0 $? "an old check is due again"
 printf '#time=%s boot=x v=%s\nfast.example\tfail\t0\t0\t7\t0\t-\n' "$(date +%s)" "$DNS_GEO_SCAN_VER" > "$(dns_geo_scan_file)"
 assert_eq "" "$(dns_geo_pick)" "no server answered (the network was not up yet)"
-assert_contains "$(dns_geo_servers)" "tls://dns.bezmezhau.com" "the fallback server for now"
+assert_contains "$(dns_geo_servers)" "tls://sync.bezmezhau.com" "the fallback server for now"
 dns_geo_scan_due
 assert_rc 1 $? "and a new check — not at once"
 sed -i '1s/^#time=[0-9]*/#time='"$(( $(date +%s) - 700 ))"'/' "$(dns_geo_scan_file)"
@@ -843,7 +843,7 @@ printf 'chatgpt.com\nab.chatgpt.com\nclashofclans.com\nintel.com\nmistral.ai\n' 
   printf '=gone.example\tdead.example\n'
   printf '?whoami\tnet=93.1.1.1/8359\tgoogle=93.1.1.1/8359\tcloudflare=-\tintercept=1\n'
 } > "$(dns_geo_scan_file)"
-assert_eq "ab.chatgpt.com	zapret.example	tls|chatgpt.com	zapret.example	tls|intel.com	-" "$(dns_geo_routes | sort | tr '\n' '|' | sed 's/|$//')" "a group goes to its own server with its protocol (a domain the check missed follows its group), a site the pool bypasses needs no route, a domain no one bypasses goes to the network DNS"
+assert_eq "ab.chatgpt.com	zapret.example	tls|chatgpt.com	zapret.example	tls|clashofclans.com	comss.example	https|intel.com	-" "$(dns_geo_routes | sort | tr '\n' '|' | sed 's/|$//')" "a group goes to its own server with its protocol (a domain the check missed follows its group), the Supercell group too, a site the pool bypasses needs no route, a domain no one bypasses goes to the network DNS"
 assert_eq "comss.example" "$(dns_geo_pick)" "the common pool: the one that bypasses the most (route lines are not servers)"
 dns_build
 up=$(cat "$DNS_RUN_DIR/upstreams.txt")
@@ -1168,6 +1168,10 @@ assert_contains "$st" "geo_off=b.example" "and shown on the screen"
 ctl dns-geo-off b.example 0
 ctl dns-geo-off 'bad host' 1
 assert_rc 1 "$ctl_rc" "a bad name is refused"
+ctl dns-geo-off a.example,api.example/sync 1
+assert_eq "a.example api.example/sync" "$(tr '\n' ' ' < "$DNS_GEO_OFF" | sed 's/ $//')" "all addresses of a service are switched off at once (an address with its own path too)"
+ctl dns-geo-off a.example,api.example/sync 0
+assert_no_file "$DNS_GEO_OFF" "and back on"
 rm -f "$(dns_geo_scan_file).pin" "$DNS_GEO_OFF"
 printf 'chatgpt.com\nclaude.ai\n' > "$DNS_GEO_LIST"
 dns_geo_scan >/dev/null
@@ -1251,5 +1255,15 @@ assert_rc 0 "$ctl_rc" "and restored"
 assert_file "$DNS_PROFILES_DIR/insta.conf" "the profile is back"
 assert_file "$DNS_ENABLED_FILE" "the feature state is back"
 assert_eq "insta" "$(dns_default)" "the default is back"
+
+section "geo-block bypass: servers grouped by service"
+cand_keep="$DNS_GEO_CAND"; DNS_GEO_CAND="$SANDBOX/servers.list"
+printf '# заметка\nsolo.example\n[Сервис А]\n# адрес для справки\na1.example\na2.example/sync  # DoH со своим путём\n\n[Б]\nb.example\n' > "$DNS_GEO_CAND"
+assert_eq "solo.example a1.example a2.example/sync b.example" "$(dns_geo_cand | tr '\n' ' ' | sed 's/ $//')" "the check gets only addresses: no «[service]» lines, no comments"
+assert_eq "solo.example	solo.example|a1.example	Сервис А|a2.example/sync	Сервис А|b.example	Б" "$(dns_geo_services | tr '\n' '|' | sed 's/|$//')" "every address knows its service; one outside «[…]» is its own"
+assert_contains "$(dns_state)" "geo_svc_a2.example/sync=Сервис А" "the screen gets the services"
+DNS_GEO_CAND="$cand_keep"
+assert_eq "" "$(dns_geo_cand | grep -F '[')" "the shipped list parses: no «[» in addresses"
+assert_contains "$(dns_geo_cand)" "dns.nullsproxy.com" "NullsProxy (Supercell) is in the pool"
 
 harness_finish
