@@ -34,7 +34,6 @@ func main() {
 	qBlocked := flag.String("blocked", "", "-ttltrace: QUIC Initial с запрещённым именем")
 	qOpen := flag.String("open", "", "-ttltrace: QUIC Initial с обычным именем")
 	verify := flag.Bool("verify", false, "-geoscan: проверить сертификат по адресу прокси (частая проверка)")
-	dohFlag := flag.Bool("doh", false, "-geoscan: только DoH (роутер ходит к серверам через https-dns-proxy)")
 	shared := flag.String("shared", "", "-geoscan: файл прошлой полной проверки — её общие адреса прокси (частая проверка)")
 	boot := flag.String("boot", "", "DNS сети (адрес:53) для -geoscan: эталон ответов и адреса серверов")
 	groups := flag.String("groups", "", "-geoscan: файл групп сайтов — их доменам все кандидаты (см. planRoutes)")
@@ -89,7 +88,6 @@ func main() {
 			knownShare = loadShared(*shared)
 		}
 		verifyCerts = *verify
-		dohOnly = *dohFlag
 		whoamiCheck = !*verify // перехват — в полной проверке
 		res := geoScan(splitList(*geo), ss, *boot, w)
 		for _, r := range res {

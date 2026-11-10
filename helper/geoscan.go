@@ -406,9 +406,7 @@ var tlsRoots *x509.CertPool
 // conscrypt, /system — прежнее место, cacerts-added — добавленные
 // пользователем. Go сам смотрит только /system/etc/security/cacerts и пути
 // Linux, а SSL_CERT_DIR в окружении (бывает у оболочки WebUI) заменяет их все
-// Корневые сертификаты: Android, затем Entware на роутере (пакет
-// ca-certificates/ca-bundle: /opt/etc/ssl/certs) — в прошивке Keenetic своих нет
-var androidCertDirs = []string{"/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts", "/data/misc/user/0/cacerts-added", "/opt/etc/ssl/certs"}
+var androidCertDirs = []string{"/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts", "/data/misc/user/0/cacerts-added"}
 
 var rootsOnce sync.Once
 var roots *x509.CertPool
@@ -745,18 +743,7 @@ func dohScan(server string, names []string, boot string, wait time.Duration) sca
 var dohPort = "443"
 
 // scanServer — DoT; не прошёл — DoH. Обе ошибки — в итог
-// dohOnly — проверять только DoH (-doh): роутер ходит к серверам через
-// https-dns-proxy, и прошедший только DoT ему не годится
-var dohOnly bool
-
 func scanServer(server string, names []string, boot string, wait time.Duration) scanResult {
-	if dohOnly {
-		h := dohScan(server, names, boot, wait)
-		if !h.ok && h.err != "" {
-			h.err = "DoH: " + h.err
-		}
-		return h
-	}
 	r := dotScan(server, names, boot, wait)
 	if r.ok {
 		return r

@@ -1,6 +1,4 @@
-# Общий код умного DNS модуля и geodns на роутере (extras/keenetic): одна
-# логика выбора серверов обхода геоблока для обоих. Входы — переменные -v, см.
-# вызов в lib/dns.sh (dns_geo_routes).
+# Умный DNS: dns_geo_routes (lib/dns.sh). Входы — переменные -v, см. вызов там.
 function site(d,   n, a, x, i) {
   for (x = d; ; x = substr(x, i + 1)) { if (x in grp) return "@" grp[x]; if ((i = index(x, ".")) == 0) break }
   n = split(d, a, "."); return n < 2 ? d : a[n - 1] "." a[n] }

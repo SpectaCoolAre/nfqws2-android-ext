@@ -150,7 +150,6 @@ done
 
 queue_suite "module: nfqws2-ctl" sh "$HERE/module/test_ctl.sh"
 [ -f "$REPO_DIR/lib/dns.sh" ] && queue_suite "module: DNS profiles (extended)" sh "$HERE/module/test_dns.sh"
-[ -f "$REPO_DIR/extras/keenetic/geodns" ] && queue_suite "router: geodns = smart DNS of the module" sh "$HERE/module/test_router.sh"
 queue_suite "module: hosts editor" sh "$HERE/module/test_hosts.sh"
 queue_suite "module: smart mode" sh "$HERE/module/test_smart.sh"
 queue_suite "module: system theme colours" sh "$HERE/module/test_monet.sh"
