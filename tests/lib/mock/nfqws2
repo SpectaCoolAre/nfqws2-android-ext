@@ -41,7 +41,13 @@ esac
 
 if [ -n "$pidfile" ]; then
   sh "$0" __stay "--pidfile=$pidfile" &
-  printf '%s\n' "$!" > "$pidfile"
+  p=$! i=0
+  # до exec у фонового процесса командная строка ещё родителя (без
+  # --pidfile) — служба приняла бы его за чужой; дождаться своей
+  while [ "$i" -lt 100 ] && ! tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -qF -- "--pidfile=$pidfile"; do
+    sleep 0.05; i=$((i + 1))
+  done
+  printf '%s\n' "$p" > "$pidfile"
 fi
 
 exit 0
