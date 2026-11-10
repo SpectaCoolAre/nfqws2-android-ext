@@ -1178,7 +1178,7 @@ geo_ipcheck_targets() { # <файл проверки> -> «адрес роль �
       if ((h in px) && (h in dm)) print px[h], "proxy", h, dm[h] } }' "$1" | awk '!s[$1]++' | head -n "$GEO_IPCHECK_MAX"
 }
 cmd_geo_ipcheck() {
-  local f tool bin out targets ip role srv dom nb cause via verdict what added="" now
+  local f tool bin out targets ip role srv dom nb cause via verdict what added="" dropped now
   f=$(dns_geo_scan_file)
   [ -s "$f" ] || { echo "Проверки DNS обхода геоблока ещё не было" >&2; return 1; }
   is_running || { echo "Служба не запущена: без неё не сравнить с обходом" >&2; return 1; }
@@ -1223,13 +1223,22 @@ cmd_geo_ipcheck() {
       open) dns_log "  $ip — $what: открывается и без обхода" ;;
       closed) dns_log "  $ip — $what: адрес закрыт целиком (без обхода — ${nb#fail_}, TCP не устанавливается) — обход не поможет" ;;
       bypass) dns_log "  $ip — $what: без обхода — ${nb#fail_}, причина — $cause; в ipset_auto.list, через обход — открывается" ;;
-      nobypass) dns_log "  $ip — $what: без обхода — ${nb#fail_}, причина — $cause; в ipset_auto.list, но и через обход — ${via#fail_}" ;;
+      nobypass) dns_log "  $ip — $what: без обхода — ${nb#fail_}, причина — $cause; но и через обход — ${via#fail_}: в ipset_auto.list не остаётся" ;;
       skip) dns_log "  $ip — $what: не проверен (нет связи или службы)" ;;
     esac
   done > "$out.res"
   { head -n 1 "$out.tmp"; cat "$out.res"; } > "$out"
   rm -f "$out.tmp" "$out.res"
   [ -n "$added" ] && dns_log "ipset_auto.list: добавлены$added"
+  # обход не помог — адресу в списке не место: через стратегию шли бы все сайты
+  # на нём (адрес Cloudflare — тысячи сайтов), а пользы нет
+  dropped=$(awk -F'\t' '!/^#/ && $8 == "nobypass" { printf " %s", $1 }' "$out")
+  if [ -n "$dropped" ] && [ -f "$IPSET_AUTO" ]; then
+    awk -v d="$dropped" 'BEGIN { n = split(d, a, " "); for (i = 1; i <= n; i++) x[a[i]] = 1 } !($1 in x)' "$IPSET_AUTO" > "$IPSET_AUTO.tmp" &&
+      mv -f "$IPSET_AUTO.tmp" "$IPSET_AUTO"
+    dns_log "ipset_auto.list: убраны (обход не помогает)$dropped"
+    reload_after_change >/dev/null 2>&1
+  fi
   cleanup_probe_app_rule
   rmdir "$STATE_DIR/geo-ipcheck.lock" 2>/dev/null
   trap - EXIT INT TERM

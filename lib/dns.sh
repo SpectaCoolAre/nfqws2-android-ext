@@ -298,7 +298,7 @@ dns_geo_due() {
 # соединение и по запросу на домен списка (запросы — пачками), раз в
 # несколько часов; номера AS адресов кэшируются на неделю
 dns_geo_scan() { # [full|hot]
-  local mode="${1:-full}" f out boot cand before after routes n ok lock="$DNS_RUN_DIR/geoscan.lock"
+  local mode="${1:-full}" f out boot cand before after routes n ok l lock="$DNS_RUN_DIR/geoscan.lock"
   [ -x "$HELPER_BIN" ] && [ -f "$DNS_GEO_CAND" ] || return 1
   mkdir -p "$DNS_GEO_SCAN_DIR" "$DNS_RUN_DIR"
   # прошлая проверка оборвалась — её метка старше двух минут
@@ -370,6 +370,11 @@ dns_geo_scan() { # [full|hot]
   dns_log "проверка DNS обхода геоблока: ответили ${ok:-0} из ${n:-0}; пул — ${after:-пусто (остаётся bezmezhau)}${routes:+; по доменам: $routes}$([ "${nb:-0}" -gt 0 ] && echo "; DNS сети сам обходит доменов: $nb — они остаются ему")"
   # ответившие с оговоркой: только DoH (почему не DoT) или не на все домены
   awk -F'\t' '!/^[#=+!?]/ && $2 == "ok" && $8 != "" { print $1 ": " $8 }' "$f" | while IFS= read -r l; do dns_log "  $l"; done
+  # время ответа каждого ответившего — по нему видно, как настройки (обход
+  # DoH/DoT) сказываются на скорости: сравнение прогонов по журналу
+  l=$(awk -F'\t' '!/^[#=+!?]/ && $2 == "ok" { print $3 "\t" $1 }' "$f" | sort -n |
+    awk -F'\t' '{ printf "%s%s %s мс", (NR > 1 ? ", " : ""), $2, $1 }')
+  [ -n "$l" ] && dns_log "  время ответа (обход DoH/DoT $([ "${DOH_BYPASS:-0}" = 1 ] && echo вкл || echo выкл)): $l"
   # адреса серверов и их прокси — не заблокированы ли по IP (nfqws2-ctl
   # geo-ipcheck): в фоне, итог — в журнале DNS
   [ "${DNS_GEO_IPCHECK:-1}" = 1 ] && is_running && ( sh "$MODDIR/bin/nfqws2-ctl" geo-ipcheck </dev/null >/dev/null 2>&1 & )

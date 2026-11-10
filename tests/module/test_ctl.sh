@@ -771,14 +771,20 @@ assert_contains "$r" "198.51.100.1	server	a.example	a.example	ok" "a server open
 assert_contains "$r" "203.0.113.10	proxy	a.example	chatgpt.com	fail_timeout	tls	ok" "the SNI proxy of a server is checked too, with a site it serves"
 assert_contains "$r" "198.51.100.2	server	b.example	b.example	fail_timeout	addr	-	closed" "an address closed entirely: the bypass cannot help"
 assert_match "$r" "198.51.100.3	server	c.example	c.example	fail_timeout	tls	fail_[a-z]*	nobypass" "blocked, and the bypass does not help yet"
-assert_eq "203.0.113.10
-198.51.100.3" "$(cat "$IPSET_AUTO")" "blocked but not entirely — into ipset_auto.list"
+assert_eq "203.0.113.10" "$(cat "$IPSET_AUTO")" "blocked but not entirely and the bypass helps — into ipset_auto.list; it does not help — not kept (a Cloudflare address would drag thousands of sites through the strategy)"
+assert_contains "$(tail -n 8 "$DNS_LOG")" "ipset_auto.list: убраны (обход не помогает) 198.51.100.3" "the DNS log says what was dropped"
 l=$(tail -n 8 "$DNS_LOG")
 assert_contains "$l" "203.0.113.10 — SNI-прокси a.example (chatgpt.com): без обхода — timeout, причина — tls; в ipset_auto.list, через обход — открывается" "the DNS log says what helped"
 assert_contains "$l" "198.51.100.2 — DNS-сервер b.example: адрес закрыт целиком" "and what cannot be helped"
 assert_contains "$ctl_out" "обход помогает: 1" "a summary for the caller"
-ctl geo-ipcheck >/dev/null
-assert_eq "2" "$(grep -c . "$IPSET_AUTO")" "a second run does not duplicate the list"
+kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; fakesvc=$(fake_daemon "$PIDFILE")
+ctl geo-ipcheck
+assert_rc 0 "$ctl_rc" "a second run runs"
+assert_eq "1" "$(grep -c . "$IPSET_AUTO")" "a second run does not duplicate the list"
+kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; fakesvc=$(fake_daemon "$PIDFILE")
+echo 198.51.100.3 >> "$IPSET_AUTO"; ctl geo-ipcheck
+assert_rc 0 "$ctl_rc" "and a third"
+assert_eq "203.0.113.10" "$(cat "$IPSET_AUTO")" "an address left by an earlier version, where the bypass does not help, is dropped too"
 assert_contains "$(_startup_args)" "--ipset=$IPSET_AUTO" "nfqws2 gets the list as an IP list of the strategy"
 kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; rm -f "$PIDFILE" "$IPSET_AUTO" "$f.ipcheck"
 
