@@ -77,6 +77,9 @@ sandbox_init() {
   # настройки ядра (sysctl_apply) — в песочнице: тесты идут от root и иначе
   # меняли бы настоящий /proc/sys машины
   PROC_SYS_ROOT="$SANDBOX/procsys"; export PROC_SYS_ROOT; mkdir -p "$PROC_SYS_ROOT"
+  # проверка адресов серверов обхода (geo-ipcheck) — в фоне после полной
+  # проверки DNS; в тестах её запускают явно
+  DNS_GEO_IPCHECK=0; export DNS_GEO_IPCHECK
   CONFDIR="$SANDBOX/conf"
   MOCKBIN="$SANDBOX/bin"
   MOCK_DIR="$SANDBOX/mock"

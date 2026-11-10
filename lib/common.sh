@@ -4,6 +4,7 @@
 : "${CONFDIR:=/data/adb/nfqws2}"
 CONFFILE="$CONFDIR/nfqws2.conf"
 LISTS_DIR="$CONFDIR/lists"
+IPSET_AUTO="$LISTS_DIR/ipset_auto.list"   # адреса серверов обхода геоблока, заблокированные РКН (geo-ipcheck)
 STATE_DIR="$CONFDIR/state"
 LOG_DIR="$CONFDIR/logs"
 STRATEGIES_DIR="$MODDIR/strategies"
@@ -524,6 +525,15 @@ _startup_args() {
     if [ -n "$ipset" ]; then ipset="$ipset --ipset=$LISTS_DIR/ipset_flowseal.list"
     elif [ -n "$NFQWS_ARGS_IPSET" ]; then ipset="$(norm_args "$NFQWS_ARGS_IPSET") --ipset=$LISTS_DIR/ipset_flowseal.list"
     else ipset="--ipset=$LISTS_DIR/ipset_flowseal.list --ipset-exclude=$LISTS_DIR/ipset_exclude.list"
+    fi
+  fi
+  # Адреса серверов обхода геоблока и их прокси, заблокированные РКН так, что
+  # помогает обход (nfqws2-ctl geo-ipcheck): соединения с ними — через
+  # стратегию при любом имени сайта, как адреса ipset
+  if [ "$(list_count "$IPSET_AUTO")" -gt 0 ] 2>/dev/null; then
+    if [ -n "$ipset" ]; then ipset="$ipset --ipset=$IPSET_AUTO"
+    elif [ -n "$NFQWS_ARGS_IPSET" ]; then ipset="$(norm_args "$NFQWS_ARGS_IPSET") --ipset=$IPSET_AUTO"
+    else ipset="--ipset=$IPSET_AUTO --ipset-exclude=$LISTS_DIR/ipset_exclude.list"
     fi
   fi
 

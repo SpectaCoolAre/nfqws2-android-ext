@@ -396,7 +396,8 @@ type scanResult struct {
 	err    string
 	tries  int // попыток подключения (см. scanTries) и удачных из них
 	okTry  int
-	cert   int // доменов, где прокси не дал настоящего сертификата (см. verifyRoutes)
+	cert   int    // доменов, где прокси не дал настоящего сертификата (см. verifyRoutes)
+	addr   string // адрес сервера в этой сети (для проверки блокировки по IP)
 }
 
 // tlsRoots — корневые сертификаты; nil — собрать из системы (тесты подставляют свой)
@@ -511,6 +512,7 @@ func dotScan(server string, names []string, boot string, wait time.Duration) sca
 		r.err = err.Error()
 		return r
 	}
+	r.addr = addr
 	parts := (len(names) + dotBatch - 1) / dotBatch
 	if parts > dotConns {
 		parts = dotConns
@@ -680,6 +682,7 @@ func dohScan(server string, names []string, boot string, wait time.Duration) sca
 		r.err = err.Error()
 		return r
 	}
+	r.addr = addr
 	tr := &http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(addr, dohPort))
@@ -1420,12 +1423,17 @@ func formatScan(r scanResult) string {
 	return line
 }
 
-// formatInfo — строки «!сервер<TAB>удачных/попыток<TAB>без сертификата»
+// formatInfo — строки «!сервер<TAB>удачных/попыток<TAB>без сертификата[<TAB>адрес]»:
+// адрес — по нему модуль проверяет, не заблокирован ли сервер по IP
 func formatInfo(res []scanResult) []string {
 	var out []string
 	for _, r := range res {
 		if r.tries > 0 {
-			out = append(out, fmt.Sprintf("!%s\t%d/%d\t%d", r.server, r.okTry, r.tries, r.cert))
+			l := fmt.Sprintf("!%s\t%d/%d\t%d", r.server, r.okTry, r.tries, r.cert)
+			if r.addr != "" {
+				l += "\t" + r.addr
+			}
+			out = append(out, l)
 		}
 	}
 	return out

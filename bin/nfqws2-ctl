@@ -641,7 +641,8 @@ export_collect() { # <папка> <ключ>
       # за сайтами серверы) и действующие маршруты: по ним видно, какой
       # сервер отвечает за сайт и что меняется между проверками
       mkdir -p "$1/dns"
-      [ -d "$DNS_GEO_SCAN_DIR" ] && cp -f "$DNS_GEO_SCAN_DIR"/*.tsv "$DNS_GEO_SCAN_DIR"/*.hot "$DNS_GEO_SCAN_DIR"/*.pin "$1/dns"/ 2>/dev/null
+      [ -d "$DNS_GEO_SCAN_DIR" ] && cp -f "$DNS_GEO_SCAN_DIR"/*.tsv "$DNS_GEO_SCAN_DIR"/*.hot "$DNS_GEO_SCAN_DIR"/*.pin "$DNS_GEO_SCAN_DIR"/*.ipcheck "$1/dns"/ 2>/dev/null
+      cp -f "$IPSET_AUTO" "$1/dns"/ 2>/dev/null
       cp -f "$DNS_RUN_DIR/upstreams.txt" "$DNS_RUN_DIR/args" "$DNS_RUN_DIR/slot" "$DNS_RUN_DIR/ipv6" "$1/dns"/ 2>/dev/null
       f=$({ iptables-save -t nat 2>/dev/null; ip6tables-save -t nat 2>/dev/null; ip6tables-save -t filter 2>/dev/null; } | grep -i "nfqws_dns")
       [ -n "$f" ] && printf '%s\n' "$f" > "$1/dns/iptables-dns.txt"
@@ -1150,6 +1151,89 @@ probe_cause() { # <домен> <ip>
   r=$("$HELPER_BIN" -sniprobe "$d" -ip "$ip" -wait 4s 2>/dev/null)
   [ -n "$rule" ] && iptables -w -t mangle -D $IPT_GROUP_POST $rule 2>/dev/null
   echo "${r:-skip}"
+}
+# ---------------------------------------------------------------- блокировка серверов обхода по IP
+# РКН блокирует адреса серверов обхода геоблока и их SNI-прокси (malw, 11.11:
+# «РКН заблокировал айпи SNI Proxy 179.254.166.174 — добавьте его в список
+# zapret'а»). Блокировка бывает двух видов: адрес закрыт целиком (TCP не
+# устанавливается) — не поможет ничто; или ТСПУ режет соединения с адресом по
+# содержимому — тогда может помочь обход. После полной проверки DNS — для
+# каждого сервера и его основного прокси (из итога проверки):
+#   1) без обхода (мимо nfqws2) открывается? — не заблокирован;
+#   2) нет — причина (nfqws2-helper -sniprobe): адрес закрыт целиком — в журнал;
+#   3) иначе адрес — в lists/ipset_auto.list (соединения с ним идут через
+#      стратегию при любом имени сайта, как адреса ipset), списки перечитываются,
+#      и проба через обход: помогает или нет.
+# Итог — в журнале DNS и в <сеть>.ipcheck (архив журналов): по нему видно,
+# обходится ли блокировка по IP или она глухая
+GEO_IPCHECK_MAX=24       # адресов за проверку, не больше
+geo_ipcheck_targets() { # <файл проверки> -> «адрес роль сервер домен»
+  awk -F'\t' -v base="$DNS_GEO_HOT_BASE" '
+    BEGIN { nb = split(base, b, " "); for (i = 1; i <= nb; i++) B[b[i]] = 1 }
+    /^!/ { h = substr($1, 2); if ($4 != "") { a[h] = $4; ord[++no] = h }; next }
+    /^\+/ { h = substr($1, 2); if (!(h in px) || $3 + 0 > pn[h]) { px[h] = $2; pn[h] = $3 + 0 }; next }
+    /^=/ { d = substr($1, 2); n = split($2, sv, ",")
+      for (i = 1; i <= n; i++) { h = sv[i]; if (!(h in dm)) dm[h] = d; else if ((d in B) && !(dm[h] in B)) dm[h] = d } }
+    END { for (k = 1; k <= no; k++) { h = ord[k]; print a[h], "server", h, h
+      if ((h in px) && (h in dm)) print px[h], "proxy", h, dm[h] } }' "$1" | awk '!s[$1]++' | head -n "$GEO_IPCHECK_MAX"
+}
+cmd_geo_ipcheck() {
+  local f tool bin out targets ip role srv dom nb cause via verdict what added="" now
+  f=$(dns_geo_scan_file)
+  [ -s "$f" ] || { echo "Проверки DNS обхода геоблока ещё не было" >&2; return 1; }
+  is_running || { echo "Служба не запущена: без неё не сравнить с обходом" >&2; return 1; }
+  tool=$(probe_tool); bin="${tool#* }"
+  [ "${tool%% *}" = curl ] || { echo "Нужен curl" >&2; return 1; }
+  mkdir "$STATE_DIR/geo-ipcheck.lock" 2>/dev/null || { echo "Проверка адресов уже идёт" >&2; return 3; }
+  trap 'rmdir "$STATE_DIR/geo-ipcheck.lock" 2>/dev/null; cleanup_probe_app_rule' EXIT INT TERM
+  setup_probe_app_rule
+  targets=$(geo_ipcheck_targets "$f")
+  out="$f.ipcheck"
+  now=$(date +%s)
+  echo "#time=$now адрес роль сервер домен без-обхода причина через-обход итог" > "$out.tmp"
+  dns_log "проверка адресов серверов обхода на блокировку по IP: $(printf '%s\n' "$targets" | grep -c .) адресов"
+  # 1–2: без обхода и причина
+  printf '%s\n' "$targets" | while read -r ip role srv dom; do
+    [ -n "$ip" ] || continue
+    nb=$(probe_nobypass "$bin" "$dom" "$ip"); cause=-; via=-
+    case "$nb" in
+      ok*) verdict=open ;;
+      skip) verdict=skip ;;
+      *) cause=$(probe_cause "$dom" "$ip" | cut -f1)
+         if [ "$cause" = addr ]; then verdict=closed; else verdict=listed; fi ;;
+    esac
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$ip" "$role" "$srv" "$dom" "$(echo "$nb" | tr ' ' '_')" "${cause:--}" "$via" "$verdict" >> "$out.tmp"
+  done
+  # 3: заблокированные не целиком — в список и проба через обход
+  touch "$IPSET_AUTO"
+  for ip in $(awk -F'\t' '$8 == "listed" { print $1 }' "$out.tmp"); do
+    grep -qxF "$ip" "$IPSET_AUTO" 2>/dev/null && continue
+    ensure_eol "$IPSET_AUTO"; echo "$ip" >> "$IPSET_AUTO"; added="$added $ip"
+  done
+  if [ -n "$added" ]; then reload_after_change >/dev/null 2>&1; sleep 2; fi
+  awk -F'\t' '!/^#/' "$out.tmp" | while IFS="$(printf '\t')" read -r ip role srv dom nb cause via verdict; do
+    if [ "$verdict" = listed ]; then
+      via=$(PROBE_IP="$ip" probe_attempt curl "$bin" "$dom")
+      case "$via" in ok*) verdict=bypass ;; *) verdict=nobypass ;; esac
+      via=$(echo "$via" | tr ' ' '_')
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$ip" "$role" "$srv" "$dom" "$nb" "$cause" "$via" "$verdict"
+    case "$role" in server) what="DNS-сервер $srv" ;; *) what="SNI-прокси $srv ($dom)" ;; esac
+    case "$verdict" in
+      open) dns_log "  $ip — $what: открывается и без обхода" ;;
+      closed) dns_log "  $ip — $what: адрес закрыт целиком (без обхода — ${nb#fail_}, TCP не устанавливается) — обход не поможет" ;;
+      bypass) dns_log "  $ip — $what: без обхода — ${nb#fail_}, причина — $cause; в ipset_auto.list, через обход — открывается" ;;
+      nobypass) dns_log "  $ip — $what: без обхода — ${nb#fail_}, причина — $cause; в ipset_auto.list, но и через обход — ${via#fail_}" ;;
+      skip) dns_log "  $ip — $what: не проверен (нет связи или службы)" ;;
+    esac
+  done > "$out.res"
+  { head -n 1 "$out.tmp"; cat "$out.res"; } > "$out"
+  rm -f "$out.tmp" "$out.res"
+  [ -n "$added" ] && dns_log "ipset_auto.list: добавлены$added"
+  cleanup_probe_app_rule
+  rmdir "$STATE_DIR/geo-ipcheck.lock" 2>/dev/null
+  trap - EXIT INT TERM
+  awk -F'\t' '!/^#/ { n[$8]++ } END { printf "проверено: %d; открыты: %d; закрыты целиком: %d; обход помогает: %d; не помогает: %d\n", NR - 1, n["open"], n["closed"], n["bypass"], n["nobypass"] }' "$out"
 }
 # Расстояние до фильтра (nfqws2-helper -ttltrace) по серверу YouTube: узлов до
 # него и до фильтра — мимо nfqws2. Итог — в DPI_TTL_FILE для текущей сети.
@@ -2629,6 +2713,7 @@ EOF
   probe-dpi) cmd_probe_dpi "${2:-all}" ;;
   dpi-distance) cmd_dpi_distance ;;
   domain-check) cmd_domain_check "$2" ;;
+  geo-ipcheck) cmd_geo_ipcheck ;;
   share) cmd_share "$2" "$3" ;;
   share-saved) cmd_share_saved "$2" ;;
   # Список изменений из архива модуля — для «Что нового» в WebUI

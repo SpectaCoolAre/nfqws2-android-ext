@@ -625,3 +625,17 @@ func TestFormatScanTellsUnansweredDomains(t *testing.T) {
 		t.Fatalf("строка: %q", l)
 	}
 }
+
+// Адрес сервера — в строке «!»: по нему модуль проверяет блокировку по IP
+func TestFormatInfoCarriesServerAddress(t *testing.T) {
+	r := []scanResult{{server: "s", tries: 3, okTry: 3, addr: "179.254.166.171"}}
+	if got := formatInfo(r); got[0] != "!s\t3/3\t0\t179.254.166.171" {
+		t.Fatalf("строка: %q", got[0])
+	}
+	boot := netDNS(t, func(string) net.IP { return ip("93.184.216.34") }, true, nil)
+	dot := fakeDoT(t, func(string) net.IP { return ip("5.5.5.5") })
+	res := geoScan([]string{dot}, []string{"a.example"}, boot, 4*time.Second)
+	if h, _, _ := net.SplitHostPort(dot); res[0].addr != h {
+		t.Fatalf("адрес проверенного сервера: %q", res[0].addr)
+	}
+}

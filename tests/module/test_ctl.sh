@@ -735,6 +735,53 @@ assert_match "$ctl_out" "N	fail tls" "a site that needs the bypass fails without
 kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; rm -f "$PIDFILE"
 ctl domain-check stopped.example
 assert_match "$ctl_out" "N	skip" "with the service stopped there is nothing to compare"
+# Блокировка серверов обхода по IP (geo-ipcheck): без обхода — по правилу
+# RETURN, причина — nfqws2-helper -sniprobe, через обход — та же проба без него
+section "geo-ipcheck: bypass servers and proxies blocked by IP"
+cat > "$MOCKBIN/curl" <<'X'
+#!/bin/sh
+ip=""; o=""
+for a; do [ "$p" = "-o" ] && o="$a"; [ "$p" = "--resolve" ] && ip="${a##*:}"; p="$a"; done
+[ -n "$o" ] && printf 'ok' > "$o"
+[ -n "$ip" ] || exit 0
+if iptables -w -t mangle -S nfqws_post 2>/dev/null | grep -q "uid-owner 0 -d $ip "; then
+  exit "$(cat "$MOCK_DIR/nb.$ip" 2>/dev/null || echo 28)"
+fi
+exit "$(cat "$MOCK_DIR/via.$ip" 2>/dev/null || echo 0)"
+X
+printf '#!/bin/sh\nfor a; do [ "$p" = -ip ] && ip="$a"; p="$a"; done\nprintf "%%s\\ttcp=x\\n" "$(cat "$MOCK_DIR/cause.$ip" 2>/dev/null || echo tls)"\n' > "$HELPER_BIN"
+chmod 0755 "$MOCKBIN/curl" "$HELPER_BIN"
+iptables -w -t mangle -N nfqws_post 2>/dev/null
+f=$(dns_geo_scan_file); mkdir -p "${f%/*}"
+{ printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
+  printf 'a.example\tok\t20\t2\t2\t0\ttls\n'; printf 'b.example\tfail\t0\t0\t2\t0\t-\tDoT: i/o timeout\n'; printf 'c.example\tok\t30\t1\t2\t0\ttls\n'
+  printf '!a.example\t3/3\t0\t198.51.100.1\n!b.example\t0/3\t0\t198.51.100.2\n!c.example\t3/3\t0\t198.51.100.3\n'
+  printf '+a.example\t203.0.113.10\t50\n'
+  printf '=chatgpt.com\ta.example\n=claude.ai\tc.example\n'
+} > "$f"
+echo 0 > "$MOCK_DIR/nb.198.51.100.1"
+echo addr > "$MOCK_DIR/cause.198.51.100.2"
+echo 35 > "$MOCK_DIR/via.198.51.100.3"
+rm -f "$IPSET_AUTO"
+fakesvc=$(fake_daemon "$PIDFILE")
+ctl geo-ipcheck
+assert_rc 0 "$ctl_rc" "the check runs"
+r=$(cat "$f.ipcheck")
+assert_contains "$r" "198.51.100.1	server	a.example	a.example	ok" "a server open without the bypass is not blocked"
+assert_contains "$r" "203.0.113.10	proxy	a.example	chatgpt.com	fail_timeout	tls	ok" "the SNI proxy of a server is checked too, with a site it serves"
+assert_contains "$r" "198.51.100.2	server	b.example	b.example	fail_timeout	addr	-	closed" "an address closed entirely: the bypass cannot help"
+assert_match "$r" "198.51.100.3	server	c.example	c.example	fail_timeout	tls	fail_[a-z]*	nobypass" "blocked, and the bypass does not help yet"
+assert_eq "203.0.113.10
+198.51.100.3" "$(cat "$IPSET_AUTO")" "blocked but not entirely — into ipset_auto.list"
+l=$(tail -n 8 "$DNS_LOG")
+assert_contains "$l" "203.0.113.10 — SNI-прокси a.example (chatgpt.com): без обхода — timeout, причина — tls; в ipset_auto.list, через обход — открывается" "the DNS log says what helped"
+assert_contains "$l" "198.51.100.2 — DNS-сервер b.example: адрес закрыт целиком" "and what cannot be helped"
+assert_contains "$ctl_out" "обход помогает: 1" "a summary for the caller"
+ctl geo-ipcheck >/dev/null
+assert_eq "2" "$(grep -c . "$IPSET_AUTO")" "a second run does not duplicate the list"
+assert_contains "$(_startup_args)" "--ipset=$IPSET_AUTO" "nfqws2 gets the list as an IP list of the strategy"
+kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; rm -f "$PIDFILE" "$IPSET_AUTO" "$f.ipcheck"
+
 rm -f "$MOCKBIN/ping" "$MOCKBIN/curl"
 
 # ── поделиться файлом ─────────────────────────────────────────────────────────

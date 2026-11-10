@@ -370,6 +370,9 @@ dns_geo_scan() { # [full|hot]
   dns_log "проверка DNS обхода геоблока: ответили ${ok:-0} из ${n:-0}; пул — ${after:-пусто (остаётся bezmezhau)}${routes:+; по доменам: $routes}$([ "${nb:-0}" -gt 0 ] && echo "; DNS сети сам обходит доменов: $nb — они остаются ему")"
   # ответившие с оговоркой: только DoH (почему не DoT) или не на все домены
   awk -F'\t' '!/^[#=+!?]/ && $2 == "ok" && $8 != "" { print $1 ": " $8 }' "$f" | while IFS= read -r l; do dns_log "  $l"; done
+  # адреса серверов и их прокси — не заблокированы ли по IP (nfqws2-ctl
+  # geo-ipcheck): в фоне, итог — в журнале DNS
+  [ "${DNS_GEO_IPCHECK:-1}" = 1 ] && is_running && ( sh "$MODDIR/bin/nfqws2-ctl" geo-ipcheck </dev/null >/dev/null 2>&1 & )
   [ "$before" != "$after$(dns_geo_routes | tr '\n\t' '  ')" ] && dns_apply_now
   echo "$(date +%s) ok" > "$DNS_RUN_DIR/geoscan.result"
   return 0
