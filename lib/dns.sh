@@ -73,7 +73,9 @@ DNS_GEO_HOT_DAYS=7
 DNS_GEO_HOT_BASE="chatgpt.com claude.ai gemini.google.com gamea.clashofclans.com accounts.supercell.com spotify.com"
 DNS_GEO_POOL=3                # кандидатов в пул и маршрут домена; в работе — один (закреплённый)
 DNS_GEO_OFF="$CONFDIR/dns/geo-off.list"   # серверы, отключённые вручную
-DNS_GEO_FALLBACK="https://dns.comss.one/dns-query"
+# до первой проверки — сервер, который в замерах обходил больше всех в обеих
+# сетях (Comss с ноября не обходит ИИ-сервисы — убран из пула)
+DNS_GEO_FALLBACK="tls://dns.bezmezhau.com"
 DNS_GEO_SCAN_COOL=300        # ручная проверка — не чаще раза в 5 минут
 DNS_GEO_UPD_COOL=1800        # обновление списка — раз в 30 минут
 DNS_GEO_NEVER="$MODDIR/defaults/dns-geo-never.list"
@@ -117,7 +119,7 @@ dns_geo_count() { list_count "$DNS_GEO_LIST"; }
 # тот, чей прокси работает в этой сети
 dns_geo_label() {
   local p; p=$(dns_geo_pick | tr '\n' ' ' | sed 's/ $//; s/ /, /g')
-  if [ -n "$p" ]; then echo "$p"; else echo "Comss — до первой проверки"; fi
+  if [ -n "$p" ]; then echo "$p"; else echo "bezmezhau — до первой проверки"; fi
 }
 # Серверы обхода геоблока через пробел: пул проверки, пока её не было — DoH Comss
 dns_geo_servers() {
@@ -365,7 +367,7 @@ dns_geo_scan() { # [full|hot]
     END { for (h in n) printf "%s%s — %d", (k++ ? ", " : ""), h, n[h]; if (net) printf "%sв DNS сети — %d", (k ? ", " : ""), net }')
   n=$(grep -c -v '^[#=+!?]' "$f" 2>/dev/null); ok=$(grep -c '	ok	' "$f" 2>/dev/null)
   local nb; nb=$(grep -c '^=.*	-	net$' "$f" 2>/dev/null)
-  dns_log "проверка DNS обхода геоблока: ответили ${ok:-0} из ${n:-0}; пул — ${after:-пусто (остаётся Comss)}${routes:+; по доменам: $routes}$([ "${nb:-0}" -gt 0 ] && echo "; DNS сети сам обходит доменов: $nb — они остаются ему")"
+  dns_log "проверка DNS обхода геоблока: ответили ${ok:-0} из ${n:-0}; пул — ${after:-пусто (остаётся bezmezhau)}${routes:+; по доменам: $routes}$([ "${nb:-0}" -gt 0 ] && echo "; DNS сети сам обходит доменов: $nb — они остаются ему")"
   # ответившие с оговоркой: только DoH (почему не DoT) или не на все домены
   awk -F'\t' '!/^[#=+!?]/ && $2 == "ok" && $8 != "" { print $1 ": " $8 }' "$f" | while IFS= read -r l; do dns_log "  $l"; done
   [ "$before" != "$after$(dns_geo_routes | tr '\n\t' '  ')" ] && dns_apply_now

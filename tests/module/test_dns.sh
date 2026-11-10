@@ -589,9 +589,9 @@ printf '# сервисы с геоблоком\nchatgpt.com\nClaude.ai\ninstagra
 : > "$DNS_RUN_DIR/geo.args"; : > "$DNS_RUN_DIR/main_port"
 dns_build
 geo=$(grep '/chatgpt.com/' "$DNS_RUN_DIR/upstreams.txt")
-assert_contains "$geo" "[/chatgpt.com/claude.ai/]https://dns.comss.one/dns-query" "before the first check of the bypass DNS the list goes to Comss DoH — the same server as its Private DNS"
+assert_contains "$geo" "[/chatgpt.com/claude.ai/]tls://dns.bezmezhau.com" "before the first check of the bypass DNS the list goes to the fallback server (bezmezhau DoT)"
 assert_eq "1" "$(printf '%s\n' "$geo" | grep -c .)" "only it: the first answer of several led Claude to a proxy that does not work here"
-assert_eq "Comss — до первой проверки" "$(dns_geo_label)" "the DNS log names the bypass DNS"
+assert_eq "bezmezhau — до первой проверки" "$(dns_geo_label)" "the DNS log names the bypass DNS"
 # Profile overlap: an enabled profile of its own with domains of the list
 # takes them away from the bypass — the screen warns
 assert_contains "$(dns_geo_overlap)" "insta 1" "an enabled profile with a domain of the list is found, with how many it takes"
@@ -623,7 +623,7 @@ assert_no_file "$DNS_RUN_DIR/main_port" "all of them"
 i=0; while [ $i -lt 250 ]; do echo "g$i.example"; i=$((i + 1)); done > "$DNS_GEO_LIST"
 dns_build
 assert_eq "1" "$(grep -c '/g1.example/' "$DNS_RUN_DIR/upstreams.txt")" "a long list — lines of 100 domains, one per server"
-assert_eq "3" "$(grep -c 'example/\]https://' "$DNS_RUN_DIR/upstreams.txt")" "three lines per server"
+assert_eq "3" "$(grep -c 'example/\]tls://' "$DNS_RUN_DIR/upstreams.txt")" "three lines per server"
 DNS_GEO=0 dns_build
 assert_not_contains "$(cat "$DNS_RUN_DIR/upstreams.txt")" "g1.example" "profiles mode: the list is not used"
 : > "$DNS_GEO_LIST"
@@ -665,7 +665,7 @@ svc start
 ctl dns-state
 assert_contains "$ctl_out" "geo=on" "dns-state reports the bypass"
 assert_contains "$ctl_out" "geo_domains=$(list_count "$DNS_GEO_LIST")" "with the size of the list"
-assert_match "$(grep '/my-service.example/' "$DNS_RUN_DIR/running.upstreams")" "comss" "the running dnsproxy has the rules"
+assert_match "$(grep '/my-service.example/' "$DNS_RUN_DIR/running.upstreams")" "bezmezhau" "the running dnsproxy has the rules"
 ctl dns-mode profiles
 assert_rc 0 "$ctl_rc" "the DNS mode switches to profiles"
 assert_match "$(cat "$CONFFILE")" "^DNS_GEO=\"0\"$" "geo-block bypass off"
@@ -783,7 +783,7 @@ dns_geo_scan_due
 assert_rc 0 $? "an old check is due again"
 printf '#time=%s boot=x v=%s\nfast.example\tfail\t0\t0\t7\t0\t-\n' "$(date +%s)" "$DNS_GEO_SCAN_VER" > "$(dns_geo_scan_file)"
 assert_eq "" "$(dns_geo_pick)" "no server answered (the network was not up yet)"
-assert_contains "$(dns_geo_servers)" "https://dns.comss.one/dns-query" "Comss for now"
+assert_contains "$(dns_geo_servers)" "tls://dns.bezmezhau.com" "the fallback server for now"
 dns_geo_scan_due
 assert_rc 1 $? "and a new check — not at once"
 sed -i '1s/^#time=[0-9]*/#time='"$(( $(date +%s) - 700 ))"'/' "$(dns_geo_scan_file)"
@@ -1085,7 +1085,7 @@ mkhot "a.example,b.example,c.example"
 echo "@google b.example" > "$DNS_GEO_SCAN_DIR/groups.pin"
 assert_contains "$(dns_geo_routes)" "gemini.google.com	b.example" "a pinned preferred server stays among the preferred"
 DNS_GEO_PREFER=$pkeep; rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
-assert_contains "$(cat "$DNS_GEO_PREFER")" "google router.comss.one dns.comss.one dns.magicdns.ru dns.zapret.moe" "the module ships the router's set for Google"
+assert_contains "$(cat "$DNS_GEO_PREFER")" "google de.magicdns.ru dns.zapret.moe dns.malw.link" "the module ships the router's set for Google (without Comss)"
 rm -f "$hotf" "$(dns_geo_scan_file).rel"
 cp "$SANDBOX/scan.keep" "$(dns_geo_scan_file)"
 # Обычный сайт (не группа): закреплённый сервер держится, пока не подводил две

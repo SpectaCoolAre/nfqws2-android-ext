@@ -1,17 +1,31 @@
-# DoT-серверы для автовыбора DNS обхода геоблока (DNS_GEO_VIA=auto): модуль
-# раз в несколько часов проверяет каждый — отвечает ли в этой сети, как быстро
-# и отдаёт ли для сервисов с геоблоком адреса своих прокси, — и берёт самые
-# быстрые из самых полных. Список — от автора GeoHide. Порт 853, имя — для TLS
+# Серверы обхода геоблока для автовыбора DNS (DNS_GEO_VIA=auto): модуль раз в
+# несколько часов проверяет каждый — отвечает ли в этой сети (DoT на 853, не
+# прошёл — DoH /dns-query), как быстро и отдаёт ли для сервисов с геоблоком
+# адреса своих прокси, — и берёт самые быстрые из самых полных. Список — от
+# авторов GeoHide и самих серверов (10.11.2026); адреса — для справки.
+# Убраны: Comss (dns.comss.one, router.comss.one — с ноября не обходят
+# ChatGPT, Claude, Gemini), dns.mafioznik.xyz (закрыт), free.shecan.ir
+# (иранский, сертификат просрочен), dns.magicdns.ru и dns.dagami.ru (адреса
+# заблокированы — их заменили de.magicdns.ru и doh.dagami.ru)
 dns.bezmezhau.com
+# для России — 185.236.10.189, 31.58.216.201
+sync.bezmezhau.com
 dns.commonnet.work
-dns.comss.one
-router.comss.one
-dns.dagami.ru
+# DoH, 31.76.61.24
+doh.dagami.ru
+# 194.87.196.13, 45.151.102.219
 dns.dns-ai.ru
-dns.mafioznik.xyz
+# 179.254.166.171, 164.5.224.81 (есть и DNSCrypt — проверка его не умеет)
 dns.malw.link
-dns.magicdns.ru
+# malw через Cloudflare
+5u35p8m9i7.cloudflare-gateway.com
+# «костыль» от авторов на время блокировки, 94.249.177.102
+de.magicdns.ru
+# только DoH: адреса внутри их сети меняются, заблокировать запросы нельзя
 dns.zapret.moe
+# 95.85.240.254, 138.124.254.134
 dns.wlrus.cfd
+# 31.31.207.68
 d.webshiftvpn.ru
-free.shecan.ir
+# GeoHide EU (RU-серверы GeoHide заблокированы; US у многих в блоке 16–24 КБ)
+eu.geohide.ru

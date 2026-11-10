@@ -18,7 +18,7 @@ EN = {
  "Сервисы с геоблоком пойдут через проверенные DNS с обходом, видео и CDN — на самый быстрый адрес. Профили продолжат работать.": "Geo-blocked services will go through checked bypass DNS, video and CDN to the fastest address. Profiles keep working.",
  "Обход геоблока и ускорение видео выключатся. Домены профилей — на их серверы, остальное — на DNS по умолчанию.": "The geo-block bypass and video speed-up turn off. Profile domains go to their servers, everything else to the default DNS.",
  "DNS: {0}": "DNS: {0}",
- "DNS: Comss — до первой проверки": "DNS: Comss until the first check",
+ "DNS: bezmezhau — до первой проверки": "DNS: bezmezhau until the first check",
  "Проверить DNS сейчас": "Check DNS now",
  "не отвечает": "not answering",
  "{0} мс": "{0} ms",

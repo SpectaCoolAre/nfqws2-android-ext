@@ -493,6 +493,9 @@ const dotConns = 4
 // за это время — потеряны
 const dotLost = 3 * time.Second
 
+// dotDial — сколько ждать TCP-подключения по DoT, прежде чем перейти к DoH
+var dotDial = 5 * time.Second
+
 // dotScan — проверка по DoT: имена — вперемешку по dotConns соединениям, в
 // каждом — скользящее окно в dotBatch запросов. Ответ на домен отмечается
 // (got), даже пустой: «не ответил» — это «нет данных», а не «не обходит»
@@ -575,7 +578,9 @@ func dotConn(host, addr, port string, names []string, idx []int, deadline time.T
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
-	d := tls.Dialer{NetDialer: &net.Dialer{}, Config: &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12, RootCAs: rootPool()}}
+	// подключение — не дольше dotDial: у сервера только с DoH (dns.zapret.moe)
+	// порт 853 молчит, и попытка DoT съедала всё время проверки до DoH
+	d := tls.Dialer{NetDialer: &net.Dialer{Timeout: dotDial}, Config: &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12, RootCAs: rootPool()}}
 	c, err := d.DialContext(ctx, "tcp", net.JoinHostPort(addr, port))
 	if err != nil {
 		return err

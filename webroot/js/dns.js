@@ -263,7 +263,7 @@ const dnsGeoRole = host => dnsGeoOff(host) ? t('отключён вручную'
 /* Сводка обхода геоблока для строки на главном экране DNS */
 function dnsGeoSummary(){
   const pool = dnsGeoPool();
-  return pool.length ? t('DNS: {0}', pool.join(', ')) : t('DNS: Comss — до первой проверки');
+  return pool.length ? t('DNS: {0}', pool.join(', ')) : t('DNS: bezmezhau — до первой проверки');
 }
 /* Экран «Обход геоблока»: проверка, серверы, список сервисов */
 function renderDnsGeo(){
