@@ -639,3 +639,38 @@ func TestFormatInfoCarriesServerAddress(t *testing.T) {
 		t.Fatalf("адрес проверенного сервера: %q", res[0].addr)
 	}
 }
+
+// «имя/путь» в списке — DoH по своему пути (api.magicdns.ru/sync), без DoT
+func TestGeoScanDoHWithOwnPath(t *testing.T) {
+	boot := netDNS(t, func(string) net.IP { return ip("93.184.216.34") }, true, nil)
+	var mu sync.Mutex
+	var paths []string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		q, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/dns-message")
+		w.Write(reply(q, ip("5.5.5.5")))
+	}))
+	t.Cleanup(srv.Close)
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	tlsRoots = pool
+	t.Cleanup(func() { tlsRoots = nil })
+	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	dohPort = port
+	t.Cleanup(func() { dohPort = "443" })
+	res := geoScan([]string{"127.0.0.1/sync"}, []string{"a.example", "b.example"}, boot, 6*time.Second)
+	if !res[0].ok || res[0].proto != "https" || res[0].server != "127.0.0.1/sync" {
+		t.Fatalf("DoH по своему пути: %+v", res[0])
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) == 0 || paths[0] != "/sync" {
+		t.Fatalf("путь запроса: %v", paths)
+	}
+	if strings.Contains(formatScan(res[0]), "DoT:") {
+		t.Fatalf("DoT у такого сервера не пробуется: %q", formatScan(res[0]))
+	}
+}

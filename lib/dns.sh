@@ -158,7 +158,7 @@ dns_geo_pool() { # -> «мс сервер протокол» пула, лучш�
 dns_geo_pick() { dns_geo_pool | head -n 1 | cut -f2; }
 # Адрес сервера пула для dnsproxy: DoT, а где в этой сети прошёл только DoH — DoH
 dns_geo_pick_up() {
-  dns_geo_pool | head -n 1 | awk -F'\t' '{ print ($3 == "https" ? "https://" $2 "/dns-query" : "tls://" $2) }'
+  dns_geo_pool | head -n 1 | awk -F'\t' '{ print ($3 == "https" ? "https://" $2 (index($2, "/") ? "" : "/dns-query") : "tls://" $2) }'
 }
 # Маршруты обхода геоблока — по образцу geodns на роутере, где Gemini и
 # остальное работают стабильно: у группы сайтов (dns-geo-groups.list: Google,
@@ -243,7 +243,7 @@ dns_geo_hot_list() {
     END { for (h in t) print t[h] "\t" h }' | sort -rn | cut -f2 | head -n "$DNS_GEO_HOT_MAX"
 }
 # Адрес сервера для dnsproxy по «хост протокол» (поля 2 и 3 строки)
-dns_geo_up_awk='{ print ($3 == "https" ? "https://" $2 "/dns-query" : "tls://" $2) }'
+dns_geo_up_awk='{ print ($3 == "https" ? "https://" $2 (index($2, "/") ? "" : "/dns-query") : "tls://" $2) }'
 # Все серверы обхода геоблока (общий пул и маршруты по доменам) — для dns_route
 dns_geo_all_up() {
   { dns_geo_servers | tr ' ' '\n'; dns_geo_routes | awk -F'\t' '$2 != "-"' | awk -F'\t' "$dns_geo_up_awk"; } | awk 'NF && !s[$0]++' | tr '\n' ' ' | sed 's/ $//'
@@ -747,7 +747,7 @@ dns_build() {
     # геоблок до конца срока записи (журнал 08.11.2026, 22:31); другой сервер
     # обхода — другой адрес выхода посреди сессии; повтор к тому же — ещё
     # одно ожидание
-    dns_geo_routes | awk -F'\t' '{ u = ($2 == "-" ? "-" : ($3 == "https" ? "https://" $2 "/dns-query" : "tls://" $2)); s[$1] = s[$1] (s[$1] == "" ? "" : " ") u }
+    dns_geo_routes | awk -F'\t' '{ u = ($2 == "-" ? "-" : ($3 == "https" ? "https://" $2 (index($2, "/") ? "" : "/dns-query") : "tls://" $2)); s[$1] = s[$1] (s[$1] == "" ? "" : " ") u }
       END { for (d in s) print d "\t" s[d] }' > "$DNS_RUN_DIR/geo.routes"
     gb="127.0.0.1:1"
     : > "$DNS_RUN_DIR/fallback.rules"

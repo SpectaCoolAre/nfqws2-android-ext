@@ -771,6 +771,14 @@ echo "* mid.example" > "$(dns_geo_scan_file).pin"
 assert_eq "mid.example" "$(dns_geo_pick)" "the pinned server stays, though another is faster"
 dns_build
 assert_contains "$(grep '/chatgpt.com/' "$DNS_RUN_DIR/upstreams.txt")" "]https://mid.example/dns-query" "a server that got through only over DoH on this network goes there over DoH"
+# Сервер «имя/путь» (api.magicdns.ru/sync) — DoH по своему пути, без /dns-query
+sf=$(dns_geo_scan_file); cp "$sf" "$sf.keep"
+sed 's#^mid\.example\t#mid.example/sync\t#; s#^\([!+]\)mid\.example\t#\1mid.example/sync\t#' "$sf.keep" > "$sf"
+echo "* mid.example/sync" > "$sf.pin"
+dns_build
+assert_contains "$(grep '/chatgpt.com/' "$DNS_RUN_DIR/upstreams.txt")" "]https://mid.example/sync" "a server with its own path is used over DoH by that path"
+assert_not_contains "$(cat "$DNS_RUN_DIR/upstreams.txt")" "/sync/dns-query" "no /dns-query is appended to it"
+mv "$sf.keep" "$sf"
 echo "* ai.example" > "$(dns_geo_scan_file).pin"
 assert_eq "fast.example" "$(dns_geo_pick)" "a pinned server far behind the best is let go"
 dns_geo_pin_save
