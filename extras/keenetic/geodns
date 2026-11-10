@@ -154,6 +154,7 @@ scan_time() { sed -n '1s/^#time=\([0-9]*\).*/\1/p' "$1" 2>/dev/null; }
 scan() { # full|hot
   local out boot n
   [ -x "$HELPER" ] || { log "нет $HELPER — проверка невозможна (geodns ставится вместе с ним)"; return 1; }
+  "$HELPER" -h 2>&1 | grep -q geoscan || { log "$HELPER не запускается на этом роутере — сборка не под его процессор: переустановите geodns (install.sh сам выберет подходящую)"; : > "$RUN/scan.failed"; return 1; }
   net_alive || { log "нет интернета (провайдер не отвечает) — проверку пропускаю"; return 1; }
   mkdir "$RUN/scan.lock" 2>/dev/null || { log "проверка уже идёт"; return 1; }
   boot="$(provider):53"

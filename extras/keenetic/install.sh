@@ -4,21 +4,21 @@
 # Нужны пакеты: dnsmasq-full https-dns-proxy curl (opkg install …)
 set -e
 cd "$(dirname "$0")"
-# nfqws2-helper — под архитектуру роутера
-case "$(uname -m)" in
-  aarch64|arm64) a=arm64 ;;
-  armv7*|armv8l) a=arm ;;
-  mips*)
-    # порядок байт: mipsel (большинство Keenetic) или mips
-    if [ "$(printf '\001\000' | od -An -tu2 | tr -d ' ')" = 1 ]; then a=mipsle; else a=mips; fi ;;
-  *) echo "неизвестная архитектура: $(uname -m)"; exit 1 ;;
-esac
+# nfqws2-helper — та сборка, что запускается на этом роутере. Не по uname:
+# у mipsel он тоже «mips», и 10.11 встала сборка для mips — ядро её не
+# запустило, а оболочка пыталась читать её как скрипт
 # корневые сертификаты — без них проверка серверов (TLS) не пройдёт
 [ -s /opt/etc/ssl/certs/ca-certificates.crt ] || opkg install ca-bundle ca-certificates >/dev/null 2>&1 ||
   echo "нет /opt/etc/ssl/certs/ca-certificates.crt — установите: opkg install ca-bundle"
+a=""
+for x in mipsle mips arm64 arm; do
+  chmod 755 "nfqws2-helper.$x"
+  "./nfqws2-helper.$x" -h 2>&1 | grep -q geoscan && { a=$x; break; }
+done
+[ -n "$a" ] || { echo "ни одна сборка nfqws2-helper не запускается на этом роутере ($(uname -m))"; exit 1; }
+echo "nfqws2-helper: сборка $a"
 cp -f "nfqws2-helper.$a" /opt/bin/nfqws2-helper
 chmod 755 /opt/bin/nfqws2-helper
-/opt/bin/nfqws2-helper -h >/dev/null 2>&1 || [ $? -le 2 ] || { echo "nfqws2-helper ($a) не запускается на этом роутере"; exit 1; }
 [ -f /opt/etc/init.d/S55geodns ] && /opt/etc/init.d/S55geodns stop || true
 mkdir -p /opt/etc/geodns
 cp -f geodns /opt/bin/geodns; chmod 755 /opt/bin/geodns
