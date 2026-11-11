@@ -85,7 +85,7 @@ jobs:
           sed -i "s/^version=\(.*\)$/version=\1-ci.$sha/" module.prop
           rm -rf ci-module; mkdir ci-module
           cp -R module.prop customize.sh service.sh action.sh boot-completed.sh uninstall.sh README.md LICENSE changelog.md \
-            bin binaries blobs defaults lib licenses lists lua strategies system webroot ci-module/
+            META-INF bin binaries blobs defaults lib licenses lists lua strategies system webroot ci-module/
           grep -Fx 'id=nfqws2-android-ext' ci-module/module.prop
           grep '^version=' ci-module/module.prop
 
