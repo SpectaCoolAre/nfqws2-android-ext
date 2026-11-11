@@ -249,12 +249,19 @@ const dnsGeoOff = host => (dnsSt.status.geo_off || '').split(' ').includes(host)
    перепроверяет и вернёт сервер, когда прокси откроется */
 const dnsGeoDown = host => { const v = (dnsSt.status || {})['geo_down_' + host]; if(!v) return null;
   const [ip, since, next] = v.split(','); return {ip, since: +since || 0, next: +next || 0}; };
-const dnsGeoRole = host => dnsGeoOff(host) ? t('отключён вручную') : dnsGeoPool().includes(host) ? t('в пуле')
-  : dnsGeoFor(host) ? t('доменов: {0}', fmtCount(dnsGeoFor(host))) : '';
-/* Сводка обхода геоблока для строки на главном экране DNS */
+/* Группы сайтов (один сервер на все домены группы — один адрес выхода):
+   geo_group_<группа>=сервер, «-» — DNS сети */
+const DNS_GEO_GROUP_NAMES = {google: 'Google', openai: 'OpenAI', anthropic: 'Claude', xai: 'Grok', supercell: 'Supercell'};
+const dnsGeoGroupName = g => DNS_GEO_GROUP_NAMES[g] || g;
+function dnsGeoGroups(){
+  const st = dnsSt.status || {};
+  return Object.keys(st).filter(k => k.startsWith('geo_group_')).map(k => ({id: k.slice(10), server: st[k]}));
+}
+const dnsGeoGroupsOf = host => dnsGeoGroups().filter(g => g.server === host).map(g => dnsGeoGroupName(g.id));
+/* Сводка обхода геоблока для строки на главном экране DNS: основной сервер */
 function dnsGeoSummary(){
   const pool = dnsGeoPool();
-  return pool.length ? t('DNS: {0}', pool.join(', ')) : t('DNS: bezmezhau — до первой проверки');
+  return pool.length ? t('Основной: {0}', pool.map(dnsGeoSvcOf).join(', ')) : t('До первой проверки — bezmezhau');
 }
 /* Сервисы обхода геоблока: в списке серверов адреса сгруппированы
    «[Название]» (geo_svc_<адрес>=Название) — у сервиса может быть несколько
@@ -273,7 +280,9 @@ function dnsGeoServices(){
     const rows = hosts.map(h => scan.find(x => x.host === h)).filter(Boolean);
     const ok = rows.filter(r => r.ok), on = ok.filter(r => !dnsGeoOff(r.host) && !dnsGeoDown(r.host)).sort(rank);
     return {name, hosts, rows, ok, best: on[0] || ok.slice().sort(rank)[0] || null,
-      off: hosts.every(dnsGeoOff), down: ok.length > 0 && ok.every(r => dnsGeoDown(r.host)), pool: hosts.some(h => dnsGeoPool().includes(h)),
+      off: hosts.every(dnsGeoOff), down: ok.length > 0 && ok.every(r => dnsGeoDown(r.host)),
+      main: hosts.some(h => dnsGeoPool().includes(h)),
+      groups: [].concat(...hosts.map(dnsGeoGroupsOf)),
       dom: hosts.reduce((n, h) => n + dnsGeoFor(h), 0)};
   });
 }
@@ -286,34 +295,95 @@ function dnsGeoWhy(err){
     : /timeout|deadline/.test(e) ? t('нет ответа')
     : e ? e.slice(0, 80) : '';
 }
-/* Экран «Обход геоблока»: проверка, сервисы, список доменов */
+/* Экран «Обход геоблока»: проверка, сводка, проверка домена, группы, сервисы.
+   У сервиса — только то, что нужно для решения: сколько доменов списка он
+   обходит, как быстро отвечает и сколько доменов идёт через него сейчас */
 function renderDnsGeo(){
   const st = dnsSt.status || {};
   if(!$('dns-geo')) return;
+  const at = +st.geo_scan_time ? new Date(st.geo_scan_time * 1000).toLocaleString([], {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'}) : '';
   const rows = [settingsRow({icon: 'refresh', title: 'Проверить DNS сейчас',
-    sub: dnsGeoScanning ? t('Проверяю серверы — до двух минут, можно уйти с экрана') : dnsGeoSummary(), on: 'dnsGeoScan()'})];
+    sub: dnsGeoScanning ? t('Проверяю серверы — до двух минут, можно уйти с экрана') : (at ? t('Проверено {0}', at) + ' · ' : '') + dnsGeoSummary(), on: 'dnsGeoScan()'})];
+  const chk = +st.geo_checked || 0;
+  if(chk){
+    const any = +st.geo_any || 0, net = +st.geo_netby || 0, none = +st.geo_none || 0;
+    rows.push(settingsRow({icon: 'info', title: t('Обходится {0} из {1} доменов', fmtCount(any + net), fmtCount(chk)),
+      sub: [none ? t('не обходит никто: {0}', fmtCount(none)) : t('обходятся все'), net ? t('сам DNS сети обходит: {0}', fmtCount(net)) : ''].filter(Boolean).join(' · '),
+      on: 'dnsGeoStatsInfo()'}));
+  }
+  rows.push(settingsRow({icon: 'search', title: 'Проверить домен', sub: t('Обходит ли его сейчас какой-нибудь сервер и через какой он идёт'), on: 'dnsGeoDomainCheck()'}));
+  const groups = dnsGeoGroups();
+  if(groups.length) rows.push(settingsRow({icon: 'apps', title: 'Группы', on: 'dnsGeoGroupsInfo()',
+    sub: groups.map(g => dnsGeoGroupName(g.id) + ' — ' + (g.server === '-' ? t('DNS сети') : dnsGeoSvcOf(g.server))).join(' · ')}));
   const list = dnsGeoServices().sort((a, b) => (!!b.best - !!a.best) || (b.dom - a.dom)
     || ((b.best && b.best.proxy) - (a.best && a.best.proxy)) || ((a.best && a.best.ms) - (b.best && b.best.ms)));
+  setHTML('dns-geo', rows.join(''), false);
+  const srv = [];
   list.forEach(s => {
     const r = s.best;
-    const role = s.off ? t('отключён вручную') : s.down ? t('на паузе: прокси здесь не открывается') : s.pool ? t('в пуле') : s.dom ? t('доменов: {0}', fmtCount(s.dom)) : '';
+    const tags = s.off ? [t('отключён вручную')] : s.down ? [t('на паузе: прокси здесь не открывается')]
+      : [].concat(s.main ? [t('основной')] : [], s.groups.length ? [t(s.groups.length > 1 ? 'группы {0}' : 'группа {0}', s.groups.join(', '))] : []);
     const sub = s.off && !r ? t('отключён вручную')
       : !s.rows.length ? t('ещё не проверялся')
       : !r ? t('не отвечает')
-      : [t('{0} мс', r.ms), t('обходит {0} из {1}', fmtCount(r.proxy), fmtCount(r.total))].concat(r.proto === 'https' ? ['DoH'] : [],
-        dnsGeoFlaky(r.host) ? [t('через раз')] : [], s.hosts.length > 1 ? [t('работают {0} из {1}', s.ok.length, s.hosts.length)] : [],
-        role ? [role] : []).join(' · ');
-    rows.push('<div class="list-item two-line clickable state" role="button" tabindex="0" onclick="dnsGeoServerInfo(' + jsArg(s.name) + ')">' +
-      '<span class="li-icon">' + icon(s.off ? 'pause' : r ? (s.pool || s.dom ? 'check' : 'dns') : s.rows.length ? 'error' : 'dns', 's24') + '</span>' +
+      : [t('обходит {0} из {1}', fmtCount(r.proxy), fmtCount(r.total)), t('{0} мс', r.ms)].concat(r.proto === 'https' ? ['DoH'] : [],
+        dnsGeoFlaky(r.host) ? [t('через раз')] : [], s.dom && !s.off && !s.down ? [t('идёт доменов: {0}', fmtCount(s.dom))] : [], tags).join(' · ');
+    srv.push('<div class="list-item two-line clickable state" role="button" tabindex="0" onclick="dnsGeoServerInfo(' + jsArg(s.name) + ')">' +
+      '<span class="li-icon">' + icon(s.off || s.down ? 'pause' : r ? (s.dom ? 'check' : 'dns') : s.rows.length ? 'error' : 'dns', 's24') + '</span>' +
       '<span class="li-text"><span class="li-primary truncate">' + esc(s.name) + '</span>' +
-      '<span class="li-secondary truncate">' + esc(sub) + '</span></span></div>');
+      '<span class="li-secondary">' + esc(sub) + '</span></span></div>');
   });
+  $('dns-geo-srv-head').hidden = !srv.length;
+  setHTML('dns-geo-srv', srv.join(''), false);
   const n = +st.geo_domains || 0;
-  rows.push(settingsRow({icon: 'list', title: 'Список сервисов', sub: t('geoblock.list · доменов: {0}', fmtCount(n)),
-    on: "openSlideEditor('list', 'geoblock')", chevron: true}));
-  rows.push(settingsRow({icon: 'download', title: 'Обновить список', sub: t('itdoginfo, v2fly и GeoHide, ваши домены останутся'), on: 'dnsGeoUpdate()'}));
-  setHTML('dns-geo', rows.join(''), false);
+  setHTML('dns-geo-list', settingsRow({icon: 'list', title: 'Список сервисов', sub: t('geoblock.list · доменов: {0}', fmtCount(n)),
+    on: "openSlideEditor('list', 'geoblock')", chevron: true}) +
+    settingsRow({icon: 'download', title: 'Обновить список', sub: t('itdoginfo, v2fly и GeoHide, ваши домены останутся'), on: 'dnsGeoUpdate()'}), false);
 }
+/* Сводка — что значат числа */
+function dnsGeoStatsInfo(){
+  const st = dnsSt.status || {}, pool = dnsGeoPool();
+  const lines = [t('Проверено доменов: {0}', fmtCount(+st.geo_checked || 0)),
+    t('Их обходит хотя бы один сервер: {0}', fmtCount(+st.geo_any || 0))]
+    .concat(+st.geo_netby ? [t('Обходит сам DNS сети (например, роутер): {0}', fmtCount(+st.geo_netby))] : [],
+      [t('Не обходит никто: {0} — они идут через DNS сети', fmtCount(+st.geo_none || 0)), '',
+       pool.length ? t('Основной сервер — {0}: через него идут все домены списка, у которых нет своего маршрута. Группы (Google, OpenAI…) и сайты, которые основной не обходит, идут через свои серверы.', pool.map(dnsGeoSvcOf).join(', ')) : t('Проверки ещё не было — до неё домены идут через bezmezhau.')]);
+  mdDialog({title: t('Обход геоблока'), text: lines.join('\n'), icon: false, cancel: false, ok: t('Закрыть')});
+}
+/* Группы: какой сервер у каждой и зачем это */
+function dnsGeoGroupsInfo(){
+  const lines = dnsGeoGroups().map(g => dnsGeoGroupName(g.id) + ' — ' + (g.server === '-' ? t('DNS сети (сеть сама обходит)') : dnsGeoSvcOf(g.server) + ' (' + g.server + ')'));
+  lines.push('', t('Все домены группы идут через один сервер — у сервиса один адрес выхода. Сервер группы меняется, только если перестал обходить её домены.'));
+  mdDialog({title: t('Группы'), text: lines.join('\n'), icon: false, cancel: false, ok: t('Закрыть')});
+}
+/* Проверка одного домена: в списке ли, кто его здесь обходит, куда он идёт */
+async function dnsGeoDomainCheck(){
+  const d = await mdPrompt(t('Проверить домен'), '', dnsGeoLastDomain || '', t('Домен или адрес сайта'), {ok: t('Проверить'), inputmode: 'url'});
+  if(!d) return;
+  dnsGeoLastDomain = d;
+  const r = await withBusy(['dns-geo-domain', d], 15000);
+  if(r.code){ toast(errText(r, 'Не удалось проверить')); return; }
+  const v = {}; String(r.out || '').split('\n').forEach(l => { const i = l.indexOf('='); if(i > 0) v[l.slice(0, i)] = l.slice(i + 1); });
+  const srv = (v.servers || '').split(',').filter(Boolean);
+  const names = [...new Set(srv.map(dnsGeoSvcOf))];
+  const lines = [];
+  if(!v.entry){
+    lines.push(t('Не в списке геоблока — идёт через обычный DNS, без обхода.'));
+    if(v.group) lines.push(t('Хотя относится к группе {0}: добавьте его в список, если сайт пишет, что недоступен в вашей стране.', dnsGeoGroupName(v.group)));
+  } else {
+    if(v.entry !== v.domain) lines.push(t('В списке как {0}', v.entry));
+    lines.push(v.checked !== '1' ? t('Проверка его ещё не видела — проверится при следующей полной проверке')
+      : names.length ? t('Обходят здесь: {0}', names.join(', ')) : t('Здесь его не обходит ни один сервер'));
+    const rt = dnsGeoSvcOf(v.route || '');
+    lines.push(v.via === 'group' ? t('Идёт через {0} — сервер группы {1}', rt, dnsGeoGroupName(v.group))
+      : v.via === 'own' ? t('Идёт через {0} — основной его не обходит', rt)
+      : v.via === 'pool' ? t('Идёт через {0} — основной сервер', rt)
+      : v.via === 'net' ? t('Идёт через DNS сети — обходящего сервера нет или сеть обходит сама')
+      : t('Идёт через bezmezhau — проверки ещё не было'));
+  }
+  mdDialog({title: v.domain || d, text: lines.join('\n'), icon: false, cancel: false, ok: t('Закрыть')});
+}
+let dnsGeoLastDomain = '';
 /* Что о варианте сервиса узнала проверка — строки для окна сервиса */
 function dnsGeoHostLines(host){
   const r = (dnsSt.geoscan || []).find(x => x.host === host);
@@ -324,14 +394,17 @@ function dnsGeoHostLines(host){
   const pause = dn ? [t('На паузе в этой сети: прокси {0} не открывается и через обход — сайты идут через другие серверы. Проверю снова {1}', dn.ip,
     dn.next ? new Date(dn.next * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '—')] : [];
   const dot = /^DoT:/.test(r.err) ? r.err.replace(/^DoT:\s*/, '').split(';')[0] : '';
-  return [t('Ответ за {0} мс по {1}', r.ms, r.proto === 'https' ? 'DoH' : 'DoT') + (dnsGeoPool().includes(host) ? ' · ' + t('в пуле') : '')]
+  const grp = dnsGeoGroupsOf(host), main = dnsGeoPool().includes(host);
+  return [t('Отвечает за {0} мс по {1}', r.ms, r.proto === 'https' ? 'DoH' : 'DoT')]
     .concat(r.proto === 'https' ? [t('DoT не прошёл ({0}) — работает по DoH', dnsGeoWhy(dot) || t('нет ответа'))] : [],
-      addr ? [t('Адрес: {0}', addr)] : [], pause,
-      [t('Обходит геоблок для {0} из {1} доменов списка', fmtCount(r.proxy), fmtCount(r.total)),
-        t('Из них своим адресом: {0} — для этих доменов годится любой протокол, в том числе игры', fmtCount(r.own)),
-        t('Направлено к нему доменов: {0}', fmtCount(dnsGeoFor(host)))],
-      dnsGeoFlaky(host) ? [t('Отвечает через раз: {0} из {1} подключений — в маршрутах после надёжных', ...dnsGeoTry(host))] : [],
-      +st['geo_cert_' + host] ? [t('Не прошёл проверку по факту для {0} доменов (сертификат сайта или ответ «необычный трафик», «недоступно в стране») — для них не используется', st['geo_cert_' + host])] : [],
+      [t('Обходит {0} из {1} доменов списка', fmtCount(r.proxy), fmtCount(r.total))],
+      dnsGeoFor(host) ? [t('Сейчас через него идёт доменов: {0}', fmtCount(dnsGeoFor(host)))] : [],
+      main ? [t('Основной: через него идут все домены списка без своего маршрута')] : [],
+      grp.length ? [t('Сервер групп: {0}', grp.join(', '))] : [],
+      pause,
+      dnsGeoFlaky(host) ? [t('Отвечает через раз: {0} из {1} подключений', ...dnsGeoTry(host))] : [],
+      +st['geo_cert_' + host] ? [t('Для {0} доменов его прокси не прошёл проверку (сертификат или ответ «недоступно в стране») — для них он не используется', st['geo_cert_' + host])] : [],
+      addr ? [t('Адрес: {0}', addr)] : [],
       r.err && !dot ? [r.err] : []);
 }
 /* Подробности сервиса — по нажатию: каждый его вариант (DoT, DoH, свой путь)
@@ -348,7 +421,7 @@ async function dnsGeoServerInfo(name){
     lines.push((r && r.ok ? '✓ ' : '✗ ') + (r && r.ok ? (r.proto === 'https' ? 'https://' + h + (h.includes('/') ? '' : '/dns-query') : 'tls://' + h) : h) + (dnsGeoOff(h) ? ' · ' + t('отключён вручную') : ''));
     lines = lines.concat(dnsGeoHostLines(h).map(l => '   ' + l));
   });
-  if(s.off) lines.unshift(t('Отключён вручную: в пул и маршруты не идёт'), '');
+  if(s.off) lines.unshift(t('Отключён вручную: в выбор не идёт'), '');
   if(at) lines.push('', t('Проверено {0}', at));
   // Ручное отключение: сервис, с которым сайт ведёт себя плохо (Gemini пишет
   // «необычный трафик»), — убрать из выбора, не дожидаясь проверки
@@ -490,7 +563,7 @@ function renderDns(){
   const s = dnsSt.status, on = s.enabled === '1';
   $('dns-toggle').checked = on;
   $('dns-main').classList.toggle('on', on);
-  ['dns-body', 'dns-general', 'dns-nav', 'dns-geo'].forEach(id => {
+  ['dns-body', 'dns-general', 'dns-nav', 'dns-geo', 'dns-geo-srv', 'dns-geo-list'].forEach(id => {
     $(id).classList.toggle('is-disabled', !on || !dnsLoaded);
     $(id).inert = !on || !dnsLoaded;
   });

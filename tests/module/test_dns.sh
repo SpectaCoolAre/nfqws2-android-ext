@@ -858,6 +858,39 @@ assert_contains "$st" "geo_for_zapret.example=2" "the screen learns how many dom
 assert_contains "$st" "geo_direct=1" "and how many to the network DNS"
 assert_contains "$st" "geo_intercept=1" "and that the network intercepts plain DNS"
 assert_contains "$st" "geo_who_google=93.1.1.1/8359" "with who really answered"
+# Сводка для экрана: через основной (пул) идут и домены без своего маршрута
+assert_contains "$st" "geo_for_comss.example=2" "domains going through the main server are counted, not only those with their own route"
+assert_contains "$st" "geo_for_zapret.example=2" "a group server counts its domains"
+assert_contains "$st" "geo_direct=1" "and the network DNS its own"
+assert_contains "$st" "geo_checked=4" "how many domains the check covered"
+assert_contains "$st" "geo_any=2" "how many of them at least one answering server bypasses (a dead one does not count)"
+assert_contains "$st" "geo_none=2" "and how many no one bypasses"
+echo "@openai zapret.example" > "$DNS_GEO_SCAN_DIR/groups.pin"
+assert_contains "$(dns_state)" "geo_group_openai=zapret.example" "the screen gets each group's server"
+# Проверка одного домена
+r=$(dns_geo_domain "https://Chat.ChatGPT.com/c/1")
+assert_contains "$r" "domain=chat.chatgpt.com" "a pasted address becomes a domain"
+assert_contains "$r" "entry=chatgpt.com" "it falls under its list entry"
+assert_contains "$r" "servers=zapret.example,comss.example" "who bypasses it here"
+assert_contains "$r" "route=zapret.example" "where it goes now"
+assert_contains "$r" "via=group" "and why: its group"
+assert_contains "$r" "group=openai" "which group"
+r=$(dns_geo_domain clashofclans.com)
+assert_contains "$r" "group=supercell" "a Supercell game is in its group"
+assert_contains "$r" "route=comss.example" "and goes to the group's server"
+r=$(dns_geo_domain gone.example)
+assert_contains "$r" "entry=" "a domain outside the list"
+assert_contains "$r" "via=none" "goes to the network DNS as it is"
+printf 'gone.example\n' >> "$DNS_GEO_LIST"
+r=$(dns_geo_domain gone.example)
+assert_contains "$r" "servers=" "only a dead server bypasses it — no one here"
+assert_contains "$r" "route=comss.example" "it goes to the main server"
+assert_contains "$r" "via=pool" "as one without its own route"
+r=$(dns_geo_domain intel.com)
+assert_contains "$r" "via=net" "no one bypasses it — the network DNS"
+ctl dns-geo-domain 'bad domain'
+assert_rc 1 "$ctl_rc" "a bad domain is refused"
+rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
 assert_not_contains "$(printf '%s\n' "$st" | sed -n '/^#geoscan/,/^#/p')" "=chatgpt.com" "route lines stay out of the server list"
 # Частая проверка: домены списка, которыми пользуются, — раз в полчаса;
 # полная — раз в 4 часа; в спячке — ни та ни другая

@@ -151,6 +151,67 @@ dns_geo_off_eff() {
   mv -f "$e.$$" "$e"
   echo "$e"
 }
+# Сводка для экрана: куда сейчас идёт каждый домен проверки и сколько их
+# обходит хоть один сервер. geo_for_<сервер> — доменов через него, считая и
+# основной (пул: домены без своего маршрута); geo_direct — в DNS сети;
+# geo_checked — доменов в проверке; geo_any — их обходит хоть один сервер
+# (не на паузе и не отключённый); geo_netby — обходит сам DNS сети (роутер);
+# geo_none — не обходит никто
+dns_geo_stats() {
+  local f off pool r="$DNS_RUN_DIR/geo-routes.st.$$"
+  f=$(dns_geo_scan_file); [ -s "$f" ] || return 0
+  off=$(dns_geo_off_eff); pool=$(dns_geo_pick)
+  dns_geo_routes > "$r" 2>/dev/null
+  awk -F'\t' -v rf="$r" -v of="$off" -v pool="$pool" '
+    BEGIN { while ((getline l < rf) > 0) { split(l, a, "\t"); rt[a[1]] = a[2] }
+      while ((getline l < of) > 0) o[l] = 1 }
+    !/^[#=+!?]/ && $2 == "ok" { ok[$1] = 1; next }
+    /^=/ { d = substr($1, 2); if (d in seen) next; seen[d] = 1; chk++
+      any = 0; m = split($2, sv, ","); for (i = 1; i <= m; i++) if ((sv[i] in ok) && !(sv[i] in o)) any = 1
+      if ($3 == "net") netby++; else if (any) by++; else none++
+      x = (d in rt) ? rt[d] : pool
+      if (x == "-") direct++; else if (x != "") n[x]++ }
+    END {
+      for (d in rt) if (!(d in seen)) { if (rt[d] == "-") direct++; else n[rt[d]]++ }
+      for (h in n) print "geo_for_" h "=" n[h]
+      print "geo_direct=" direct + 0; print "geo_checked=" chk + 0
+      print "geo_any=" by + 0; print "geo_netby=" netby + 0; print "geo_none=" none + 0 }' "$f"
+  rm -f "$r"
+}
+# Проверка одного домена: в списке ли он, кто его здесь обходит, куда идёт
+# сейчас и к какой группе относится. -> ключ=значение:
+#   domain, entry (запись списка, под которую подпал; пусто — не в списке),
+#   servers (обходят по проверке, через запятую), route (сервер; «-» — DNS
+#   сети), via (group|own|pool|net|none), group, checked (есть ли в проверке)
+dns_geo_domain() { # <домен или адрес сайта>
+  local d f e line off pool rt g gs via
+  d=$(printf '%s' "$1" | tr 'A-Z' 'a-z' | sed 's#^[a-z]*://##; s#/.*##; s#:.*##; s#^\*\.##; s#\.$##')
+  case "$d" in ''|*[!a-z0-9.-]*) echo "Неверный домен" >&2; return 1 ;; esac
+  echo "domain=$d"
+  e=$(tr -d '\r' < "$DNS_GEO_LIST" 2>/dev/null | tr 'A-Z' 'a-z' | awk -v d="$d" '
+    { sub(/[[:space:]]*#.*/, ""); gsub(/[[:space:]]/, "") }
+    $0 != "" && (d == $0 || substr(d, length(d) - length($0)) == "." $0) && length($0) > length(b) { b = $0 }
+    END { print b }')
+  echo "entry=$e"
+  g=$(tr -d '\r' < "$DNS_GEO_GROUPS" 2>/dev/null | tr 'A-Z' 'a-z' | awk -v d="$d" '
+    { sub(/#.*/, "") } NF >= 2 { for (i = 2; i <= NF; i++) if (d == $i || substr(d, length(d) - length($i)) == "." $i) { print $1; exit } }')
+  echo "group=$g"
+  [ -n "$e" ] || { echo "via=none"; return 0; }
+  f=$(dns_geo_scan_file)
+  line=$(cat "$f.hot" "$f" 2>/dev/null | awk -F'\t' -v k="=$e" '$1 == k { print; exit }')
+  off=$(dns_geo_off_eff); pool=$(dns_geo_pick)
+  echo "checked=$([ -n "$line" ] && echo 1 || echo 0)"
+  echo "servers=$(printf '%s\n' "$line" | awk -F'\t' -v of="$off" -v sf="$f" 'BEGIN { while ((getline l < of) > 0) o[l] = 1
+      while ((getline l < sf) > 0) { split(l, a, "\t"); if (l !~ /^[#=+!?]/ && a[2] == "ok") ok[a[1]] = 1 } }
+    { m = split($2, sv, ","); for (i = 1; i <= m; i++) if ((sv[i] in ok) && !(sv[i] in o)) printf "%s%s", (k++ ? "," : ""), sv[i] }')"
+  rt=$(dns_geo_routes | awk -F'\t' -v d="$e" '$1 == d { print $2; exit }')
+  gs=""; [ -n "$g" ] && gs=$(awk -v k="@$g" '$1 == k { print $2; exit }' "$DNS_GEO_SCAN_DIR/groups.pin" 2>/dev/null)
+  if [ -n "$rt" ]; then
+    if [ "$rt" = "-" ]; then via=net; elif [ -n "$g" ]; then via=group; else via=own; fi
+  else rt="$pool"; via=pool; [ -n "$rt" ] || via=fallback
+  fi
+  echo "route=$rt"; echo "via=$via"
+}
 dns_geo_servers() {
   local h; h=$(dns_geo_pick_up | tr '\n' ' ' | sed 's/ $//')
   echo "${h:-$DNS_GEO_FALLBACK}"
@@ -1685,8 +1746,9 @@ dns_state() {
   # и кто ответил на каждый: geo_who_<net|google|cloudflare>=адрес/AS
   awk -F'\t' '/^\?whoami/ { for (i = 2; i <= NF; i++) if ($i ~ /^intercept=/) print "geo_" $i; else print "geo_who_" $i }' "$f" 2>/dev/null
   cat "$f" "$f.hot" 2>/dev/null | awk -F'\t' '/^!/ { h = substr($1, 2); t[h] = $2; c[h] = $3; if ($4 != "") a[h] = $4 } END { for (h in t) print "geo_try_" h "=" t[h] "\ngeo_cert_" h "=" c[h]; for (h in a) print "geo_addr_" h "=" a[h] }'
-  # маршруты: geo_for_<сервер>=сколько доменов к нему идёт, geo_direct — в DNS сети
-  dns_geo_routes | awk -F'\t' '$2 == "-" { net++; next } { n[$2]++ } END { for (h in n) print "geo_for_" h "=" n[h]; print "geo_direct=" net + 0 }'
+  dns_geo_stats
+  # группы сайтов и их серверы: geo_group_<группа>=сервер («-» — DNS сети)
+  awk '$1 ~ /^@/ && NF >= 2 { print "geo_group_" substr($1, 2) "=" $2 }' "$DNS_GEO_SCAN_DIR/groups.pin" 2>/dev/null
   echo "geo_domains=$(dns_geo_count)"
   dns_geo_overlap | while read -r id n; do echo "geo_overlap_$id=$n"; done
   echo "geo_updated=$(cat "$DNS_DIR/geo_updated" 2>/dev/null)"
@@ -1827,6 +1889,7 @@ dns_ctl() {
       [ -s "$DNS_GEO_OFF" ] || rm -f "$DNS_GEO_OFF"
       dns_geo_pin_save; dns_apply_now
       echo OK ;;
+    dns-geo-domain) dns_geo_domain "$1" ;;
     dns-geo-update)
       dns_cool "$(cat "$DNS_DIR/geo_updated" 2>/dev/null)" "$DNS_GEO_UPD_COOL" || return 3
       n=$(dns_geo_update) || { echo "Не удалось скачать список — старый оставлен" >&2; return 1; }; dns_apply_now; echo "$n" ;;
