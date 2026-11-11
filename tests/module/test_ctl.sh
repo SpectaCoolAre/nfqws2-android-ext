@@ -786,6 +786,16 @@ echo 198.51.100.3 >> "$IPSET_AUTO"; ctl geo-ipcheck
 assert_rc 0 "$ctl_rc" "and a third"
 assert_eq "203.0.113.10" "$(cat "$IPSET_AUTO")" "an address left by an earlier version, where the bypass does not help, is dropped too"
 assert_contains "$(_startup_args)" "--ipset=$IPSET_AUTO" "nfqws2 gets the list as an IP list of the strategy"
+# метка прерванной проверки (старше 15 минут) не мешает следующей
+mkdir -p "$STATE_DIR/geo-ipcheck.lock"; touch -d '@'"$(( $(date +%s) - 1200 ))" "$STATE_DIR/geo-ipcheck.lock"
+kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; fakesvc=$(fake_daemon "$PIDFILE")
+ctl geo-ipcheck
+assert_rc 0 "$ctl_rc" "a lock left by an interrupted check does not block the next one forever"
+mkdir -p "$STATE_DIR/geo-ipcheck.lock"
+kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; fakesvc=$(fake_daemon "$PIDFILE")
+ctl geo-ipcheck
+assert_rc 3 "$ctl_rc" "a fresh one still means a check is running"
+rmdir "$STATE_DIR/geo-ipcheck.lock"
 # Пауза: прокси сервера здесь не открывается и через обход — сервер на паузе
 # в этой сети (11.11: wlrus и bezmezhau в одном районе, дома открываются)
 echo 35 > "$MOCK_DIR/via.203.0.113.10"

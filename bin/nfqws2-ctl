@@ -1221,6 +1221,10 @@ cmd_geo_ipcheck() { # [quick]
   fi
   tool=$(probe_tool); bin="${tool#* }"
   [ "${tool%% *}" = curl ] || { echo "Нужен curl" >&2; return 1; }
+  # прерванная проверка (служба остановлена, телефон перезагружен) оставляла
+  # метку навсегда, и все следующие молча отказывались: проверка идёт минуты,
+  # метка старше 15 минут — от прерванной
+  [ -n "$(find "$STATE_DIR/geo-ipcheck.lock" -maxdepth 0 -mmin +15 2>/dev/null)" ] && rmdir "$STATE_DIR/geo-ipcheck.lock" 2>/dev/null
   mkdir "$STATE_DIR/geo-ipcheck.lock" 2>/dev/null || { echo "Проверка адресов уже идёт" >&2; return 3; }
   trap 'rmdir "$STATE_DIR/geo-ipcheck.lock" 2>/dev/null; cleanup_probe_app_rule' EXIT INT TERM
   setup_probe_app_rule

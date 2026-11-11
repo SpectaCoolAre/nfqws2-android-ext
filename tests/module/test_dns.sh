@@ -381,6 +381,15 @@ pid=$(cat "$DNS_PIDFILE"); kill "$pid"; sleep 0.3
 dns_check
 kill -0 "$(cat "$DNS_PIDFILE" 2>/dev/null)" 2>/dev/null
 assert_rc 0 $? "a lock left by a dead process is taken over"
+# владелец жив, но держит больше минуты — завис (11.11: 11 минут без
+# перезапусков, и при смене сети dnsproxy остался с DNS прежней)
+sleep 600 & holder=$!
+mkdir -p "$DNS_LOCK"; echo "$holder" > "$DNS_LOCK/pid"; touch -d '@'"$(( $(date +%s) - 90 ))" "$DNS_LOCK"
+dns_start "тест"
+assert_rc 0 $? "a start takes over a lock held for over a minute by a hung process"
+kill -0 "$holder" 2>/dev/null; assert_rc 1 $? "and stops the hung one"
+assert_contains "$(tail -n 8 "$DNS_LOG")" "прежний запуск DNS (PID $holder) завис" "the DNS log says so"
+wait "$holder" 2>/dev/null
 
 # Работающий dnsproxy этого модуля, а PID-файл указывает не на него (так
 # было после загрузки: watchdog счёл живой процесс упавшим) — не перезапуск

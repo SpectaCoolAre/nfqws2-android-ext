@@ -999,6 +999,14 @@ dns_lock() { # [0 — не ждать]
     if [ -z "$owner" ] && [ "$i" -ge 5 ]; then
       rm -rf "$DNS_LOCK"; continue
     fi
+    # владелец жив, но держит дольше минуты — завис (11.11: запуск висел 11
+    # минут, и все перезапуски, даже при смене сети, пропускались — dnsproxy
+    # остался с DNS прежней сети). Запуск DNS занимает секунды: снимаем
+    if [ -n "$owner" ] && [ -n "$(find "$DNS_LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+      dns_log "прежний запуск DNS (PID $owner) завис больше чем на минуту — снимаю его"
+      kill -TERM "$owner" 2>/dev/null; sleep 0.3; [ -d "/proc/$owner" ] && kill -KILL "$owner" 2>/dev/null
+      rm -rf "$DNS_LOCK"; continue
+    fi
     [ "$1" = 0 ] && return 1
     # ~15 с: запуск dnsproxy ждёт порт до 4 с, плюс iptables
     i=$((i + 1)); [ "$i" -ge 75 ] && return 1
@@ -1706,7 +1714,11 @@ dns_route() { # <домен>
 }
 
 # ---------------------------------------------------------------- состояние для WebUI
-dns_private_mode() { settings get global private_dns_mode 2>/dev/null | tr -d '\r\n '; }
+# settings — java-процесс: на занятой системе отвечает долго; не дольше 5 с
+dns_private_mode() {
+  if command -v timeout >/dev/null 2>&1; then timeout 5 settings get global private_dns_mode 2>/dev/null
+  else settings get global private_dns_mode 2>/dev/null; fi | tr -d '\r\n '
+}
 
 dns_hits() {
   iptables -w -t nat -L $DNS_CHAIN -v -n -x 2>/dev/null | awk '/REDIRECT/ { s += $1 } END { print s + 0 }'
