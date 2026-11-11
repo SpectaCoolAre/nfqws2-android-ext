@@ -32,12 +32,18 @@
 #splash { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; pointer-events: none;
   background: #f7f7f7; transition: opacity 260ms ease, visibility 0s linear 260ms; }
 html.sp-dark #splash { background: #000; }
-html.sp-m3 #splash { background: #fdf8fd; }
-html.sp-m3.sp-dark #splash { background: #141218; }
-/* значок модуля: белый логотип в синем круге, как у названия на главной */
+html.sp-m3 #splash { background: var(--sp-bg, #fdf8fd); }
+html.sp-m3.sp-dark #splash { background: var(--sp-bg, #141218); }
+/* значок модуля: логотип в круге — в HyperOS белый на синем, как у названия
+   на главной; в Material — цвета темы (primary и on-primary), сохранённые при
+   прошлом запуске. Логотип — встроенный символ #i-n2 (как в шапке), а не
+   <img>: картинка грузится отдельно, и <img> с фильтром на первых кадрах
+   оставлял серый прямоугольник */
 #splash .sp-ic { display: grid; place-items: center; width: 104px; height: 104px; border-radius: 50%; background: #3482ff;
   box-shadow: 0 10px 30px rgb(52 130 255 / .35); animation: sp-in 520ms cubic-bezier(.2, .9, .3, 1.15) both; }
-#splash img { width: 70px; height: 70px; filter: invert(1); }
+html.sp-m3 #splash .sp-ic { background: var(--sp-p, #3482ff); box-shadow: none; }
+#splash .sp-logo { width: 70px; height: 70px; fill: #fff; display: block; }
+html.sp-m3 #splash .sp-logo { fill: var(--sp-op, #fff); }
 #splash.out { opacity: 0; visibility: hidden; }
 #splash.out .sp-ic { transform: scale(1.18); transition: transform 260ms cubic-bezier(.3, 0, .8, .15); }
 @keyframes sp-in { from { opacity: 0; transform: scale(.62); } to { opacity: 1; transform: none; } }
@@ -46,13 +52,18 @@ html.sp-m3.sp-dark #splash { background: #141218; }
 <script>
 (function(){ try {
   var m = localStorage.getItem('m3_mode') || 'auto', h = document.documentElement;
-  if(m === 'dark' || (m === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches)) h.classList.add('sp-dark');
-  if(localStorage.getItem('ui_design') !== 'miuix') h.classList.add('sp-m3');
+  var dark = m === 'dark' || (m === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+  if(dark) h.classList.add('sp-dark');
+  if(localStorage.getItem('ui_design') !== 'miuix'){
+    h.classList.add('sp-m3');
+    var c = JSON.parse(localStorage.getItem('sp_m3_' + (dark ? 'dark' : 'light')) || 'null');
+    if(c){ h.style.setProperty('--sp-p', c.p); h.style.setProperty('--sp-op', c.op); h.style.setProperty('--sp-bg', c.bg); }
+  }
 } catch(e) {} })();
 </script>
 </head>
 <body>
-<div id="splash" aria-hidden="true"><span class="sp-ic"><img src="icon.svg?v=2.0.8" alt=""></span></div>
+<div id="splash" aria-hidden="true"><span class="sp-ic"><svg class="sp-logo" viewBox="0 0 512 512" aria-hidden="true"><use href="#i-n2"/></svg></span></div>
 <!-- ═══ Иконки: Material Symbols Outlined, инлайновый спрайт 24dp ═══════
      path-данные из google/material-design-icons
      (symbols/web/<name>/materialsymbolsoutlined/<name>_24px.svg).

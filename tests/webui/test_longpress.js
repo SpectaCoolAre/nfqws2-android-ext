@@ -180,6 +180,30 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   // папка постоянная — экспорт идёт сразу, без вопроса о пути
   eq(1, await calls("'export-logs'"), 'by default it exports them, without asking for a folder');
   eq(false, await page.evaluate(() => $('dialog-wrap').classList.contains('open')), 'no folder dialog');
+  // гонка с долгим нажатием самой системы: WebView присылает pointercancel
+  // раньше нашего таймера, затем contextmenu — экспорт всё равно один раз
+  await page.evaluate(async () => {
+    const b = $('logs-btn'), r = b.getBoundingClientRect();
+    const o = {bubbles: true, pointerType: 'touch', isPrimary: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2};
+    b.dispatchEvent(new PointerEvent('pointerdown', o));
+    await new Promise(z => setTimeout(z, 420));
+    b.dispatchEvent(new PointerEvent('pointercancel', o));
+    b.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true, clientX: o.clientX, clientY: o.clientY}));
+    await new Promise(z => setTimeout(z, 300));
+  });
+  eq(2, await calls("'export-logs'"), 'the system long press that cancels the touch still exports, once');
+  await page.waitForTimeout(400);
+  await page.evaluate(async () => {
+    const b = $('logs-btn'), r = b.getBoundingClientRect();
+    const o = {bubbles: true, pointerType: 'touch', isPrimary: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2};
+    b.dispatchEvent(new PointerEvent('pointerdown', o));
+    await new Promise(z => setTimeout(z, 100));
+    b.dispatchEvent(new PointerEvent('pointercancel', o));
+    b.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true}));
+    await new Promise(z => setTimeout(z, 600));
+  });
+  eq(2, await calls("'export-logs'"), 'a short touch the system cancels does not');
+  await closeAll(); await page.waitForTimeout(300);
   await page.click('#logs-btn'); await page.waitForTimeout(600);
   eq('logs', await cur(), 'a tap still opens the logs');
   // экспорт, очистка и настройки — в верхней панели, без пролистывания сводки

@@ -156,6 +156,11 @@ svg.icon.s24 { width: 24px; height: 24px; }
 :where(button, a, input, select, textarea, label.clickable, [tabindex]):focus-visible {
   outline: 3px solid var(--md-sys-color-secondary); outline-offset: 2px;
 }
+/* Окна и шторки получают фокус программно (tabindex="-1"), чтобы экранный
+   диктор начал с них. При первом запуске «Что нового» открывается до первого
+   касания, браузер считает фокус клавиатурным и обводил окно цветом темы —
+   у контейнера фокуса обводки нет, она нужна только элементам внутри */
+[tabindex="-1"]:focus-visible { outline: none; }
 .switch:focus-visible {
   outline: 3px solid var(--md-sys-color-secondary); outline-offset: 2px; border-radius: var(--shape-full);
 }

@@ -305,6 +305,17 @@ sect('file pickers');
 const smartImp = (html.match(/<input[^>]*id="smart-imp"[^>]*>/) || [''])[0];
 truthy(smartImp && !/accept=/.test(smartImp), 'learned-data import takes any file (the content is checked by ctl)');
 
+sect('opening splash');
+const splash = (html.match(/<div id="splash"[\s\S]*?<\/div>/) || [''])[0];
+truthy(splash && !/<img/.test(splash), 'the splash logo is not an <img> (an undecoded image left a grey box for a few frames)');
+truthy(/<svg class="sp-logo"[^>]*><use href="#i-n2"\/><\/svg>/.test(splash), 'it is the inline logo symbol: nothing to load, coloured by the theme');
+truthy(/html\.sp-m3 #splash \.sp-ic \{[^}]*var\(--sp-p/.test(html), 'in Material the circle takes the theme colour saved last time');
+truthy(/store\.set\('sp_m3_'/.test(fs.readFileSync(path.join(WEBROOT, 'js', 'theme.js'), 'utf8')), 'and the theme saves it for the next start');
+
+sect('programmatic focus');
+const baseCss = fs.readFileSync(path.join(WEBROOT, 'css', 'base.css'), 'utf8');
+truthy(/\[tabindex="-1"\]:focus-visible \{ outline: none; \}/.test(baseCss), 'sheets and dialogs focused by script get no theme-coloured ring (seen on the first «What’s new»)');
+
 if (failures.length === 0) {
   process.stdout.write(`PASS  ${pass} checks\n`);
   process.exit(0);

@@ -415,6 +415,9 @@ function applyTheme(skipUI){
   document.documentElement.setAttribute('data-mx-tex', look.tex ? '1' : '0');
   document.documentElement.setAttribute('data-mx-glass', look.glass ? '1' : '0');
   document.documentElement.setAttribute('data-mx-aurora', look.aurora ? '1' : '0');
+  // цвета заставки для следующего запуска (Material): круг — primary, логотип —
+  // on-primary, фон — фон темы; для светлой и тёмной — свои
+  if(!MX) store.set('sp_m3_' + (dark ? 'dark' : 'light'), JSON.stringify({p: R.primary, op: R.onPrimary, bg: R.background}));
   if(!skipUI) drawThemeUI();
 }
 const mxLook = () => {

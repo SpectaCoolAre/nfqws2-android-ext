@@ -454,11 +454,22 @@ const longCancels = [];
 document.addEventListener('visibilitychange', () => longCancels.forEach(c => c()));
 function onLongPress(root, sel, fn){
   if(!root) return;
-  let tm = 0, x0 = 0, y0 = 0;
+  let tm = 0, x0 = 0, y0 = 0, armed = null;
   const cancel = () => { clearTimeout(tm); tm = 0; };
-  longCancels.push(cancel);
+  longCancels.push(() => { cancel(); armed = null; });
+  // Сработать один раз за касание: по своему таймеру или по долгому нажатию
+  // самой системы (contextmenu), смотря что раньше. WebView Android считает
+  // долгое нажатие примерно за те же 500 мс и, успев первым, присылал
+  // pointercancel — таймер снимался, и удержание приходилось повторять
+  const fire = () => {
+    const a = armed; armed = null; cancel();
+    if(!a || !a.el.isConnected || currentPage !== a.page || document.hidden) return;
+    longGuard = {el: a.el, at: performance.now()};
+    document.querySelectorAll('.ripple').forEach(r => r.remove());
+    fn(a.el);
+  };
   root.addEventListener('pointerdown', e => {
-    cancel();
+    cancel(); armed = null;
     longGuard = null;
     if(e.pointerType === 'mouse' && e.button !== 0) return;
     const el = sel ? e.target.closest(sel) : root;
@@ -470,18 +481,20 @@ function onLongPress(root, sel, fn){
     // pointercancel, и таймер снимается
     if(e.pointerType !== 'mouse' && inGestureZone(e.clientX, e.clientY, true)) return;
     x0 = e.clientX; y0 = e.clientY;
-    const page = currentPage;
-    tm = setTimeout(() => {
-      tm = 0;
-      if(!el.isConnected || currentPage !== page || document.hidden) return;
-      longGuard = {el, at: performance.now()};
-      document.querySelectorAll('.ripple').forEach(r => r.remove());
-      fn(el);
-    }, 500);
+    armed = {el, page: currentPage, at: performance.now()};
+    tm = setTimeout(fire, 500);
   });
-  root.addEventListener('pointermove', e => { if(tm && Math.hypot(e.clientX - x0, e.clientY - y0) > 10) cancel(); });
-  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => root.addEventListener(ev, cancel));
-  root.addEventListener('contextmenu', e => { if(!sel || e.target.closest(sel)) e.preventDefault(); });
+  root.addEventListener('pointermove', e => { if(armed && Math.hypot(e.clientX - x0, e.clientY - y0) > 10){ cancel(); armed = null; } });
+  // отпустили или увели палец — касание окончено; pointercancel — нет:
+  // за ним может прийти долгое нажатие системы
+  ['pointerup', 'pointerleave'].forEach(ev => root.addEventListener(ev, () => { cancel(); armed = null; }));
+  root.addEventListener('pointercancel', () => { cancel(); if(armed) setTimeout(() => { armed = null; }, 300); });
+  root.addEventListener('contextmenu', e => {
+    if(sel && !e.target.closest(sel)) return;
+    e.preventDefault();
+    // долгое нажатие системы — то же касание, если пальцем держали не меньше 300 мс
+    if(armed && performance.now() - armed.at >= 300) fire();
+  });
 }
 
 /* ── Индикатор занятости (linear progress под app bar) ─────────────────── */
