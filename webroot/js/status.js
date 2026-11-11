@@ -299,10 +299,9 @@ const SW = [
   ['ENABLE_HOTSPOT', 'Точка доступа с nfqws2', 'enable_hotspot']
 ];
 // Меняют аргументы nfqws2 — служба перезапускается сама, без вопроса
-const RESTART_KEYS = {CALLS_BYPASS: 1};
+const RESTART_KEYS = {};
 const DEV_SW = [
   ['META_QUIC_REJECT', 'Отказ QUIC для Instagram', 'meta_quic'],
-  ['CALLS_BYPASS', 'Обход звонков (не тестировалось)', 'calls_bypass'],
   ['WL_PAUSE', 'Отключать при белых списках', 'wl_pause'],
   ['SMART_POOL', 'Расширенный пул умного режима', 'smart_pool'],
   ['PUSH_FIX', 'Вылечить уведомления (пульс Google в мобильной сети)', 'push_fix']

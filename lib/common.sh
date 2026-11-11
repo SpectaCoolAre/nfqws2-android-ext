@@ -126,9 +126,7 @@ set_defaults() {
   : "${HOME_WIFI:=0}"
   : "${VPN_PAUSE:=0}"
   : "${ENABLE_HOTSPOT:=1}"
-  : "${DOH_BYPASS:=0}"
   : "${META_QUIC_REJECT:=1}"
-  : "${CALLS_BYPASS:=0}"
   : "${DNS_PUSH:=1}"
   : "${DNS_SMART:=1}"
   : "${DNS_GEO:=1}"
@@ -463,14 +461,6 @@ app_rules() {
 }
 
 
-# Профиль звонков с подставленными сетями Meta и Telegram
-calls_args() {
-  local m t
-  m=$(printf '%s' "$META_NET4 $META_NET6" | tr ' ' ',')
-  t=$(printf '%s' "$TG_NET4 $TG_NET6" | tr ' ' ',')
-  norm_args "$(sed -e "s#@META@#$m#g" -e "s#@TG@#$t#g" "$MODDIR/defaults/calls-bypass.conf")"
-}
-
 # Добавить порты или диапазоны (a:b) в список для iptables. То, что новый
 # диапазон покрывает целиком, из списка уходит: multiport берёт не больше 15
 # портов (диапазон — за два), и лишние записи переполнили бы правило.
@@ -551,14 +541,6 @@ _startup_args() {
   fi
 
   args="$args $base $(exclude_profiles)"
-  # Обход блокировки DoT/DoH — первым профилем, чтобы его не перехватила стратегия
-  if [ "$DOH_BYPASS" = "1" ] && [ -f "$MODDIR/defaults/doh-bypass.conf" ]; then
-    args="$args --blob=doh_tls:@$BLOBS_DIR/tls_clienthello.bin $(norm_args "$(cat "$MODDIR/defaults/doh-bypass.conf")") --new"
-  fi
-  # Обход звонков — так же, до стратегии
-  if [ "$CALLS_BYPASS" = "1" ] && [ -f "$MODDIR/defaults/calls-bypass.conf" ]; then
-    args="$args --blob=calls_stun:@$BLOBS_DIR/stun.bin --blob=calls_tls:@$BLOBS_DIR/tls_clienthello.bin $(calls_args) --new"
-  fi
   [ -n "$custom" ] && args="$args $custom --new"
   [ -n "$udp" ] && args="$args $udp --new"
 
@@ -1006,17 +988,6 @@ _firewall_start() {
   IPT_TCP_PORTS=$(printf '%s' "$TCP_PORTS" | tr '-' ':')
   IPT_UDP_EFF=$(printf '%s' "$UDP_PORTS" | tr '-' ':')
   [ "$BLOCK_QUIC" = "1" ] && IPT_UDP_EFF=$(port_list_without "$IPT_UDP_EFF" 443)
-  # DoT (853) нужен в очереди, только когда включён обход блокировки DoT/DoH
-  if [ "$DOH_BYPASS" = "1" ]; then
-    IPT_TCP_PORTS=$(port_list_add "$IPT_TCP_PORTS" 853)
-    IPT_UDP_EFF=$(port_list_add "$IPT_UDP_EFF" 853)
-  fi
-  # Звонки: ретрансляторы WhatsApp (3478, 3482) и Telegram (590–600, 1400),
-  # STUN между ними; сигнальный канал WhatsApp — TCP 5222
-  if [ "$CALLS_BYPASS" = "1" ]; then
-    IPT_UDP_EFF=$(port_list_add "$IPT_UDP_EFF" 590:1400 3478:3482)
-    IPT_TCP_PORTS=$(port_list_add "$IPT_TCP_PORTS" 5222)
-  fi
 
   LIMITER=$(detect_limiter "$CMD")
   [ "$FAM" = "iptables" ] && echo "$LIMITER" > "$STATE_DIR/limiter" 2>/dev/null
@@ -1616,7 +1587,7 @@ render_strategy() {
 
 # Module settings (same across strategies) are carried over whole from the live
 # config on strategy change/reset. NFQWS_EXTRA_ARGS only for standard $MODE_* refs.
-USER_KEYS="DOH_BYPASS META_QUIC_REJECT CALLS_BYPASS IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL SMART_LEARN WL_PAUSE SMART_POOL PUSH_FIX NFQWS_EXTRA_ARGS"
+USER_KEYS="META_QUIC_REJECT IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL SMART_LEARN WL_PAUSE SMART_POOL PUSH_FIX NFQWS_EXTRA_ARGS"
 merge_user_keys() { # <generated config> <settings source config>  -> stdout
   awk -v keys=" $USER_KEYS " -v src="$2" '
     function quotes(str,   t) { t = str; return gsub(/"/, "", t) }

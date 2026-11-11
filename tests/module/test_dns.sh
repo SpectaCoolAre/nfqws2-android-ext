@@ -710,7 +710,7 @@ assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "-ref https://common.dot.dns.y
 assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "dns.zapret.moe" "all the DoT servers of the list are checked"
 assert_eq "chatgpt.com claude.ai" "$(tr '\n' ' ' < "$MOCK_DIR/geoscan.list" | sed 's/ $//')" "on every domain of the list, not on a few samples"
 assert_contains "$(cat "$MOCK_DIR/geoscan.args")" "-asncache $DNS_GEO_SCAN_DIR/asn.cache" "network numbers are cached"
-assert_contains "$(cat "$DNS_LOG")" "время ответа (обход DoH/DoT выкл): ai.example 20 мс, fast.example 40 мс, mid.example 90 мс, next.example 120 мс, slow.example 300 мс" "the log has every server's response time and the DoH/DoT bypass state: runs can be compared"
+assert_contains "$(cat "$DNS_LOG")" "время ответа: ai.example 20 мс, fast.example 40 мс, mid.example 90 мс, next.example 120 мс, slow.example 300 мс" "the log has every server's response time: runs can be compared"
 assert_eq "fast.example" "$(dns_geo_pick)" "the common pool: one server — the fastest of those that bypass the most domains (several at once gave a site different exit addresses in one session)"
 assert_not_contains "$(dns_geo_pick)" "ai.example" "a faster server that bypasses fewer stays out of it"
 assert_eq "applied" "$(cat "$MOCK_DIR/geo.applied")" "a new pool is applied at once"

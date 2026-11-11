@@ -193,25 +193,11 @@ function dnsPollArm(){
   }, 3000);
 }
 
-/* Обход блокировки DoT/DoH — настройка службы обхода, а не dnsproxy: работает
-   и без профилей, например для «Частного DNS» Android */
+/* Части экрана DNS, которые не зависят от состояния dnsproxy */
 function renderDnsDoh(){
   renderDnsMode();
   renderDnsGeo();
   renderDnsNav();
-  setHTML('dns-doh', settingsRow({icon: 'shield', title: 'Обход блокировки DoT/DoH', sw: true, checked: S.doh_bypass == 1,
-    sub: t('Если провайдер режет DoH и DoT — соединения с DNS-серверами идут через обход'),
-    on: 'setDohBypass(this.checked, this)'}), false);
-}
-async function setDohBypass(on, el){
-  const r = await withBusy(['set', 'DOH_BYPASS', on ? '1' : '0'], 40000);
-  if(r.code){ toast(errText(r, 'Не удалось сохранить')); el.checked = !on; return; }
-  if(S.running){
-    const rr = await withBusy(['restart'], 60000);
-    toast(rr.code ? errText(rr, 'Не удалось перезапустить службу') : t('Сохранено, служба перезапущена'));
-  } else toast(t('Сохранено'));
-  await stat(true);
-  renderDnsDoh();
 }
 
 /* Режим работы DNS, как у обхода: «Профили» — DNS по умолчанию и свои

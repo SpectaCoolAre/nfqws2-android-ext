@@ -407,7 +407,7 @@ dns_geo_scan() { # [full|hot]
   # DoH/DoT) сказываются на скорости: сравнение прогонов по журналу
   l=$(awk -F'\t' '!/^[#=+!?]/ && $2 == "ok" { print $3 "\t" $1 }' "$f" | sort -n |
     awk -F'\t' '{ printf "%s%s %s мс", (NR > 1 ? ", " : ""), $2, $1 }')
-  [ -n "$l" ] && dns_log "  время ответа (обход DoH/DoT $([ "${DOH_BYPASS:-0}" = 1 ] && echo вкл || echo выкл)): $l"
+  [ -n "$l" ] && dns_log "  время ответа: $l"
   # адреса серверов и их прокси — не заблокированы ли по IP (nfqws2-ctl
   # geo-ipcheck): в фоне, итог — в журнале DNS
   [ "${DNS_GEO_IPCHECK:-1}" = 1 ] && is_running && ( sh "$MODDIR/bin/nfqws2-ctl" geo-ipcheck </dev/null >/dev/null 2>&1 & )

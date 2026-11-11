@@ -369,17 +369,6 @@ firewall_stop >/dev/null 2>&1
 conf_reset
 load_conf >/dev/null 2>&1
 
-section "DoT/DoH blocking bypass queues port 853"
-ipt_reset
-firewall_start >/dev/null 2>&1
-assert_not_contains "$(ipt_snapshot)" "853" "off: port 853 is not queued"
-firewall_stop >/dev/null 2>&1
-printf 'DOH_BYPASS=1\n' >> "$CONFFILE"
-load_conf >/dev/null 2>&1
-ipt_reset
-firewall_start >/dev/null 2>&1
-assert_contains "$(ipt_snapshot)" "853" "on: DoT traffic goes to the queue"
-
 section "start skips a dry-run the same arguments already passed"
 conf_reset
 printf 'WATCHDOG=0\n' >> "$CONFFILE"   # без наблюдателей: они пережили бы секцию
@@ -420,22 +409,6 @@ MOCK_IPT_SAVE_FAIL=1; export MOCK_IPT_SAVE_FAIL
 firewall_stop >/dev/null 2>&1
 unset MOCK_IPT_SAVE_FAIL
 assert_not_contains "$(ipt_snapshot)" "nfqws_post" "without iptables-save the rule-by-rule path still clears everything"
-
-section "call bypass queues the call ports"
-conf_reset
-load_conf >/dev/null 2>&1
-ipt_reset
-firewall_start >/dev/null 2>&1
-assert_not_contains "$(ipt_snapshot)" "3478:3482" "off: the usual UDP ports"
-firewall_stop >/dev/null 2>&1
-printf 'CALLS_BYPASS=1\n' >> "$CONFFILE"
-load_conf >/dev/null 2>&1
-ipt_reset
-firewall_start >/dev/null 2>&1
-snap=$(ipt_snapshot)
-assert_contains "$snap" "590:1400" "on: Telegram relay ports are queued"
-assert_contains "$snap" "3478:3482" "and the WhatsApp ones up to 3482"
-firewall_stop >/dev/null 2>&1
 
 section "watchdog and netwatch helpers"
 

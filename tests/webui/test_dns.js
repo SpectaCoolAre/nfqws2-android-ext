@@ -99,11 +99,10 @@ window.__presets = ${JSON.stringify(PRESETS)};
     var id = typeof cb === 'string' ? cb : opts;
     var rc = 0, out = 'OK', err = '';
     (window.__cmds = window.__cmds || []).push(cmd);
-    if (cmd.indexOf("'DOH_BYPASS'") >= 0) window.__doh = cmd.indexOf("'1'") >= 0 ? 1 : 0;
     if (cmd.indexOf("'DNS_SMART'") >= 0) window.__smart = cmd.indexOf("'1'") >= 0 ? 1 : 0;
     if (cmd.indexOf("'DNS_GEO'") >= 0) window.__geo = cmd.indexOf("'1'") >= 0 ? 1 : 0;
     if (cmd.indexOf("'dns-mode'") >= 0) window.__smart = window.__geo = cmd.indexOf("'smart'") >= 0 ? 1 : 0;
-    if (cmd.indexOf('json-status') >= 0) out = ${JSON.stringify(STATUS)}.replace('"dns_available"', '"doh_bypass":' + (window.__doh || 0) + ',"dns_smart":' + (window.__smart === 0 ? 0 : 1) + ',"dns_geo":' + (window.__geo === 0 ? 0 : 1) + ',"dns_available"');
+    if (cmd.indexOf('json-status') >= 0) out = ${JSON.stringify(STATUS)}.replace('"dns_available"', '"dns_smart":' + (window.__smart === 0 ? 0 : 1) + ',"dns_geo":' + (window.__geo === 0 ? 0 : 1) + ',"dns_available"');
     else if (cmd.indexOf('list-strategies') >= 0) out = 'default\\talt13';
     else if (cmd.indexOf('get-strategy') >= 0) out = 'default';
     else if (cmd.indexOf("'dns-mode'") >= 0) out = 'OK';
@@ -192,15 +191,6 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     truthy((await page.textContent('#dialog-wrap')).includes('Включить умный режим DNS?'), 'back to smart asks too');
     await page.click("#d-ok"); await page.waitForTimeout(800);
     eq('smart', await page.evaluate(() => $('dns-mode-seg').querySelector('.seg.selected').dataset.mode), 'smart mode again');
-
-    sect(`${mode}: DoT/DoH blocking bypass`);
-    eq(false, await page.isChecked('#dns-doh input'), 'the DoT/DoH bypass is off by default');
-    eq(false, await page.evaluate(() => !!$('dns-doh').closest('[inert]')), 'and can be switched while DNS profiles are off');
-    await page.click('#dns-doh label'); await page.waitForTimeout(700);
-    truthy(await page.evaluate(() => window.__cmds.some(c => c.indexOf("'set' 'DOH_BYPASS' '1'") >= 0)), 'the switch saves DOH_BYPASS=1');
-    truthy(await page.evaluate(() => window.__cmds.some(c => /'restart'/.test(c))), 'and restarts the running service');
-    eq(true, await page.isChecked('#dns-doh input'), 'the switch stays on');
-    await page.click('#dns-doh label'); await page.waitForTimeout(700);
 
     sect(`${mode}: switching on`);
     // Пресеты в профили кладёт модуль при первом запуске (test_dns.sh); у заглушки их нет
