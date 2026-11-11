@@ -609,6 +609,7 @@ const PAGE_META = {
                        {icon: 'trash', label: 'Очистить журналы', fn: () => clearLogs()},
                        {icon: 'tune', label: 'Настройки журналов', fn: () => navigate('logset')}]},
   logset:   {title: 'Настройки журналов', child: true, parent: 'logs', init: () => renderLogsLong()},
+  dev:      {title: 'Для разработчиков', child: true, parent: 'settings', init: () => { renderParams(S); return stat(true).then(() => renderParams(S)); }},
   work:     {title: 'Работа модуля', child: true, parent: 'settings', init: () => { renderWork(); return stat(true).then(renderWork); }},
   wifi:     {title: 'Отключать на Wi‑Fi', child: true, parent: 'work', init: () => wifiInit()},
   apps:     {title: 'Фильтр приложений', child: true, parent: 'settings', init: () => appsInit(),
@@ -1210,6 +1211,7 @@ function toggleDevMode(){
   store.set('nfq_dev', devMode ? '1' : '0');
   renderParams(S);
   if(currentPage === 'settings') renderSettings();
+  else if(currentPage === 'dev' && !devMode) navigate('settings');
   toast(devMode ? t('Режим разработчика включён') : t('Режим разработчика выключен'));
 }
 ['app-title', 'brand-logo'].forEach(id => onLongPress($(id), null, () => {

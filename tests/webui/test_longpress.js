@@ -160,6 +160,18 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   truthy(/Режим разработчика/.test(await snack()), 'with a snackbar');
   await hold('#brand-logo');
   eq(dev0, await page.evaluate(() => devMode), 'and so does its icon');
+  // Для разработчиков — одна строка внизу настроек, а не блок: открывает свой экран
+  if(!(await page.evaluate(() => devMode))){ await hold('#app-title'); }
+  await page.evaluate(() => renderSettings()); await page.waitForTimeout(200);
+  eq(1, await page.$$eval('#settings-body .list-item', r => r.filter(x => x.textContent.includes('Для разработчиков')).length), 'developer mode adds one «For developers» row to the settings');
+  eq(0, await page.$$eval('#settings-body .switch', r => r.length), 'the settings themselves carry no developer switches');
+  await page.click('#settings-body .list-item:has-text("Для разработчиков")'); await page.waitForTimeout(700);
+  eq('dev', await cur(), 'the row opens its own screen');
+  truthy(await page.$$eval('#dev-sws .switch', r => r.length) >= 3, 'with the developer switches');
+  truthy((await page.textContent('#dev-sws')).includes('Исходящие пакеты'), 'and the packet limits');
+  await page.evaluate(() => navigate('settings')); await page.waitForTimeout(700);
+  if((await page.evaluate(() => devMode)) !== dev0){ await hold('#app-title'); }
+  eq('settings', await cur(), 'back in the settings');
 
   sect('logs icon');
   await closeAll();

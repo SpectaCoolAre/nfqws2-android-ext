@@ -56,24 +56,11 @@ function renderSettings(){
       {icon: 'info', tone: 'gray', title: 'nfqws2-android-ext', sub: t('Версия {0}', S.version || '—'), mxValue: S.version || '—', on: 'openUrl(' + jsArg(GITHUB_URL) + ')', chevron: true, long: 'ver'}
     ]]
   ];
-  let devHtml = '';
-  if(devMode){
-    const j = S || {};
-    const lim = LIMITS.map(([k, label, hint, jk]) =>
-      '<div class="list-item two-line clickable state" role="button" tabindex="0" aria-haspopup="dialog"' +
-        ' onclick="editLimit(' + jsArg(k) + ', ' + jsArg(t(label)) + ', ' + (+j[jk] || 15) + ')">' +
-        '<span class="li-text"><span class="li-primary">' + esc(t(label)) + '</span>' +
-          '<span class="li-secondary">' + esc(t(hint)) + '</span></span>' +
-        '<span class="li-trail">' +
-          '<span class="li-value">' + esc(j[jk] != null ? j[jk] : '—') + '</span>' + icon('chevron-right', 's24') +
-        '</span>' +
-      '</div>');
-    const rows = devSwitches(j).map(([k, label, jk]) => switchRow(k, label, j[jk] == 1)).concat(lim).join('');
-    devHtml = '<div class="stack" id="dev-block"><h2 class="subhead">' + esc(t('Для разработчиков')) + '</h2><div class="list" id="dev-sws">' + rows + '</div></div>';
-  }
+  // Для разработчиков — отдельным экраном внизу, пока включён режим разработчика
+  if(devMode) groups[groups.length - 1][1].push(
+    {icon: 'settings', tone: 'gray', title: 'Для разработчиков', sub: t('Контроль работы и лимиты пакетов'), on: "navigate('dev')", chevron: true});
   setHTML('settings-body', groups.map(([title, rows]) =>
-    '<div class="stack"><h2 class="subhead">' + esc(t(title)) + '</h2><div class="list">' + rows.map(settingsRow).join('') + '</div></div>').join('') +
-    devHtml, false);
+    '<div class="stack"><h2 class="subhead">' + esc(t(title)) + '</h2><div class="list">' + rows.map(settingsRow).join('') + '</div></div>').join(''), false);
 }
 const GITHUB_URL = 'https://github.com/SpectaCoolAre/nfqws2-android-ext';
 

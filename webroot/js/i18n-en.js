@@ -1139,5 +1139,7 @@ EN = {
   "сам DNS сети обходит: {0}": "the network DNS bypasses {0} itself",
   "Серверы обхода": "Bypass servers",
   "группа {0}": "{0} group",
-  "группы {0}": "groups {0}"
+  "группы {0}": "groups {0}",
+  "Контроль работы и лимиты пакетов": "Health checks and packet limits",
+  "Контроль работы и лимиты пакетов. Пункт виден, пока включён режим разработчика — долгое нажатие на название модуля.": "Health checks and packet limits. The item shows while developer mode is on — long-press the module name."
 };

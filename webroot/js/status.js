@@ -342,7 +342,7 @@ function switchRow(k, label, on){
 function renderParams(j){
   j = j || {};
   if($('work-sws')) setHTML('work-sws', SW.map(([k, label, jk]) => switchRow(k, label, j[jk] == 1)).join(''), false);
-  if($('dev-sws') && devMode){
+  if($('dev-sws')){
     const lim = LIMITS.map(([k, label, hint, jk]) =>
       '<div class="list-item two-line clickable state" role="button" tabindex="0" aria-haspopup="dialog"' +
         ' onclick="editLimit(' + jsArg(k) + ', ' + jsArg(t(label)) + ', ' + (+j[jk] || 15) + ')">' +
@@ -354,7 +354,6 @@ function renderParams(j){
       '</div>');
     setHTML('dev-sws', devSwitches(j).map(([k, label, jk]) => switchRow(k, label, j[jk] == 1)).concat(lim).join(''), false);
   }
-  if($('dev-block')) $('dev-block').hidden = !devMode;
 }
 
 /* Отрисовка из последнего известного статуса: экран показывает данные сразу,
