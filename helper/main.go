@@ -38,6 +38,7 @@ func main() {
 	shared := flag.String("shared", "", "-geoscan: файл прошлой полной проверки — её общие адреса прокси (частая проверка)")
 	boot := flag.String("boot", "", "DNS сети (адрес:53) для -geoscan: эталон ответов и адреса серверов")
 	groups := flag.String("groups", "", "-geoscan: файл групп сайтов — их доменам все кандидаты (см. planRoutes)")
+	ask := flag.String("ask", "", "сервер обхода (имя, имя/путь): что он отвечает на домены -samples (с -boot); строка «домен<TAB>адреса»")
 	ref := flag.String("ref", "", "-geoscan: честные DNS для эталона ответов через запятую (адрес:53 или https://имя); DNS сети — запасной")
 	flag.Parse()
 	log.SetFlags(log.Ldate | log.Ltime)
@@ -69,6 +70,32 @@ func main() {
 		runTTLTrace(*sniIP, *qBlocked, *qOpen, *wait)
 	case *sni != "":
 		runSniProbe(*sni, *sniIP, *wait)
+	case *ask != "":
+		// Какой адрес сервер даёт для домена сейчас: проверка прокси идёт по
+		// нему, а не по самому частому адресу сервера — тот мог быть прокси
+		// совсем других сайтов (игровой у NullsProxy), и рабочий сервер
+		// вставал на паузу
+		if *boot == "" || *samples == "" {
+			log.Print("-ask: нужны -samples и -boot")
+			os.Exit(2)
+		}
+		ss, err := domainList(*samples)
+		if err != nil || len(ss) == 0 {
+			log.Printf("-samples: %v", err)
+			os.Exit(2)
+		}
+		w := *wait
+		if w < 6*time.Second {
+			w = 6 * time.Second
+		}
+		dohOnly = *dohFlag
+		lines, err := askServer(*ask, ss, *boot, w)
+		if err != nil {
+			log.Printf("%s: %v", *ask, err)
+		}
+		for _, l := range lines {
+			fmt.Println(l)
+		}
 	case *geo != "":
 		if *boot == "" || *samples == "" {
 			log.Print("-geoscan: нужны -samples и -boot")

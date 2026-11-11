@@ -749,7 +749,8 @@ if iptables -w -t mangle -S nfqws_post 2>/dev/null | grep -q "uid-owner 0 -d $ip
 fi
 exit "$(cat "$MOCK_DIR/via.$ip" 2>/dev/null || echo 0)"
 X
-printf '#!/bin/sh\nfor a; do [ "$p" = -ip ] && ip="$a"; p="$a"; done\nprintf "%%s\\ttcp=x\\n" "$(cat "$MOCK_DIR/cause.$ip" 2>/dev/null || echo tls)"\n' > "$HELPER_BIN"
+# -ask <сервер> -samples <домен>: что сервер отвечает (ask.<сервер>), иначе ничего
+printf '#!/bin/sh\nif [ "$1" = -ask ]; then [ -f "$MOCK_DIR/ask.$2" ] && printf "%%s\\t%%s\\n" "$4" "$(cat "$MOCK_DIR/ask.$2")"; exit 0; fi\nfor a; do [ "$p" = -ip ] && ip="$a"; p="$a"; done\nprintf "%%s\\ttcp=x\\n" "$(cat "$MOCK_DIR/cause.$ip" 2>/dev/null || echo tls)"\n' > "$HELPER_BIN"
 chmod 0755 "$MOCKBIN/curl" "$HELPER_BIN"
 iptables -w -t mangle -N nfqws_post 2>/dev/null
 f=$(dns_geo_scan_file); mkdir -p "${f%/*}"
@@ -786,6 +787,19 @@ echo 198.51.100.3 >> "$IPSET_AUTO"; ctl geo-ipcheck
 assert_rc 0 "$ctl_rc" "and a third"
 assert_eq "203.0.113.10" "$(cat "$IPSET_AUTO")" "an address left by an earlier version, where the bypass does not help, is dropped too"
 assert_contains "$(_startup_args)" "--ipset=$IPSET_AUTO" "nfqws2 gets the list as an IP list of the strategy"
+# прокси проверяется тот, что сервер даёт для домена сейчас (-ask), а не самый
+# частый: тот мог быть прокси других сайтов (игровой у NullsProxy)
+echo 203.0.113.77 > "$MOCK_DIR/ask.a.example"
+kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; fakesvc=$(fake_daemon "$PIDFILE")
+ctl geo-ipcheck
+assert_contains "$(cat "$f.ipcheck")" "203.0.113.77	proxy	a.example	chatgpt.com" "the proxy is the address the server gives for that domain now"
+rm -f "$MOCK_DIR/ask.a.example" "$IPSET_AUTO"
+# игровые серверы — не по HTTPS: на них прокси не проверяется
+cp "$f" "$f.keep"; sed -i 's/^=chatgpt.com\ta.example$/=gamea.clashofclans.com\ta.example/' "$f"
+kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; fakesvc=$(fake_daemon "$PIDFILE")
+ctl geo-ipcheck
+assert_not_contains "$(cat "$f.ipcheck")" "proxy	a.example" "a server whose only domain is a game server is not probed over HTTPS"
+mv -f "$f.keep" "$f"; rm -f "$f.down" "$IPSET_AUTO"
 # метка прерванной проверки (старше 15 минут) не мешает следующей
 mkdir -p "$STATE_DIR/geo-ipcheck.lock"; touch -d '@'"$(( $(date +%s) - 1200 ))" "$STATE_DIR/geo-ipcheck.lock"
 kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; fakesvc=$(fake_daemon "$PIDFILE")

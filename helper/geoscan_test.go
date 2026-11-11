@@ -688,3 +688,21 @@ func TestGeoScanDoHOnly(t *testing.T) {
 		t.Fatalf("только DoT — не годится: %+v", res[0])
 	}
 }
+
+// -ask: какой адрес сервер даёт для домена — по нему проверяется прокси
+func TestAskServer(t *testing.T) {
+	boot := netDNS(t, func(string) net.IP { return ip("93.184.216.34") }, true, nil)
+	dot := fakeDoT(t, func(n string) net.IP {
+		if n == "claude.ai" {
+			return ip("5.5.5.5")
+		}
+		return ip("6.6.6.6")
+	})
+	out, err := askServer(dot, []string{"claude.ai", "gamea.clashofclans.com"}, boot, 4*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 2 || out[0] != "claude.ai\t5.5.5.5" || out[1] != "gamea.clashofclans.com\t6.6.6.6" {
+		t.Fatalf("ответы: %q", out)
+	}
+}

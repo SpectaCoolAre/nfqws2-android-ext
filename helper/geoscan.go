@@ -1508,3 +1508,24 @@ func formatRoutes(res []scanResult, names []string, rt []route) []string {
 	}
 	return out
 }
+
+// askServer — что сервер обхода отвечает на домены: «домен<TAB>адрес,адрес»
+// на домен с ответом (-ask)
+func askServer(server string, names []string, boot string, wait time.Duration) ([]string, error) {
+	r := scanServer(server, names, boot, wait)
+	var out []string
+	for i, n := range names {
+		if len(r.ans[i]) == 0 {
+			continue
+		}
+		a := make([]string, len(r.ans[i]))
+		for k, ip := range r.ans[i] {
+			a[k] = ip.String()
+		}
+		out = append(out, n+"\t"+strings.Join(a, ","))
+	}
+	if !r.ok && r.err != "" {
+		return out, errors.New(r.err)
+	}
+	return out, nil
+}

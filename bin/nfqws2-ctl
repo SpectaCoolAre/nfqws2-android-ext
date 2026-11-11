@@ -1167,15 +1167,32 @@ probe_cause() { # <домен> <ip>
 # Итог — в журнале DNS и в <сеть>.ipcheck (архив журналов): по нему видно,
 # обходится ли блокировка по IP или она глухая
 GEO_IPCHECK_MAX=24       # адресов за проверку, не больше
+# Прокси — тот адрес, что сервер даёт для домена сейчас (nfqws2-helper -ask), а
+# не самый частый адрес сервера: тот мог быть прокси других сайтов (игровой у
+# NullsProxy), и проба «не открывалась» у рабочего сервера. Игровые серверы
+# (gamea.clashofclans.com, game.*) — не по HTTPS: на них не проверяем
 geo_ipcheck_targets() { # <файл проверки> -> «адрес роль сервер домен»
+  local boot
+  boot=$(dns_net_servers | tr ',' '\n' | awk '/^[0-9]+(\.[0-9]+)(\.[0-9]+)(\.[0-9]+)$/ { print; exit }')
+  boot="${boot:-77.88.8.8}:53"
+  _geo_ipcheck_targets "$1" | while read -r ip role srv dom; do
+    if [ "$role" = proxy ] && [ -x "$HELPER_BIN" ]; then
+      a=$("$HELPER_BIN" -ask "$srv" -samples "$dom" -boot "$boot" -wait 6s 2>/dev/null | head -n 1 | cut -f2 | cut -d, -f1)
+      [ -n "$a" ] && ip=$a
+    fi
+    echo "$ip $role $srv $dom"
+  done | awk '!s[$1]++'
+}
+_geo_ipcheck_targets() {
   awk -F'\t' -v base="$DNS_GEO_HOT_BASE" '
     BEGIN { nb = split(base, b, " "); for (i = 1; i <= nb; i++) B[b[i]] = 1 }
     /^!/ { h = substr($1, 2); if ($4 != "") { a[h] = $4; ord[++no] = h }; next }
     /^\+/ { h = substr($1, 2); if (!(h in px) || $3 + 0 > pn[h]) { px[h] = $2; pn[h] = $3 + 0 }; next }
+    /^=game[a-z0-9]*\./ { next }
     /^=/ { d = substr($1, 2); n = split($2, sv, ",")
       for (i = 1; i <= n; i++) { h = sv[i]; if (!(h in dm)) dm[h] = d; else if ((d in B) && !(dm[h] in B)) dm[h] = d } }
     END { for (k = 1; k <= no; k++) { h = ord[k]; print a[h], "server", h, h
-      if ((h in px) && (h in dm)) print px[h], "proxy", h, dm[h] } }' "$1" | awk '!s[$1]++' | head -n "$GEO_IPCHECK_MAX"
+      if ((h in px) && (h in dm)) print px[h], "proxy", h, dm[h] } }' "$1" | head -n "$GEO_IPCHECK_MAX"
 }
 # Быстрая проверка (quick, после частой проверки DNS): только прокси серверов
 # в работе (пул, группы, маршруты) и серверов на паузе, чей срок подошёл
@@ -1189,9 +1206,9 @@ geo_ipcheck_quick_targets() { # <файл проверки> <время>
 # Пауза серверов по итогу проверки адресов: прокси закрыт или не открывается и
 # через обход — сервер на паузе в этой сети, повтор через 30 мин, 1 ч, 2 ч и
 # дальше раз в 2 ч; открылся — пауза снята. -> «down»/«up» и сервер на строку
-geo_down_update() { # <файл проверки> <итог проверки адресов> <время>
-  local f="$1" res="$2" now="$3"
-  { cat "$f.down" 2>/dev/null; } | awk -F'\t' -v res="$res" -v now="$now" -v out="$f.down.new" '
+geo_down_update() { # <файл проверки> <итог проверки адресов> <время> [full]
+  local f="$1" res="$2" now="$3" full="$4"
+  { cat "$f.down" 2>/dev/null; } | awk -F'\t' -v res="$res" -v now="$now" -v out="$f.down.new" -v full="$full" '
     BEGIN { while ((getline l < res) > 0) { if (l ~ /^#/) continue; split(l, a, "\t")
         if (a[2] != "proxy") continue; v[a[3]] = a[8]; ip[a[3]] = a[1] } }
     NF >= 5 { old[$1] = $0; n[$1] = $5; since[$1] = $3 }
@@ -1206,7 +1223,8 @@ geo_down_update() { # <файл проверки> <итог проверки а�
         } else if (v[s] == "open" || v[s] == "bypass") { if (s in old) print "up " s }
         else if (s in old) print old[s] > out
       }
-      for (s in old) if (!(s in v)) print old[s] > out
+      # полная: на паузе остаются только те, чей прокси проверялся
+      for (s in old) if (!(s in v) && full != "full") print old[s] > out
       close(out) }'
   if [ -s "$f.down.new" ]; then mv -f "$f.down.new" "$f.down"; else rm -f "$f.down.new" "$f.down"; fi
 }
@@ -1283,7 +1301,7 @@ cmd_geo_ipcheck() { # [quick]
     reload_after_change >/dev/null 2>&1
   fi
   # пауза серверов, чей прокси в этой сети не открывается; сменилась — маршруты заново
-  ch=$(geo_down_update "$f" "$out" "$(date +%s)")
+  ch=$(geo_down_update "$f" "$out" "$(date +%s)" "$([ -n "$quick" ] || echo full)")
   printf '%s\n' "$ch" | awk '$1 == "down" { printf "%s%s", (n++ ? ", " : ""), $2 } END { if (n) print "" }' | while IFS= read -r l; do
     dns_log "на паузе в этой сети (прокси не открывается и через обход): $l — сайты переходят на другие серверы"; done
   printf '%s\n' "$ch" | awk '$1 == "up" { printf "%s%s", (n++ ? ", " : ""), $2 } END { if (n) print "" }' | while IFS= read -r l; do
