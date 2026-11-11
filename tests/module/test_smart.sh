@@ -287,7 +287,11 @@ assert_eq "$gv" "$gn" "the variants of the google slot and their names match"
 assert_contains "$(grep '^#@google 4[56] ' "$REPO_DIR/strategies/smart.conf")" "Manager: Yv35" "Yv34 and Yv35 of Zapret-Manager are in"
 assert_contains "$(grep 'strategy=45' "$REPO_DIR/strategies/smart.conf")" "hostfakesplit:host=google.com:tcp_flags_unset=ack:badsum:repeats=3" "Yv34: datanoack is tcp_flags_unset=ack in zapret2"
 # замер 07.11.2026 на МТС: Yv34 — 15 из 15, Yv35 — 3 из 5
-assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",43-45:" "Yv34 and googlevideo #1, #2 (15 of 15 in the benchmark) are in the base set"
+assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",43-45," "Yv34 and googlevideo #1, #2 (15 of 15 in the benchmark) are in the base set"
+# nfqws-menu 92685de (11.11): профиль hardcorp74 для wide-youtube.l.google.com —
+# с ним на роутере заработал YouTube
+assert_contains "$(grep '^#@google 47 ' "$REPO_DIR/strategies/smart.conf")" "hardcorp74: wide-youtube" "the new hardcorp74 YouTube profile is a Google variant"
+assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",47:" "and in the base set"
 # видео YouTube на МТС — с кэшей Google в сети оператора: там hostfakesplit
 # google.com (Youtube_circular #1) открыл 94 из 94, одиночный fake — 0 из 41
 assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",21,34," "Youtube_circular #1 is in the Google base set"

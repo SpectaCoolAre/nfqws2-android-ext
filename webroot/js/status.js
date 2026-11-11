@@ -22,7 +22,7 @@ function fmtUptime(sec){
    секунды то замирали, то перескакивали. Следующий тик — ровно на границе
    секунды, а не через 1000 мс от прошлого: setInterval копит опоздания. */
 let uptAnchor = null;   // {ms: время работы, t: performance.now() в тот момент}
-function uptElapsedMs(){ return uptAnchor.ms + (performance.now() - uptAnchor.t); }
+function uptElapsedMs(){ return uptAnchor ? uptAnchor.ms + (performance.now() - uptAnchor.t) : 0; }
 function stopUptTimer(){
   if(uptTimer){ clearTimeout(uptTimer); uptTimer = null; }
   uptAnchor = null;
