@@ -1,6 +1,6 @@
 ### Изменения в v2.3.5:
 
-- **YouTube**: профиль hardcorp74 для wide-youtube.l.google.com из обновлённого nfqws-menu — в стратегии hardcorp74 и новым вариантом умного режима для Google
+- **YouTube**: профиль hardcorp74 для wide-youtube.l.google.com из обновлённого nfqws-menu — в стратегии hardcorp74 и новым вариантом умного режима для Google; у вариантов hardcorp74 умного режима и обработка HTTP — как у автора сейчас
 - **Установка через Kitsune Mask, старый Magisk и recovery**: в архив вернулся установщик META-INF (из оригинала) — без него такие менеджеры обрывали установку с «Unzip error»
 
 ### Изменения в v2.3.4:
