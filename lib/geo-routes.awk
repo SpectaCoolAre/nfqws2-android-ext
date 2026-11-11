@@ -3,15 +3,18 @@ function site(d,   n, a, x, i) {
   for (x = d; ; x = substr(x, i + 1)) { if (x in grp) return "@" grp[x]; if ((i = index(x, ".")) == 0) break }
   n = split(d, a, "."); return n < 2 ? d : a[n - 1] "." a[n] }
 function usable(h) { return h != "" && (h in pr) && !(h in off) }
-# сервер группы годен: обходит домены, которыми пользуются, и не меньше 90%
-# доменов группы от лучшего (все не обходит никто: 09.11 лучший — 62 из 67)
-function gfit(s, h) { return cnt[s, h] >= nr && call[s, h] * 10 >= mx[s] * 9 }
+# сервер группы годен: обходит домены, которыми пользуются, и не меньше 70%
+# доменов группы от лучшего: DoH-серверы отвечают не на все запросы проверки
+# (NullsProxy — на половину), и неотвеченный домен выглядит необходимым
+function gfit(s, h) { return cnt[s, h] >= nr && call[s, h] * 10 >= mx[s] * 7 }
 function out(d, x) { if (x == "-") print d "\t-"; else print d "\t" x "\t" pr[x] }
 BEGIN { while ((getline l < of) > 0) { gsub(/[[:space:]]/, "", l); if (l != "") off[l] = 1 }
   while ((getline l < pf) > 0) { split(l, a, " "); if (a[1] != "") pin[a[1]] = a[2] }
   while ((getline l < gf) > 0) { sub(/#.*/, "", l); n = split(tolower(l), a, " "); for (i = 2; i <= n; i++) grp[a[i]] = a[1] }
   while ((getline l < gpf) > 0) { split(l, a, " "); if (a[1] != "") gpin[a[1]] = a[2] }
-  while ((getline l < prf) > 0) { sub(/#.*/, "", l); n = split(tolower(l), a, " "); for (i = 2; i <= n; i++) pref["@" a[1], a[i]] = i }
+  # «=сервер» — закреплён за группой: вся группа через него, пока он отвечает
+  while ((getline l < prf) > 0) { sub(/#.*/, "", l); n = split(tolower(l), a, " ")
+    for (i = 2; i <= n; i++) { if (substr(a[i], 1, 1) == "=") { a[i] = substr(a[i], 2); fixed["@" a[1]] = a[i] }; pref["@" a[1], a[i]] = i } }
   # основные сервисы — «используемые» всегда, есть частая проверка или нет
   nb = split(base, bl, " "); for (i = 1; i <= nb; i++) basehot[bl[i]] = 1
   while ((getline l < rf) > 0) { split(l, a, "\t"); if (a[1] != "") { rsc[a[1], a[2]] = a[3] + 0; rst[a[1], a[2]] = a[4] + 0 } }
@@ -58,6 +61,10 @@ END {
       # DNS сети обходит группу сам — с запасом в обе стороны
       if (hall[s] > 0 && (g == "-" ? hnet[s] * 2 > hall[s] : hnet[s] == hall[s])) { ch[s] = "-"; continue }
       if (g == "-") g = ""
+      # закреплённый сервер: проверка «обходит / не обходит» тут не решает
+      # (NullsProxy обслуживает все игры Supercell, а в проверке видны два-три
+      # домена — ответил на половину запросов), нужен только ответ сервера
+      if ((s in fixed) && usable(fixed[s])) { ch[s] = fixed[s]; continue }
       # лучшее покрытие группы — среди обходящих домены, которыми пользуются
       mx[s] = 0; mxf = 0; anyfit = 0
       for (i = 1; i <= ns[s]; i++) { h = so[s, i]; if (cnt[s, h] >= nr && call[s, h] > mx[s]) mx[s] = call[s, h]; if (callf[s, h] > mxf) mxf = callf[s, h] }
@@ -66,7 +73,7 @@ END {
       # по старым данным сети — пока отвечает; одна неудачная частая
       # проверка не снимает, если по полной обходит всё
       if (usable(g) && !fresh) { ch[s] = g; continue }
-      if (usable(g) && ((s, g) in rst) && rst[s, g] < 2 && mxf && callf[s, g] * 10 >= mxf * 9) { ch[s] = g; continue }
+      if (usable(g) && ((s, g) in rst) && rst[s, g] < 2 && mxf && callf[s, g] * 10 >= mxf * 7) { ch[s] = g; continue }
       # используемые не обходит никто — держится выбранный, пока отвечает
       if (usable(g) && !anyfit) { ch[s] = g; continue }
       # новый: годные (предпочтительные, надёжные), затем обходящие

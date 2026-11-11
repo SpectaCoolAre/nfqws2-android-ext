@@ -140,10 +140,14 @@ dns_geo_services() {
 # каждой сети; проверка прокси вернёт сервер, как только он откроется.
 # -> путь к списку «не брать»: отключённые вручную и на паузе; если на паузе
 # все ответившие — только отключённые вручную (лучше пробовать, чем никуда)
+# Закреплённые за группой серверы («=сервер» в dns-geo-prefer.list)
+dns_geo_fixed() { sed 's/#.*//' "$DNS_GEO_PREFER" 2>/dev/null | tr ' \t' '\n\n' | sed -n 's/^=//p'; }
 dns_geo_off_eff() {
   local f e="$DNS_RUN_DIR/geo-off.eff"
   f=$(dns_geo_scan_file); mkdir -p "$DNS_RUN_DIR"
-  { cat "$DNS_GEO_OFF" 2>/dev/null; cut -f1 "$f.down" 2>/dev/null; } | awk 'NF && !s[$0]++' > "$e.$$"
+  # закреплённый на паузу не встаёт: проба HTTPS через его прокси ничего не
+  # говорит об играх (NullsProxy вставал на паузу, и Supercell уходил к другим)
+  { cat "$DNS_GEO_OFF" 2>/dev/null; cut -f1 "$f.down" 2>/dev/null | grep -v -x -F "$(dns_geo_fixed)"; } | awk 'NF && !s[$0]++' > "$e.$$"
   if [ -s "$f.down" ] && ! awk -F'\t' -v of="$e.$$" 'BEGIN { while ((getline l < of) > 0) o[l] = 1 }
       !/^[#=+!?]/ && $2 == "ok" && $4 > 0 && !($1 in o) { x = 1 } END { exit !x }' "$f" 2>/dev/null; then
     cat "$DNS_GEO_OFF" 2>/dev/null > "$e.$$"

@@ -705,7 +705,10 @@ func dohScan(server string, names []string, boot string, wait time.Duration) sca
 		if err != nil {
 			return nil, nil
 		}
-		req, _ := http.NewRequest("POST", "https://"+host+path, bytes.NewReader(q))
+		// запрос — не дольше dohReq: зависший держал место до конца проверки
+		ctx, cancel := context.WithTimeout(context.Background(), dohReq)
+		defer cancel()
+		req, _ := http.NewRequestWithContext(ctx, "POST", "https://"+host+path, bytes.NewReader(q))
 		req.Header.Set("Content-Type", "application/dns-message")
 		req.Header.Set("Accept", "application/dns-message")
 		resp, err := cl.Do(req)
@@ -754,6 +757,9 @@ func dohScan(server string, names []string, boot string, wait time.Duration) sca
 	return r
 }
 
+// dohReq — сколько ждать ответа на один запрос DoH
+var dohReq = 8 * time.Second
+
 // dohPort — порт DoH (тесты подменяют)
 var dohPort = "443"
 
@@ -763,6 +769,53 @@ var dohPort = "443"
 var dohOnly bool
 
 func scanServer(server string, names []string, boot string, wait time.Duration) scanResult {
+	r := scanServerOnce(server, names, boot, wait)
+	fillMissing(&r, server, names, boot, wait)
+	return r
+}
+
+// scanRetries, retryPause — повторы доменов, оставшихся без ответа: серверы
+// ограничивают частоту запросов и на сотни разом отвечают через раз
+// (NullsProxy — на 373 из 741), и итог проверки менялся от прогона к прогону
+// — не ответивший домен выглядел «не обходит». Повтор — новым соединением,
+// после паузы, тем же протоколом, что прошёл
+var scanRetries = 2
+var retryPause = 1500 * time.Millisecond
+
+func fillMissing(r *scanResult, server string, names []string, boot string, wait time.Duration) {
+	for pass := 0; pass < scanRetries && r.ok; pass++ {
+		var idx []int
+		for i := range names {
+			if !r.got[i] {
+				idx = append(idx, i)
+			}
+		}
+		if len(idx) == 0 {
+			return
+		}
+		time.Sleep(retryPause)
+		sub := make([]string, len(idx))
+		for k, i := range idx {
+			sub[k] = names[i]
+		}
+		var x scanResult
+		if r.proto == "https" {
+			x = dohScan(server, sub, boot, wait/2)
+		} else {
+			x = dotScan(server, sub, boot, wait/2)
+		}
+		if !x.ok {
+			continue
+		}
+		for k, i := range idx {
+			if x.got[k] {
+				r.got[i], r.ans[i] = true, x.ans[k]
+			}
+		}
+	}
+}
+
+func scanServerOnce(server string, names []string, boot string, wait time.Duration) scanResult {
 	// «имя/путь» — сервер только с DoH по своему пути: DoT у него не пробуем;
 	// роутер (-doh) ходит к серверам только через https-dns-proxy
 	if dohOnly || strings.Contains(server, "/") {

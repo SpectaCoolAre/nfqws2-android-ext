@@ -706,3 +706,42 @@ func TestAskServer(t *testing.T) {
 		t.Fatalf("ответы: %q", out)
 	}
 }
+
+// Сервер, отвечающий не на все запросы разом (ограничение частоты): домены
+// без ответа спрашиваются ещё раз, и итог не зависит от того, на какие
+// запросы сервер ответил с первого раза (NullsProxy: 373 из 741)
+func TestGeoScanRetriesUnansweredDomains(t *testing.T) {
+	boot := netDNS(t, func(string) net.IP { return ip("93.184.216.34") }, true, nil)
+	var mu sync.Mutex
+	seen := map[string]int{}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q, _ := io.ReadAll(r.Body)
+		n := qname(q)
+		mu.Lock()
+		seen[n]++
+		first := seen[n] == 1
+		mu.Unlock()
+		// game*: с первого раза — «429», со второго — адрес прокси
+		if first && strings.HasPrefix(n, "game") {
+			http.Error(w, "slow down", 429)
+			return
+		}
+		w.Header().Set("Content-Type", "application/dns-message")
+		w.Write(reply(q, ip("5.5.5.5")))
+	}))
+	t.Cleanup(srv.Close)
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	tlsRoots = pool
+	t.Cleanup(func() { tlsRoots = nil })
+	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	dohPort = port
+	old := retryPause
+	retryPause = 10 * time.Millisecond
+	t.Cleanup(func() { dohPort = "443"; retryPause = old })
+	names := []string{"a.example", "game1.example", "game2.example", "game3.example"}
+	res := geoScan([]string{"127.0.0.1/dns-query"}, names, boot, 6*time.Second)
+	if !res[0].ok || string(res[0].marks) != "pppp" {
+		t.Fatalf("домены без ответа с первого раза спрошены ещё раз: %+v", res[0])
+	}
+}

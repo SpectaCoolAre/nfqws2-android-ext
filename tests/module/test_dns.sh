@@ -1146,6 +1146,40 @@ assert_contains "$(dns_geo_routes)" "gemini.google.com	b.example" "a pinned pref
 DNS_GEO_PREFER=$pkeep; rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
 assert_contains "$(cat "$DNS_GEO_PREFER")" "google de.magicdns.ru dns.zapret.moe dns.malw.link" "the module ships the router's set for Google (without Comss)"
 rm -f "$hotf" "$(dns_geo_scan_file).rel"
+# Закреплённый за группой сервер («=сервер»): вся группа через него, пока он
+# отвечает, — без сравнения покрытия и без паузы по пробе прокси. NullsProxy
+# обслуживает все игры Supercell, а в проверке был виден на двух доменах
+# (ответил на 373 запроса из 741), и игры уходили к другим серверам
+pkeep=$DNS_GEO_PREFER; DNS_GEO_PREFER="$SANDBOX/prefer.list"
+echo "supercell =n.example" > "$DNS_GEO_PREFER"
+mksc() { { printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
+  printf 'n.example\t%s\t20\t1\t4\t0\ttls\tответил на 2 из 4\n' "$1"; printf 't.example\tok\t30\t4\t4\t0\ttls\n'
+  printf '=game.clashofclans.com\tn.example,t.example\n=gamea.clashofclans.com\tt.example\n'
+  printf '=supercell.com\tt.example\n=accounts.supercell.com\tt.example\n'; } > "$(dns_geo_scan_file)"; }
+mksc ok; rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
+r=$(dns_geo_routes | sort | tr '\n' '|')
+assert_contains "$r" "gamea.clashofclans.com	n.example" "a fixed group server takes the whole group although the check saw it on one domain of four"
+assert_contains "$r" "accounts.supercell.com	n.example" "every domain of the group"
+printf 'n.example\t1.2.3.4\t%s\t%s\t1\n' "$(date +%s)" "$(( $(date +%s) + 1800 ))" > "$(dns_geo_scan_file).down"
+assert_contains "$(dns_geo_routes)" "gamea.clashofclans.com	n.example" "and is never paused by the proxy probe (HTTPS says nothing about game servers)"
+assert_not_contains "$(cat "$(dns_geo_off_eff)")" "n.example" "it is not in the effective off list"
+rm -f "$(dns_geo_scan_file).down"
+mksc fail
+assert_contains "$(dns_geo_routes)" "gamea.clashofclans.com	t.example" "a fixed server that does not answer here gives the group to the others"
+echo "n.example" > "$SANDBOX/off.fixed"; offk=$DNS_GEO_OFF; DNS_GEO_OFF="$SANDBOX/off.fixed"; mksc ok
+assert_contains "$(dns_geo_routes)" "gamea.clashofclans.com	t.example" "so does one switched off by hand"
+DNS_GEO_OFF=$offk
+DNS_GEO_PREFER=$pkeep; rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
+assert_contains "$(cat "$DNS_GEO_PREFER")" "supercell =dns.nullsproxy.com" "the module fixes NullsProxy for Supercell"
+# порог группы — 70% доменов от лучшего: серверы DoH отвечают не на все
+# запросы, и сервер, обходящий почти всё, не должен проигрывать из-за этого
+{ printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
+  printf 'a.example\tok\t20\t10\t10\t0\ttls\n'; printf 'b.example\tok\t30\t8\t10\t0\ttls\n'
+  for d in gemini.google.com signaler-pa.clients6.google.com apis.google.com gemini.gstatic.com geminiweb-pa.clients6.google.com aistudio.google.com ai.google.dev; do printf '=%s\ta.example,b.example\n' "$d"; done
+  for d in notebooklm.google.com labs.google; do printf '=%s\ta.example\n' "$d"; done; } > "$(dns_geo_scan_file)"
+echo "@google b.example" > "$DNS_GEO_SCAN_DIR/groups.pin"
+assert_contains "$(dns_geo_routes)" "gemini.google.com	b.example" "a group server with 7 of the best one's 9 domains (over 70%) is kept"
+rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
 cp "$SANDBOX/scan.keep" "$(dns_geo_scan_file)"
 # Обычный сайт (не группа): закреплённый сервер держится, пока не подводил две
 # проверки подряд — Supercell менял сервер почти каждый час (журналы 07–08.11)

@@ -7,5 +7,8 @@
 # Comss убран (с ноября не обходит Gemini), magicdns — его адрес de.magicdns.ru,
 # dns.bezmezhau.com не отвечает (10–11.11) — остался sync.bezmezhau.com
 google de.magicdns.ru dns.zapret.moe dns.malw.link dns.dns-ai.ru sync.bezmezhau.com
-# Supercell: dns.nullsproxy.com отвечает почти всегда, и у игры один адрес выхода
-supercell dns.nullsproxy.com
+# «=сервер» — закреплён: вся группа через него, пока он отвечает в этой сети,
+# без сравнения «обходит / не обходит» и без паузы по пробе прокси.
+# Supercell: dns.nullsproxy.com обслуживает все игры, а в проверке виден
+# частично (отвечает не на все запросы подряд)
+supercell =dns.nullsproxy.com

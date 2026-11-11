@@ -14,9 +14,9 @@ BEGIN { while ((getline l < gf) > 0) { sub(/#.*/, "", l); n = split(tolower(l), 
 END {
   for (s in used) for (h in srv) if (hit[s, h] > best[s]) best[s] = hit[s, h]
   for (s in used) for (h in srv) {
-    # группа: не меньше 90% её доменов от лучшего, как в dns_geo_routes;
+    # группа: не меньше 70% её доменов от лучшего, как в dns_geo_routes;
     # обычный сайт — все его домены
-    ok = (substr(s, 1, 1) == "@" ? hit[s, h] > 0 && hit[s, h] * 10 >= best[s] * 9 : hit[s, h] == used[s]) ? 1 : 0
+    ok = (substr(s, 1, 1) == "@" ? hit[s, h] > 0 && hit[s, h] * 10 >= best[s] * 7 : hit[s, h] == used[s]) ? 1 : 0
     old = ((s, h) in sc) ? sc[s, h] : .5
     sc[s, h] = old * .75 + ok * .25; st[s, h] = ok ? 0 : st[s, h] + 1; key[s SUBSEP h] = 1
   }

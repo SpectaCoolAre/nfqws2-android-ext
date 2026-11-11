@@ -1184,7 +1184,8 @@ geo_ipcheck_targets() { # <файл проверки> -> «адрес роль �
   done | awk '!s[$1]++'
 }
 _geo_ipcheck_targets() {
-  awk -F'\t' -v base="$DNS_GEO_HOT_BASE" '
+  # прокси закреплённых за группой серверов не проверяются (см. dns_geo_off_eff)
+  awk -F'\t' -v base="$DNS_GEO_HOT_BASE" -v fx=" $(dns_geo_fixed | tr '\n' ' ') " '
     BEGIN { nb = split(base, b, " "); for (i = 1; i <= nb; i++) B[b[i]] = 1 }
     /^!/ { h = substr($1, 2); if ($4 != "") { a[h] = $4; ord[++no] = h }; next }
     /^\+/ { h = substr($1, 2); if (!(h in px) || $3 + 0 > pn[h]) { px[h] = $2; pn[h] = $3 + 0 }; next }
@@ -1192,7 +1193,7 @@ _geo_ipcheck_targets() {
     /^=/ { d = substr($1, 2); n = split($2, sv, ",")
       for (i = 1; i <= n; i++) { h = sv[i]; if (!(h in dm)) dm[h] = d; else if ((d in B) && !(dm[h] in B)) dm[h] = d } }
     END { for (k = 1; k <= no; k++) { h = ord[k]; print a[h], "server", h, h
-      if ((h in px) && (h in dm)) print px[h], "proxy", h, dm[h] } }' "$1" | head -n "$GEO_IPCHECK_MAX"
+      if ((h in px) && (h in dm) && !index(fx, " " h " ")) print px[h], "proxy", h, dm[h] } }' "$1" | head -n "$GEO_IPCHECK_MAX"
 }
 # Быстрая проверка (quick, после частой проверки DNS): только прокси серверов
 # в работе (пул, группы, маршруты) и серверов на паузе, чей срок подошёл
