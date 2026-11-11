@@ -312,6 +312,9 @@ truthy(/<svg class="sp-logo"[^>]*><use href="#i-n2"\/><\/svg>/.test(splash), 'it
 truthy(/html\.sp-m3 #splash \.sp-ic \{[^}]*var\(--sp-p/.test(html), 'in Material the circle takes the theme colour saved last time');
 truthy(/store\.set\('sp_m3_'/.test(fs.readFileSync(path.join(WEBROOT, 'js', 'theme.js'), 'utf8')), 'and the theme saves it for the next start');
 
+sect('section headers');
+truthy(!/<h2 class="subhead"[^>]*>[^<]*<\/h2>\s*<\/(div|section)>/.test(html), 'no section header is left with nothing under it');
+
 sect('programmatic focus');
 const baseCss = fs.readFileSync(path.join(WEBROOT, 'css', 'base.css'), 'utf8');
 truthy(/\[tabindex="-1"\]:focus-visible \{ outline: none; \}/.test(baseCss), 'sheets and dialogs focused by script get no theme-coloured ring (seen on the first «What’s new»)');

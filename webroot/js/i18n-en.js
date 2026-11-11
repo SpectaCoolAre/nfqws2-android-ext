@@ -851,7 +851,6 @@ EN = {
  "Что нового в {0}": "What's new in {0}",
  "Список изменений недоступен": "The changelog is not available",
  "Редактор hosts": "Hosts editor",
- "Блокировка DNS": "DNS blocking",
  "Сохранено, служба перезапущена": "Saved, the service was restarted",
  "Не удалось перезапустить службу": "Couldn't restart the service",
  "Обход ограничений и блокировка рекламы — без перезагрузки": "Bypassing restrictions and ad blocking — no reboot",

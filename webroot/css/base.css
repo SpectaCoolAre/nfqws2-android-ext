@@ -512,7 +512,7 @@ body.swiping .state::after { opacity: 0 !important; }
 @keyframes menu-in-up { from { opacity: 0; transform: scale(.86) translateY(8px); } to { opacity: 1; transform: none; } }
 .menu .mi {
   appearance: none; display: flex; align-items: center; gap: 12px; width: 100%;
-  min-height: 48px; padding: 0 16px; border: 0; background: none; cursor: pointer; text-align: start;
+  min-height: 48px; padding: 0 12px; border: 0; background: none; cursor: pointer; text-align: start;
   font-size: var(--ts-body-large); line-height: var(--lh-body-large);
   letter-spacing: var(--tr-body-large); color: var(--md-sys-color-on-surface);
 }
@@ -544,8 +544,9 @@ body.swiping .state::after { opacity: 0 !important; }
 .segmented .seg:last-child { border-start-end-radius: var(--shape-full); border-end-end-radius: var(--shape-full); }
 .segmented .seg .check { width: 0; overflow: hidden; flex: none;
   transition: width var(--dur-short) var(--spring); }
+/* M3: у выбранного сегмента меняются фон и галочка, начертание — то же label-large (medium) */
 .segmented .seg.on { background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container);
-  border-color: transparent; font-weight: var(--w-bold); }
+  border-color: transparent; }
 .segmented .seg.on .check { width: 18px; }
 
 /* ── M3 switch: трек 52×32, handle 16→24, spring ─────────────────────── */
@@ -741,7 +742,7 @@ html[data-containers="true"] .list > .list-item:active {
 /* ── Modal bottom sheet ──────────────────────────────────────────────── */
 .sheet {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; margin: 0 auto;
-  max-width: var(--content-max);
+  max-width: min(640px, var(--content-max));   /* M3: модальная шторка не шире 640dp */
   background: var(--md-sys-color-surface-container-low); color: var(--md-sys-color-on-surface);
   border-radius: var(--shape-extra-large) var(--shape-extra-large) 0 0;
   box-shadow: var(--md-elev-1); padding: 0 var(--screen-margin) calc(20px + var(--bottom-inset));
