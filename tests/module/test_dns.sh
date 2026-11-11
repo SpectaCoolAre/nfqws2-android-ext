@@ -1172,6 +1172,14 @@ ctl dns-geo-off a.example,api.example/sync 1
 assert_eq "a.example api.example/sync" "$(tr '\n' ' ' < "$DNS_GEO_OFF" | sed 's/ $//')" "all addresses of a service are switched off at once (an address with its own path too)"
 ctl dns-geo-off a.example,api.example/sync 0
 assert_no_file "$DNS_GEO_OFF" "and back on"
+# на паузе в этой сети (прокси не открывается) — не берётся, но если на паузе
+# все ответившие, пауза не действует: лучше пробовать, чем никуда
+gf=$(dns_geo_scan_file)
+printf 'a.example\t198.51.100.9\t1\t9999999999\t1\n' > "$gf.down"
+assert_not_contains "$(dns_geo_routes; dns_geo_pick)" "a.example" "a server paused on this network is not used"
+cut -f1 "$gf" | awk '!/^[#=+!?]/ && NF { printf "%s\t198.51.100.9\t1\t9999999999\t1\n", $1 }' > "$gf.down"
+assert_eq "" "$(cat "$(dns_geo_off_eff)")" "all answering servers paused — the pause does not apply"
+rm -f "$gf.down"
 rm -f "$(dns_geo_scan_file).pin" "$DNS_GEO_OFF"
 printf 'chatgpt.com\nclaude.ai\n' > "$DNS_GEO_LIST"
 dns_geo_scan >/dev/null

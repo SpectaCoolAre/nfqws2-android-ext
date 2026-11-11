@@ -641,7 +641,7 @@ export_collect() { # <папка> <ключ>
       # за сайтами серверы) и действующие маршруты: по ним видно, какой
       # сервер отвечает за сайт и что меняется между проверками
       mkdir -p "$1/dns"
-      [ -d "$DNS_GEO_SCAN_DIR" ] && cp -f "$DNS_GEO_SCAN_DIR"/*.tsv "$DNS_GEO_SCAN_DIR"/*.hot "$DNS_GEO_SCAN_DIR"/*.pin "$DNS_GEO_SCAN_DIR"/*.ipcheck "$1/dns"/ 2>/dev/null
+      [ -d "$DNS_GEO_SCAN_DIR" ] && cp -f "$DNS_GEO_SCAN_DIR"/*.tsv "$DNS_GEO_SCAN_DIR"/*.hot "$DNS_GEO_SCAN_DIR"/*.pin "$DNS_GEO_SCAN_DIR"/*.ipcheck "$DNS_GEO_SCAN_DIR"/*.down "$1/dns"/ 2>/dev/null
       cp -f "$IPSET_AUTO" "$1/dns"/ 2>/dev/null
       cp -f "$DNS_RUN_DIR/upstreams.txt" "$DNS_RUN_DIR/args" "$DNS_RUN_DIR/slot" "$DNS_RUN_DIR/ipv6" "$1/dns"/ 2>/dev/null
       f=$({ iptables-save -t nat 2>/dev/null; ip6tables-save -t nat 2>/dev/null; ip6tables-save -t filter 2>/dev/null; } | grep -i "nfqws_dns")
@@ -1177,21 +1177,60 @@ geo_ipcheck_targets() { # <файл проверки> -> «адрес роль �
     END { for (k = 1; k <= no; k++) { h = ord[k]; print a[h], "server", h, h
       if ((h in px) && (h in dm)) print px[h], "proxy", h, dm[h] } }' "$1" | awk '!s[$1]++' | head -n "$GEO_IPCHECK_MAX"
 }
-cmd_geo_ipcheck() {
-  local f tool bin out targets ip role srv dom nb cause via verdict what added="" dropped now
+# Быстрая проверка (quick, после частой проверки DNS): только прокси серверов
+# в работе (пул, группы, маршруты) и серверов на паузе, чей срок подошёл
+geo_ipcheck_quick_targets() { # <файл проверки> <время>
+  local f="$1" now="$2" act
+  act=$({ dns_geo_pick; dns_geo_routes | cut -f2; } 2>/dev/null | awk 'NF && $1 != "-" && !s[$1]++' | tr '\n' ' ')
+  geo_ipcheck_targets "$f" | awk -v act=" $act" -v now="$now" -v df="$f.down" '
+    BEGIN { while ((getline l < df) > 0) { split(l, a, "\t"); if (a[4] + 0 <= now) due[a[1]] = 1; down[a[1]] = 1 } }
+    $2 == "proxy" && ((index(act, " " $3 " ") && !($3 in down)) || ($3 in due))'
+}
+# Пауза серверов по итогу проверки адресов: прокси закрыт или не открывается и
+# через обход — сервер на паузе в этой сети, повтор через 30 мин, 1 ч, 2 ч и
+# дальше раз в 2 ч; открылся — пауза снята. -> «down»/«up» и сервер на строку
+geo_down_update() { # <файл проверки> <итог проверки адресов> <время>
+  local f="$1" res="$2" now="$3"
+  { cat "$f.down" 2>/dev/null; } | awk -F'\t' -v res="$res" -v now="$now" -v out="$f.down.new" '
+    BEGIN { while ((getline l < res) > 0) { if (l ~ /^#/) continue; split(l, a, "\t")
+        if (a[2] != "proxy") continue; v[a[3]] = a[8]; ip[a[3]] = a[1] } }
+    NF >= 5 { old[$1] = $0; n[$1] = $5; since[$1] = $3 }
+    END {
+      for (s in v) {
+        if (v[s] == "closed" || v[s] == "nobypass") {
+          k = (s in n) ? n[s] + 1 : 1; d = 1800
+          for (i = 1; i < k && d < 7200; i++) d *= 2
+          if (d > 7200) d = 7200
+          print s "\t" ip[s] "\t" ((s in since) ? since[s] : now) "\t" (now + d) "\t" k > out
+          if (!(s in old)) print "down " s
+        } else if (v[s] == "open" || v[s] == "bypass") { if (s in old) print "up " s }
+        else if (s in old) print old[s] > out
+      }
+      for (s in old) if (!(s in v)) print old[s] > out
+      close(out) }'
+  if [ -s "$f.down.new" ]; then mv -f "$f.down.new" "$f.down"; else rm -f "$f.down.new" "$f.down"; fi
+}
+cmd_geo_ipcheck() { # [quick]
+  local f tool bin out targets ip role srv dom nb cause via verdict what added="" dropped now quick="" ch
+  [ "$1" = quick ] && quick=1
   f=$(dns_geo_scan_file)
   [ -s "$f" ] || { echo "Проверки DNS обхода геоблока ещё не было" >&2; return 1; }
   is_running || { echo "Служба не запущена: без неё не сравнить с обходом" >&2; return 1; }
+  if [ -n "$quick" ]; then
+    [ -n "$(geo_ipcheck_quick_targets "$f" "$(date +%s)")" ] || return 0
+  fi
   tool=$(probe_tool); bin="${tool#* }"
   [ "${tool%% *}" = curl ] || { echo "Нужен curl" >&2; return 1; }
   mkdir "$STATE_DIR/geo-ipcheck.lock" 2>/dev/null || { echo "Проверка адресов уже идёт" >&2; return 3; }
   trap 'rmdir "$STATE_DIR/geo-ipcheck.lock" 2>/dev/null; cleanup_probe_app_rule' EXIT INT TERM
   setup_probe_app_rule
-  targets=$(geo_ipcheck_targets "$f")
-  out="$f.ipcheck"
+  if [ -n "$quick" ]; then targets=$(geo_ipcheck_quick_targets "$f" "$(date +%s)")
+  else targets=$(geo_ipcheck_targets "$f"); fi
+  out="$f.ipcheck"; [ -n "$quick" ] && out="$f.ipquick"
   now=$(date +%s)
   echo "#time=$now адрес роль сервер домен без-обхода причина через-обход итог" > "$out.tmp"
-  dns_log "проверка адресов серверов обхода на блокировку по IP: $(printf '%s\n' "$targets" | grep -c .) адресов"
+  if [ -n "$quick" ]; then dns_log "быстрая проверка прокси серверов обхода: $(printf '%s\n' "$targets" | awk '{ print $3 }' | tr '\n' ' ')"
+  else dns_log "проверка адресов серверов обхода на блокировку по IP: $(printf '%s\n' "$targets" | grep -c .) адресов"; fi
   # 1–2: без обхода и причина
   printf '%s\n' "$targets" | while read -r ip role srv dom; do
     [ -n "$ip" ] || continue
@@ -1239,6 +1278,13 @@ cmd_geo_ipcheck() {
     dns_log "ipset_auto.list: убраны (обход не помогает)$dropped"
     reload_after_change >/dev/null 2>&1
   fi
+  # пауза серверов, чей прокси в этой сети не открывается; сменилась — маршруты заново
+  ch=$(geo_down_update "$f" "$out" "$(date +%s)")
+  printf '%s\n' "$ch" | awk '$1 == "down" { printf "%s%s", (n++ ? ", " : ""), $2 } END { if (n) print "" }' | while IFS= read -r l; do
+    dns_log "на паузе в этой сети (прокси не открывается и через обход): $l — сайты переходят на другие серверы"; done
+  printf '%s\n' "$ch" | awk '$1 == "up" { printf "%s%s", (n++ ? ", " : ""), $2 } END { if (n) print "" }' | while IFS= read -r l; do
+    dns_log "снова в работе (прокси открывается): $l"; done
+  [ -n "$ch" ] && dns_apply_now >/dev/null 2>&1
   cleanup_probe_app_rule
   rmdir "$STATE_DIR/geo-ipcheck.lock" 2>/dev/null
   trap - EXIT INT TERM
@@ -2722,7 +2768,7 @@ EOF
   probe-dpi) cmd_probe_dpi "${2:-all}" ;;
   dpi-distance) cmd_dpi_distance ;;
   domain-check) cmd_domain_check "$2" ;;
-  geo-ipcheck) cmd_geo_ipcheck ;;
+  geo-ipcheck) cmd_geo_ipcheck "$2" ;;
   share) cmd_share "$2" "$3" ;;
   share-saved) cmd_share_saved "$2" ;;
   # Список изменений из архива модуля — для «Что нового» в WebUI

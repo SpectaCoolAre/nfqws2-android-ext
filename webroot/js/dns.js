@@ -258,6 +258,11 @@ const dnsGeoTry = host => (dnsSt.status['geo_try_' + host] || '').split('/').map
 const dnsGeoFlaky = host => { const [ok, n] = dnsGeoTry(host); return n > 0 && ok > 0 && ok < n; };
 /* Отключён вручную (geo_off): в пул и маршруты не идёт */
 const dnsGeoOff = host => (dnsSt.status.geo_off || '').split(' ').includes(host);
+/* На паузе в этой сети (geo_down_<сервер>=прокси,с какого времени,следующая
+   проверка): его прокси здесь не открывается и через обход — модуль сам
+   перепроверяет и вернёт сервер, когда прокси откроется */
+const dnsGeoDown = host => { const v = (dnsSt.status || {})['geo_down_' + host]; if(!v) return null;
+  const [ip, since, next] = v.split(','); return {ip, since: +since || 0, next: +next || 0}; };
 const dnsGeoRole = host => dnsGeoOff(host) ? t('отключён вручную') : dnsGeoPool().includes(host) ? t('в пуле')
   : dnsGeoFor(host) ? t('доменов: {0}', fmtCount(dnsGeoFor(host))) : '';
 /* Сводка обхода геоблока для строки на главном экране DNS */
@@ -280,9 +285,9 @@ function dnsGeoServices(){
   const rank = (a, b) => (dnsGeoFor(b.host) - dnsGeoFor(a.host)) || (b.proxy - a.proxy) || (a.ms - b.ms);
   return [...by].map(([name, hosts]) => {
     const rows = hosts.map(h => scan.find(x => x.host === h)).filter(Boolean);
-    const ok = rows.filter(r => r.ok), on = ok.filter(r => !dnsGeoOff(r.host)).sort(rank);
+    const ok = rows.filter(r => r.ok), on = ok.filter(r => !dnsGeoOff(r.host) && !dnsGeoDown(r.host)).sort(rank);
     return {name, hosts, rows, ok, best: on[0] || ok.slice().sort(rank)[0] || null,
-      off: hosts.every(dnsGeoOff), pool: hosts.some(h => dnsGeoPool().includes(h)),
+      off: hosts.every(dnsGeoOff), down: ok.length > 0 && ok.every(r => dnsGeoDown(r.host)), pool: hosts.some(h => dnsGeoPool().includes(h)),
       dom: hosts.reduce((n, h) => n + dnsGeoFor(h), 0)};
   });
 }
@@ -305,7 +310,7 @@ function renderDnsGeo(){
     || ((b.best && b.best.proxy) - (a.best && a.best.proxy)) || ((a.best && a.best.ms) - (b.best && b.best.ms)));
   list.forEach(s => {
     const r = s.best;
-    const role = s.off ? t('отключён вручную') : s.pool ? t('в пуле') : s.dom ? t('доменов: {0}', fmtCount(s.dom)) : '';
+    const role = s.off ? t('отключён вручную') : s.down ? t('на паузе: прокси здесь не открывается') : s.pool ? t('в пуле') : s.dom ? t('доменов: {0}', fmtCount(s.dom)) : '';
     const sub = s.off && !r ? t('отключён вручную')
       : !s.rows.length ? t('ещё не проверялся')
       : !r ? t('не отвечает')
@@ -329,10 +334,13 @@ function dnsGeoHostLines(host){
   const st = dnsSt.status || {}, addr = st['geo_addr_' + host];
   if(!r) return [t('Ещё не проверялся в этой сети')];
   if(!r.ok) return [t('Не отвечает') + (dnsGeoWhy(r.err) ? ': ' + dnsGeoWhy(r.err) : '')];
+  const dn = dnsGeoDown(host);
+  const pause = dn ? [t('На паузе в этой сети: прокси {0} не открывается и через обход — сайты идут через другие серверы. Проверю снова {1}', dn.ip,
+    dn.next ? new Date(dn.next * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '—')] : [];
   const dot = /^DoT:/.test(r.err) ? r.err.replace(/^DoT:\s*/, '').split(';')[0] : '';
   return [t('Ответ за {0} мс по {1}', r.ms, r.proto === 'https' ? 'DoH' : 'DoT') + (dnsGeoPool().includes(host) ? ' · ' + t('в пуле') : '')]
     .concat(r.proto === 'https' ? [t('DoT не прошёл ({0}) — работает по DoH', dnsGeoWhy(dot) || t('нет ответа'))] : [],
-      addr ? [t('Адрес: {0}', addr)] : [],
+      addr ? [t('Адрес: {0}', addr)] : [], pause,
       [t('Обходит геоблок для {0} из {1} доменов списка', fmtCount(r.proxy), fmtCount(r.total)),
         t('Из них своим адресом: {0} — для этих доменов годится любой протокол, в том числе игры', fmtCount(r.own)),
         t('Направлено к нему доменов: {0}', fmtCount(dnsGeoFor(host)))],

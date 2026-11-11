@@ -132,6 +132,25 @@ dns_geo_services() {
     /^[[:space:]]*\[/ { s = $0; sub(/^[[:space:]]*\[/, "", s); sub(/\][[:space:]]*$/, "", s); next }
     NF { print $1 "\t" (s != "" ? s : $1) }'
 }
+# Серверы на паузе в этой сети (<файл проверки>.down: «сервер<TAB>прокси<TAB>
+# с какого времени<TAB>следующая проверка<TAB>подряд недоступен»): их прокси
+# здесь закрыт или не открывается и через обход (nfqws2-ctl geo-ipcheck) —
+# ТСПУ в разных районах блокирует разные адреса прокси (11.11: wlrus и
+# bezmezhau в одном районе Подмосковья, а дома открываются). Пауза — своя у
+# каждой сети; проверка прокси вернёт сервер, как только он откроется.
+# -> путь к списку «не брать»: отключённые вручную и на паузе; если на паузе
+# все ответившие — только отключённые вручную (лучше пробовать, чем никуда)
+dns_geo_off_eff() {
+  local f e="$DNS_RUN_DIR/geo-off.eff"
+  f=$(dns_geo_scan_file); mkdir -p "$DNS_RUN_DIR"
+  { cat "$DNS_GEO_OFF" 2>/dev/null; cut -f1 "$f.down" 2>/dev/null; } | awk 'NF && !s[$0]++' > "$e.$$"
+  if [ -s "$f.down" ] && ! awk -F'\t' -v of="$e.$$" 'BEGIN { while ((getline l < of) > 0) o[l] = 1 }
+      !/^[#=+!?]/ && $2 == "ok" && $4 > 0 && !($1 in o) { x = 1 } END { exit !x }' "$f" 2>/dev/null; then
+    cat "$DNS_GEO_OFF" 2>/dev/null > "$e.$$"
+  fi
+  mv -f "$e.$$" "$e"
+  echo "$e"
+}
 dns_geo_servers() {
   local h; h=$(dns_geo_pick_up | tr '\n' ' ' | sed 's/ $//')
   echo "${h:-$DNS_GEO_FALLBACK}"
@@ -157,7 +176,7 @@ dns_geo_scan_time() { sed -n '1s/^#time=\([0-9]*\).*/\1/p' "$(dns_geo_scan_file)
 # идут по своим маршрутам (dns_geo_routes)
 dns_geo_pool() { # -> «мс сервер протокол» пула, лучшие сверху (закреплённый — первым)
   local f; f=$(dns_geo_scan_file); [ -s "$f" ] || return 0
-  awk -F'\t' -v of="$DNS_GEO_OFF" -v pf="$f.pin" -f "$MODDIR/lib/geo-pool.awk" "$f" | sort -n | head -n "$DNS_GEO_POOL"
+  awk -F'\t' -v of="$(dns_geo_off_eff)" -v pf="$f.pin" -f "$MODDIR/lib/geo-pool.awk" "$f" | sort -n | head -n "$DNS_GEO_POOL"
 }
 # Сервер общего пула — один: dnsproxy спрашивает все серверы правила разом и
 # берёт первый ответ, и с несколькими серверами один и тот же сайт получал
@@ -203,7 +222,7 @@ dns_geo_routes() { # [save]
   local fresh=0 ft
   ft=$(sed -n '1s/^#time=\([0-9]*\).*/\1/p' "${h:-$f}" 2>/dev/null)
   [ -n "$ft" ] && [ $(( $(date +%s) - ft )) -lt $(( DNS_GEO_HOT_EVERY * 2 )) ] && fresh=1
-  awk -F'\t' -v prf="$DNS_GEO_PREFER" -v of="$DNS_GEO_OFF" -v pf="$f.pin" -v gpf="$DNS_GEO_SCAN_DIR/groups.pin" -v rf="$f.rel" -v fresh="$fresh" -v base="$DNS_GEO_HOT_BASE" -v gf="$DNS_GEO_GROUPS" -v gl="$DNS_GEO_LIST" -v hf="$h" -v save="$1" -v pool="$(dns_geo_pick)" -f "$MODDIR/lib/geo-routes.awk" "$f" $h
+  awk -F'\t' -v prf="$DNS_GEO_PREFER" -v of="$(dns_geo_off_eff)" -v pf="$f.pin" -v gpf="$DNS_GEO_SCAN_DIR/groups.pin" -v rf="$f.rel" -v fresh="$fresh" -v base="$DNS_GEO_HOT_BASE" -v gf="$DNS_GEO_GROUPS" -v gl="$DNS_GEO_LIST" -v hf="$h" -v save="$1" -v pool="$(dns_geo_pick)" -f "$MODDIR/lib/geo-routes.awk" "$f" $h
 }
 # Что сменилось в маршрутах против прежних (файл): «: домен старый → новый, …»,
 # первые пять и сколько ещё
@@ -350,6 +369,10 @@ dns_geo_scan() { # [full|hot]
       dns_log "частая проверка DNS обхода геоблока (${n:-0} доменов, которыми пользуются): маршруты изменились — применяю$(dns_geo_routes_diff "$DNS_RUN_DIR/geo-routes.before")"
       dns_apply_now
     fi
+    # прокси серверов в работе и тех, кто на паузе и чей срок подошёл, — открываются
+    # ли в этой сети: заметить новую блокировку (другой район) и вернуть сервер,
+    # когда она снята. Вместе с частой проверкой — раз в полчаса и не во сне
+    [ "${DNS_GEO_IPCHECK:-1}" = 1 ] && is_running && ( sh "$MODDIR/bin/nfqws2-ctl" geo-ipcheck quick </dev/null >/dev/null 2>&1 & )
     return 0
   fi
   # ни один сервер не ответил — скорее всего, сеть ещё не готова (загрузка,
@@ -1655,6 +1678,8 @@ dns_state() {
   f=$(dns_geo_scan_file)
   # отключённые вручную серверы: geo_off=a b
   dns_geo_services | awk -F'\t' '{ print "geo_svc_" $1 "=" $2 }'
+  # на паузе в этой сети: geo_down_<сервер>=прокси,с какого времени,следующая проверка
+  awk -F'\t' 'NF >= 4 { print "geo_down_" $1 "=" $2 "," $3 "," $4 }' "$f.down" 2>/dev/null
   echo "geo_off=$(tr '\n' ' ' 2>/dev/null < "$DNS_GEO_OFF" | sed 's/ $//')"
   # перехват обычного DNS сетью (whoami.akamai.net): geo_intercept=1
   # и кто ответил на каждый: geo_who_<net|google|cloudflare>=адрес/AS

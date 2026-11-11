@@ -786,6 +786,30 @@ echo 198.51.100.3 >> "$IPSET_AUTO"; ctl geo-ipcheck
 assert_rc 0 "$ctl_rc" "and a third"
 assert_eq "203.0.113.10" "$(cat "$IPSET_AUTO")" "an address left by an earlier version, where the bypass does not help, is dropped too"
 assert_contains "$(_startup_args)" "--ipset=$IPSET_AUTO" "nfqws2 gets the list as an IP list of the strategy"
+# Пауза: прокси сервера здесь не открывается и через обход — сервер на паузе
+# в этой сети (11.11: wlrus и bezmezhau в одном районе, дома открываются)
+echo 35 > "$MOCK_DIR/via.203.0.113.10"
+kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; fakesvc=$(fake_daemon "$PIDFILE")
+ctl geo-ipcheck
+assert_rc 0 "$ctl_rc" "a check with a dead proxy runs"
+assert_match "$(cat "$f.down" 2>/dev/null)" "^a.example	203.0.113.10	[0-9]*	[0-9]*	1$" "the server whose proxy does not open even through the bypass is paused on this network"
+nx=$(cut -f4 "$f.down"); nw=$(date +%s)
+assert_ge "$((nx - nw))" 1700 "it is checked again in half an hour"
+assert_contains "$(tail -n 6 "$DNS_LOG")" "на паузе в этой сети (прокси не открывается и через обход): a.example" "the DNS log says so"
+assert_contains "$(cat "$(dns_geo_off_eff)")" "a.example" "and the server is left out of the choice"
+assert_contains "$(dns_state)" "geo_down_a.example=203.0.113.10," "the screen gets the pause"
+kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; fakesvc=$(fake_daemon "$PIDFILE")
+ctl geo-ipcheck quick
+assert_rc 0 "$ctl_rc" "a quick check before the time is quiet"
+assert_no_file "$f.ipquick" "and checks nothing: the paused proxy is not due yet, the others are not in use"
+# срок подошёл, прокси снова открывается (вернулись из того района)
+awk -F'\t' 'BEGIN { OFS = "\t" } { $4 = 1; print }' "$f.down" > "$f.down.t" && mv "$f.down.t" "$f.down"
+echo 0 > "$MOCK_DIR/via.203.0.113.10"
+ctl geo-ipcheck quick
+assert_contains "$(cut -f1,2 "$f.ipquick" 2>/dev/null)" "203.0.113.10	proxy" "a quick check probes the paused proxy when it is due"
+assert_no_file "$f.down" "the proxy opens again — the pause is over"
+assert_contains "$(tail -n 6 "$DNS_LOG")" "снова в работе (прокси открывается): a.example" "and the log says the server is back"
+rm -f "$f.ipquick"
 kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; rm -f "$PIDFILE" "$IPSET_AUTO" "$f.ipcheck"
 
 rm -f "$MOCKBIN/ping" "$MOCKBIN/curl"

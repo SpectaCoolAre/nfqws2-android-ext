@@ -70,7 +70,7 @@ window.__presets = ${JSON.stringify(PRESETS)};
       'cdn=' + (st.enabled && window.__smart !== 0 ? 'running' : ''),
       'geo=' + (window.__geo !== 0 ? 'on' : 'off'), 'geo_domains=' + st.geoN, 'geo_updated=' + st.geoAt, 'geo_pool=dns.fast.example', 'geo_for_dns.fast.example=600', 'geo_for_dns.ai.example=12', 'geo_direct=110', 'geo_try_dns.ai.example=2/3', 'geo_intercept=1', 'geo_off=' + (st.geoOff || ''), 'geo_who_net=213.87.1.1/8359', 'geo_who_google=213.87.1.1/8359', 'geo_who_cloudflare=-', 'geo_cert_dns.ai.example=4', 'geo_overlap_x=2', 'geo_scan_time=1767225600',
       'geo_svc_dns.fast.example=Fast', 'geo_svc_doh.fast.example/sync=Fast', 'geo_svc_dns.ai.example=dns.ai.example', 'geo_svc_dns.dead.example=Dead',
-      'geo_svc_new.example=New', 'geo_addr_dns.fast.example=198.51.100.7',
+      'geo_svc_new.example=New', 'geo_addr_dns.fast.example=198.51.100.7', 'geo_down_doh.fast.example/sync=203.0.113.5,1767225600,1767227400',
       '#geoscan', 'dns.fast.example\tok\t40\t610\t722\t5\ttls', 'dns.ai.example\tok\t20\t40\t722\t12\ttls',
       'doh.fast.example/sync\tok\t90\t300\t722\t1\thttps\tDoT: dial tcp 1.2.3.4:853: i/o timeout',
       'dns.dead.example\tfail\t0\t0\t722\t0\t-\ttimeout', 'dns.gone.example\tfail\t0\t0\t722\t0\t-\ttimeout', '#status'];
@@ -238,6 +238,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     const svc = await page.textContent('#dialog-wrap');
     truthy(svc.includes('tls://dns.fast.example') && svc.includes('https://doh.fast.example/sync') && svc.includes('Адрес: 198.51.100.7'), 'a tap on a service shows each variant: DoT or DoH by its own path, and the address');
     truthy(svc.includes('DoT не прошёл (нет ответа) — работает по DoH'), 'and why a variant goes over DoH');
+    truthy(svc.includes('На паузе в этой сети: прокси 203.0.113.5 не открывается и через обход'), 'a variant whose proxy does not open here says it is paused');
     await page.click('#d-ok'); await idle(); await page.waitForTimeout(400);
     truthy(await page.evaluate(() => window.__dns.calls.includes('dns-geo-off dns.fast.example,doh.fast.example/sync 1')), 'switching off takes every variant of the service');
     truthy((await page.textContent('#dns-geo')).includes('отключён вручную'), 'the service says it is off');

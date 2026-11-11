@@ -1103,5 +1103,7 @@ EN = {
   "нет ответа": "no answer",
   "Ещё не проверялся в этой сети": "Not checked on this network yet",
   "DoT не прошёл ({0}) — работает по DoH": "DoT failed ({0}) — works over DoH",
-  "Адрес: {0}": "Address: {0}"
+  "Адрес: {0}": "Address: {0}",
+  "на паузе: прокси здесь не открывается": "paused: its proxy does not open here",
+  "На паузе в этой сети: прокси {0} не открывается и через обход — сайты идут через другие серверы. Проверю снова {1}": "Paused on this network: proxy {0} does not open even through the bypass — sites go through other servers. Next check at {1}"
 };
