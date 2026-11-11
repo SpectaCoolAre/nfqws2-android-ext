@@ -171,7 +171,7 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     sect(`${mode}: work mode`);
     eq('smart', await page.evaluate(() => $('dns-mode-seg').querySelector('.seg.selected').dataset.mode), 'smart mode is the default');
     truthy((await page.textContent('#dns-nav')).includes('Обход геоблока'), 'it leads to the geo-block bypass');
-    truthy((await page.textContent('#dns-nav')).includes('Включится вместе с DNS модуля'), 'and shows speed, which starts with DNS');
+    eq(false, (await page.textContent('#dns-nav')).includes('Скорость'), 'no «Speed» row: the video DNS has nothing to show or set');
     eq(0, await page.$$eval('[data-page="dns"] [aria-expanded]', r => r.length), 'no folding groups: sections are screens of their own');
     await page.click('#dns-mode-seg .seg[data-mode="profiles"]');
     await page.waitForSelector('#dialog-wrap.open');

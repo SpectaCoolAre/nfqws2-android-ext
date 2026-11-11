@@ -385,17 +385,14 @@ async function dnsGeoUpdate(){
   if(await loadDnsState()) renderDns();
 }
 /* Разделы DNS на главном экране — строками, каждая открывает свой экран:
-   обход геоблока и скорость (умный режим), профили (оба режима) */
+   обход геоблока (умный режим) и профили (оба режима) */
 function renderDnsNav(){
   if(!$('dns-nav')) return;
   const st = dnsSt.status || {}, smart = dnsSmartMode();
   const max = dnsMax('profiles', 32), n = dnsSt.profiles.length, en = dnsSt.profiles.filter(p => p.enabled).length;
-  const cdn = st.cdn || '';
   const rows = [];
   if(smart){
     rows.push(settingsRow({icon: 'globe', title: 'Обход геоблока', sub: dnsGeoSummary(), on: "navigate('dnsgeo')", chevron: true}));
-    rows.push(settingsRow({icon: 'auto', title: 'Скорость', sub: cdn === 'running' ? t('Видео и CDN — самый быстрый адрес, повторы из кэша')
-      : cdn === 'down' ? t('Не запустился — см. журнал DNS') : t('Включится вместе с DNS модуля')}));
   }
   rows.push(settingsRow({icon: 'dns', title: 'Профили', sub: n ? t('{0} из {1} · включено: {2}', n, max, en) : t('Профилей пока нет'),
     on: "navigate('dnsprofiles')", chevron: true}));
