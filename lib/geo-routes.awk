@@ -15,6 +15,8 @@ BEGIN { while ((getline l < of) > 0) { gsub(/[[:space:]]/, "", l); if (l != "") 
   # основные сервисы — «используемые» всегда, есть частая проверка или нет
   nb = split(base, bl, " "); for (i = 1; i <= nb; i++) basehot[bl[i]] = 1
   while ((getline l < rf) > 0) { split(l, a, "\t"); if (a[1] != "") { rsc[a[1], a[2]] = a[3] + 0; rst[a[1], a[2]] = a[4] + 0 } }
+  # busybox awk пишет в файл, открытый getline, впустую — закрыть
+  close(of); close(pf); close(gf); close(gpf); close(prf); close(rf)
   n = 0 }
 !/^[#=+!?]/ && $2 == "ok" { pr[$1] = ($7 == "https" ? "https" : "tls"); next }
 # сервер, не ответивший в частой проверке, сейчас недоступен

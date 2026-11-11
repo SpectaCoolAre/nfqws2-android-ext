@@ -1028,6 +1028,14 @@ cp "$SANDBOX/geo.keep" "$DNS_GEO_LIST"
 # Gemini не должен менять адрес выхода посреди чата
 dns_geo_pin_save
 assert_contains "$(cat "$DNS_GEO_SCAN_DIR/groups.pin")" "@google b.example" "the group server is remembered for every network"
+# busybox awk (Magisk, KernelSU) не пишет в файл, открытый getline: выбор
+# группы не сохранялся, и сервер Gemini менялся на каждой проверке
+if command -v busybox >/dev/null 2>&1; then
+  mkdir -p "$SANDBOX/bb"; ln -sf "$(command -v busybox)" "$SANDBOX/bb/awk"
+  echo "@google gone.example" > "$DNS_GEO_SCAN_DIR/groups.pin"
+  (PATH="$SANDBOX/bb:$PATH"; dns_geo_pin_save)
+  assert_contains "$(cat "$DNS_GEO_SCAN_DIR/groups.pin")" "@google b.example" "busybox awk saves the group server over the old one"
+fi
 cp "$(dns_geo_scan_file).hot" "$SANDBOX/hot.keep"
 printf '=gemini.google.com\tb.example,a.example\n' >> "$(dns_geo_scan_file).hot"
 echo "@google a.example" > "$DNS_GEO_SCAN_DIR/groups.pin"

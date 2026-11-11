@@ -292,8 +292,10 @@ assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",43-4
 # с ним на роутере заработал YouTube
 assert_contains "$(grep '^#@google 47 ' "$REPO_DIR/strategies/smart.conf")" "hardcorp74: wide-youtube" "the new hardcorp74 YouTube profile is a Google variant"
 assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",47-48:" "and in the base set"
-# профиль hardcorp74 для googlevideo.com (стабильный поток видео) — тоже вариант
-assert_contains "$(grep 'strategy=48' "$REPO_DIR/strategies/smart.conf")" "fake:blob=0x00000000:tcp_ack=-66000:tcp_ts_up:repeats=2" "the hardcorp74 googlevideo profile is a Google variant too"
+# профиль hardcorp74 для googlevideo.com (стабильный поток видео) — тоже вариант;
+# nfqws-menu fced8d1 (11.11): одиночный fake и multidisorder вместо multisplit
+assert_contains "$(grep 'strategy=48' "$REPO_DIR/strategies/smart.conf")" "fake:blob=0x00000000:tcp_ack=-66000:tcp_ts_up:strategy=48" "the hardcorp74 googlevideo profile is a Google variant too"
+assert_contains "$(grep '^ *--lua-desync=multidisorder:pos=1,midsld:strategy=48' "$REPO_DIR/strategies/smart.conf")" "strategy=48" "with multidisorder, as in nfqws-menu now"
 # видео YouTube на МТС — с кэшей Google в сети оператора: там hostfakesplit
 # google.com (Youtube_circular #1) открыл 94 из 94, одиночный fake — 0 из 41
 assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",21,34," "Youtube_circular #1 is in the Google base set"

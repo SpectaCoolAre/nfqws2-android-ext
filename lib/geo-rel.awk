@@ -5,7 +5,9 @@
 function site(d,   x, i, n, a) { for (x = d; ; x = substr(x, i + 1)) { if (x in grp) return "@" grp[x]; if ((i = index(x, ".")) == 0) break }
   n = split(d, a, "."); return n < 2 ? d : a[n - 1] "." a[n] }
 BEGIN { while ((getline l < gf) > 0) { sub(/#.*/, "", l); n = split(tolower(l), a, " "); for (i = 2; i <= n; i++) grp[a[i]] = a[1] }
-  while ((getline l < rf) > 0) { split(l, a, "\t"); if (a[1] != "") { sc[a[1], a[2]] = a[3]; st[a[1], a[2]] = a[4]; key[a[1] SUBSEP a[2]] = 1 } } }
+  while ((getline l < rf) > 0) { split(l, a, "\t"); if (a[1] != "") { sc[a[1], a[2]] = a[3]; st[a[1], a[2]] = a[4]; key[a[1] SUBSEP a[2]] = 1 } }
+  # busybox awk пишет в файл, открытый getline, впустую — закрыть
+  close(gf); close(rf) }
 !/^[#=+!?]/ && NF > 2 { srv[$1] = 1; next }
 /^=/ { d = substr($1, 2); s = site(d); if (s == "" || $2 == "-") next
   used[s]++; m = split($2, hs, ","); for (i = 1; i <= m; i++) hit[s, hs[i]]++ }

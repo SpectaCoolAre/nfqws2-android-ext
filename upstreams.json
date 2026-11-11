@@ -1,7 +1,7 @@
 {
   "about": "Что взято из чужих проектов и до какой версии. Обновляется при каждом переносе изменений; читает модуль «трекер обновлений» (extras/update-tracker).",
-  "updated": "2026-11-11",
-  "module": "nfqws2-android-ext v2.2.4",
+  "updated": "2026-11-12",
+  "module": "nfqws2-android-ext v2.3.5",
   "projects": [
     {
       "id": "original",
@@ -21,10 +21,10 @@
       "branch": "main",
       "path": "strategies",
       "track": "commits",
-      "ref": "ffe7cab5c0692c2b3c55095d2345badf70bfc02f",
-      "label": "ffe7cab",
-      "date": "2026-11-11T01:19:49+03:00",
-      "use": "Все стратегии (с IPv6 и без fastpath), списки lists/, блобы, hosts (пресет «nfqws-menu»); 11.11 — профиль hardcorp74 для wide-youtube.l.google.com (92685de)"
+      "ref": "3f85c9b17bd34ed90f6e3051b6a571c639bdad44",
+      "label": "3f85c9b",
+      "date": "2026-11-11T21:26:09+00:00",
+      "use": "Все стратегии (с IPv6 и без fastpath), списки lists/, блобы, hosts (пресет «nfqws-menu»); 11.11 — профиль hardcorp74 для wide-youtube.l.google.com (92685de); 12.11 — его профиль googlevideo.com: одиночный fake и multidisorder (fced8d1); Antiscan и warpscout — для роутеров, не берём"
     },
     {
       "id": "zapret-manager",
