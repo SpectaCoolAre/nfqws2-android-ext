@@ -18,7 +18,10 @@ BEGIN { while ((getline l < of) > 0) { gsub(/[[:space:]]/, "", l); if (l != "") 
   n = 0 }
 !/^[#=+!?]/ && $2 == "ok" { pr[$1] = ($7 == "https" ? "https" : "tls"); next }
 # сервер, не ответивший в частой проверке, сейчас недоступен
-!/^[#=+!?]/ && $2 == "fail" && FILENAME == hf { delete pr[$1]; next }
+# (keepfail — роутер: он спрашивает только по DoH, и сервер, на которого только
+# что пришлась полная проверка, частой не отвечает — ограничение частоты, а
+# не недоступность; маршруты стягивались на единственный ответивший)
+!/^[#=+!?]/ && $2 == "fail" && FILENAME == hf && !keepfail { delete pr[$1]; next }
 /^=/ { d = substr($1, 2); if (!(d in rt)) ord[++n] = d; rt[d] = $2; netb[d] = ($3 == "net"); if (FILENAME == hf || (d in basehot)) hot[d] = 1
   if (FILENAME != hf) rtf[d] = $2 }
 END {
