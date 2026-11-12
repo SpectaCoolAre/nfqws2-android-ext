@@ -47,7 +47,8 @@ END {
   for (k = 1; k <= n; k++) {
     d = ord[k]; if (!(d in rtf) || rtf[d] == "-") continue
     s = site(d); m = split(rtf[d], hs, ","); c = 0
-    for (i = 1; i <= m; i++) if (usable(hs[i])) { callf[s, hs[i]]++; c++; if (d in basehot) bf[s, hs[i]]++ }
+    for (i = 1; i <= m; i++) if (usable(hs[i])) { callf[s, hs[i]]++; c++; if (d in basehot) bf[s, hs[i]]++
+      byf[d, hs[i]] = 1; if (!(d in firstf)) firstf[d] = hs[i] }
     if (c) nkf[s]++
     if (c && (d in basehot)) nbf[s]++
   }
@@ -107,12 +108,28 @@ END {
     if (!isg && best == pool) best = ""
     ch[s] = best
   }
+  # второй сервер группы — обходящий больше всех её доменов после выбранного
+  for (s in ch) if (substr(s, 1, 1) == "@" && ch[s] != "" && ch[s] != "-") {
+    sec[s] = ""
+    for (i = 1; i <= ns[s]; i++) { h = so[s, i]; if (h != ch[s] && usable(h) && (sec[s] == "" || call[s, h] > call[s, sec[s]])) sec[s] = h }
+  }
   for (k = 1; k <= n; k++) {
     d = ord[k]; s = site(d)
     if (ch[s] == "-") { out(d, "-"); continue }
-    # группа — целиком через свой сервер (один адрес выхода); у обычного
-    # сайта к его серверу — домены, которые тот обходит, остальные — в пул
-    if (ch[s] != "" && (substr(s, 1, 1) == "@" || ((d, ch[s]) in by))) { out(d, ch[s]); continue }
+    # группа — через свой сервер (один адрес выхода). Домен группы, который
+    # он не обходит (отдаёт настоящий адрес), а другие обходят, — к ним: иначе
+    # он шёл напрямую с адреса телефона. Так Gemini ушёл в геоблок: webshift
+    # обходит gemini.google.com, а signaler-pa, apis.google.com — нет (12.11)
+    # Решает полная проверка (одна неудачная частая — нет) и только по свежим
+    # данным сети (по старым сервер группы держится, пока отвечает);
+    # закреплённый за группой сервер (NullsProxy) — целиком
+    if (ch[s] != "" && substr(s, 1, 1) == "@") {
+      if (fresh && !(s in fixed) && !((d, ch[s]) in byf) && (d in firstf)) out(d, (sec[s] != "" && ((d, sec[s]) in byf)) ? sec[s] : firstf[d])
+      else out(d, ch[s])
+      continue
+    }
+    # у обычного сайта к его серверу — домены, которые тот обходит, остальные — в пул
+    if (ch[s] != "" && ((d, ch[s]) in by)) { out(d, ch[s]); continue }
     # и пул его не обходит — к тому, кто обходит
     if (nby[d] && !((d, pool) in by)) { out(d, first[d]); continue }
     # домен, который не обходит никто или обходит сам DNS сети (роутер), —
