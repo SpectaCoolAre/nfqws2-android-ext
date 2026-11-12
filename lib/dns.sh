@@ -70,7 +70,7 @@ DNS_GEO_HOT_EVERY=1800
 DNS_GEO_HOT_MAX=40
 DNS_GEO_HOT_DAYS=7
 # в ней всегда — основные сервисы, даже если умный режим их ещё не видел
-DNS_GEO_HOT_BASE="chatgpt.com claude.ai gemini.google.com gamea.clashofclans.com accounts.supercell.com spotify.com"
+DNS_GEO_HOT_BASE="chatgpt.com claude.ai gemini.google.com geminiweb-pa.clients6.google.com signaler-pa.clients6.google.com apis.google.com waa-pa.clients6.google.com gamea.clashofclans.com accounts.supercell.com spotify.com"
 DNS_GEO_POOL=3                # кандидатов в пул и маршрут домена; в работе — один (закреплённый)
 DNS_GEO_OFF="$CONFDIR/dns/geo-off.list"   # серверы, отключённые вручную
 # до первой проверки — сервер, который в замерах обходил больше всех в обеих

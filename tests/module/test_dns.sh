@@ -489,7 +489,9 @@ svc stop
 assert_file "$DNS_PIDFILE" "stopping the service leaves DNS running"
 assert_contains "$(ipt_rules OUTPUT nat)" "-j nfqws_dns" "with its interception"
 pid=$(cat "$DNS_PIDFILE"); kill_wait "$pid"
-dns_check
+# сторож проверяет раз в тик; занятый замок DNS (фоновая задача после
+# остановки службы) — проверка пропускает ход, следующий тик доделает
+for i in 1 2 3 4 5; do dns_check; [ -f "$DNS_PIDFILE" ] && [ "$(cat "$DNS_PIDFILE")" != "$pid" ] && break; sleep 1; done
 [ -f "$DNS_PIDFILE" ] && [ "$(cat "$DNS_PIDFILE")" != "$pid" ]
 assert_rc 0 $? "the watchdog check restarts it without the service"
 pid=$(cat "$DNS_PIDFILE")
@@ -1023,7 +1025,8 @@ assert_eq "a.example" "$(dns_geo_routes | cut -f2 | sort -u | tr '\n' ' ' | sed 
 # DNS сети — иначе домены не из списка шли через прокси роутера, а из
 # списка — через прокси модуля, и у Gemini два адреса выхода
 cp "$(dns_geo_scan_file)" "$SANDBOX/scan.keep"
-sed -i 's/^=gemini.google.com\t.*/=gemini.google.com\t-\tnet/' "$(dns_geo_scan_file)"
+# роутер обходит все основные домены Gemini (geodns ведёт группу целиком)
+sed -i 's/^=gemini.google.com\t.*/=gemini.google.com\t-\tnet/; s/^=signaler-pa.clients6.google.com\t.*/=signaler-pa.clients6.google.com\t-\tnet/' "$(dns_geo_scan_file)"
 r=$(dns_geo_routes | sort | tr '\n' '|')
 assert_contains "$r" "gemini.google.com	-|" "a domain the network DNS already bypasses stays with it"
 assert_contains "$r" "signaler-pa.clients6.google.com	-|" "and so does its whole group"
@@ -1053,7 +1056,7 @@ assert_contains "$r" "gemini.google.com	b.example" "the used domain decides the 
 assert_contains "$r" "signaler-pa.clients6.google.com	b.example" "and the rest of the group follows it"
 # домен, который по полной проверке группа-сервер не обходит, а другой обходит, —
 # к другому: с настоящим адресом он шёл бы с адреса телефона (Gemini, 12.11)
-assert_contains "$r" "gemini.google	a.example" "a group domain the group server gives the real address for goes to a server that bypasses it"
+assert_contains "$r" "gemini.google	b.example" "even a domain it was not seen serving: the group goes through one server, as geodns on the router does"
 printf 'geminiweb-pa.clients6.google.com\nchatgpt.com\n' > "$SANDBOX/geo.saved"; cp "$DNS_GEO_LIST" "$SANDBOX/geo.keep"; cp "$SANDBOX/geo.saved" "$DNS_GEO_LIST"
 r=$(dns_geo_routes | sort | tr '\n' '|')
 assert_contains "$r" "geminiweb-pa.clients6.google.com	b.example" "a group domain the check does not know yet goes to the group server too"
@@ -1217,18 +1220,19 @@ echo "@anthropic big.example" > "$DNS_GEO_SCAN_DIR/groups.pin"
 printf '@anthropic\tbig.example\t0.900\t0\n' > "$(dns_geo_scan_file).rel"
 assert_contains "$(dns_geo_routes)" "claude.ai	ws.example" "a pinned group server that does not serve the main service (claude.ai) gives the group to one that does"
 rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).rel"
-# Домен группы, который её сервер не обходит (отдаёт настоящий адрес), а другой
-# обходит, — к другому, а не напрямую: webshift обходит gemini.google.com, но не
-# signaler-pa, и Gemini ушёл в геоблок (12.11)
+# Основные домены Gemini — обязательные для сервера группы: webshift обходил
+# gemini.google.com, а signaler-pa, apis.google.com — нет (отдавал настоящий
+# адрес, и Gemini шёл с адреса телефона — геоблок; 12.11). Группа — целиком
+# через сервер, обходящий все основные
 { printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
   printf 'ws.example\tok\t20\t2\t10\t0\ttls\n'; printf 'big.example\tok\t30\t9\t10\t0\ttls\n'
-  printf '=gemini.google.com\tws.example\n=geminiweb-pa.clients6.google.com\tws.example,big.example\n=signaler-pa.clients6.google.com\tbig.example\n=apis.google.com\tbig.example\n=gemini.gstatic.com\t-\n'; } > "$(dns_geo_scan_file)"
-rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
+  printf '=gemini.google.com\tws.example,big.example\n=geminiweb-pa.clients6.google.com\tws.example,big.example\n=signaler-pa.clients6.google.com\tbig.example\n=apis.google.com\tbig.example\n=waa-pa.clients6.google.com\tbig.example\n=gemini.gstatic.com\t-\n'; } > "$(dns_geo_scan_file)"
+echo "@google ws.example" > "$DNS_GEO_SCAN_DIR/groups.pin"
 r=$(dns_geo_routes | sort | tr '\n' '|')
-assert_contains "$r" "gemini.google.com	ws.example" "the group server is the one that serves the main service"
-assert_contains "$r" "signaler-pa.clients6.google.com	big.example" "a group domain it gives the real address for goes to a server that bypasses it, not straight from the phone"
-assert_contains "$r" "geminiweb-pa.clients6.google.com	ws.example" "a domain it does bypass stays with it"
-assert_contains "$r" "gemini.gstatic.com	ws.example" "a domain nobody bypasses stays with the group server"
+assert_contains "$r" "gemini.google.com	big.example" "a group server must bypass all main domains of the service (signaler-pa, apis.google.com…), even a pinned one"
+assert_contains "$r" "gemini.gstatic.com	big.example" "and the whole group goes through it (one exit address)"
+assert_contains "$DNS_GEO_HOT_BASE" "signaler-pa.clients6.google.com" "Gemini's main domains are main services"
+rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
 # порог группы — 70% доменов от лучшего: серверы DoH отвечают не на все
 # запросы, и сервер, обходящий почти всё, не должен проигрывать из-за этого
 { printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
