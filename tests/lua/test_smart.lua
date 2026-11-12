@@ -54,7 +54,7 @@ local function packet(track, opts)
 	local desync = { target = {},
 		track = track, outgoing = not opts.incoming, l7payload = "tls_client_hello",
 		dis = { tcp = { th_flags = (opts.rst and TH_RST or 0) + (opts.fin and TH_FIN or 0), th_sport = track.port, th_dport = 443, th_ack = opts.ack }, payload = string.rep("x", opts.len or 100) },
-		arg = { slot = opts.slot or "tls", home = HOME, pass = tostring(opts.pass or N), first = opts.first, base = opts.base },
+		arg = { slot = opts.slot or "tls", home = HOME, pass = tostring(opts.pass or N), first = opts.first, base = opts.base, pri = opts.pri },
 		func_instance = "smart_" .. (opts.slot or "tls"), plan = (opts.plan or plan)()
 	}
 	if opts.outgoing then desync.outgoing = true end
@@ -659,6 +659,29 @@ do
 	check(seen[1] and seen[3] and not seen[2], "a list: only its numbers are tried (1, 3, 4 — not 2)")
 	later(); local v = packet(conn("pool2.example"), { slot = "pool", base = 2, pass = 9 })
 	check(v == 1 or v == 2, "off again: a site sitting on a pool variant goes back to the base set (" .. tostring(v) .. ")")
+end
+
+section("untried variants: the priority ones first, then the base set, the pool last")
+do
+	-- 12.11: на МТС Youtube_circular перестал проходить; с первого (21) перебор
+	-- шёл по номерам 22, 23, 24… и до hardcorp74 (1), который проходил, не
+	-- доходил десятки минут
+	writefile(HOME .. "/state/smart_pool", "ext\n"); later(6)
+	local O = { slot = "order", plan = plan12, pass = 12, first = "5", base = "1,5-6,9", pri = "9" }
+	local function o(extra) local t = {}; for k, v in pairs(O) do t[k] = v end; for k, v in pairs(extra or {}) do t[k] = v end; return t end
+	local order, last = {}, nil
+	for i = 1, 30 do
+		later(); local c = conn("order.example"); local v = packet(c, o())
+		if v ~= last then order[#order + 1] = v; last = v end
+		for k = 1, 3 do packet(c, o({ retrans = true })) end
+		okconn("anchor.example")
+		if #order >= 5 then break end
+	end
+	local str = table.concat(order, ",")
+	check(order[1] == 5 and order[2] == 9, "first the start variant, then the priority one (pri=9), not the next number: " .. str)
+	check(order[3] == 1 and order[4] == 6, "then the rest of the base set: " .. str)
+	check(order[5] and order[5] ~= 12 and not ({ [1] = 1, [5] = 1, [6] = 1, [9] = 1 })[order[5]], "the extended pool only after the whole base set: " .. str)
+	os.remove(HOME .. "/state/smart_pool"); later(6)
 end
 
 section("debug benchmark: the variant is forced and nothing is learned")

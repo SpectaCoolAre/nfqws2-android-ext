@@ -90,7 +90,7 @@ SMART = SMART or {
 	home = nil, net = nil, db = {}, ns = {}, nstrat = {}, conns = {},
 	dirty = false, saved = 0, netcheck = 0, offline = false,
 	lastok = 0, lastconn = 0, failhosts = {}, suspect_since = nil, watching = false,
-	layout = {}, mut = {}, mutnext = {}, mutt = {}, allow = {}, nallow = {}, basesets = {},
+	layout = {}, mut = {}, mutnext = {}, mutt = {}, allow = {}, nallow = {}, basesets = {}, isbase = {}, pri = {},
 	proc = { "/proc/net/tcp", "/proc/net/tcp6" }
 }
 local SM = SMART
@@ -614,6 +614,15 @@ local function next_strategy(slot, r, n, t, pass)
 			local sc = seen >= 0.5 and (0.7 * share(r.ok[v], r.err[v]) + 0.3 * net) or (net - 0.05)
 			if v == pass and (r.ok[v] or 0) < 0.5 then sc = sc - 1 end
 			if (r.cool[v] or 0) > t then sc = sc - 0.3 end
+			-- не проверенный ни сайтом, ни в сети: сначала первые в очереди
+			-- (pri=), потом основной набор, расширенный пул — последним. Раньше
+			-- шли просто по номеру после текущего, и с Youtube_circular #1 (21)
+			-- до hardcorp74 (1), который работал, перебор шёл десятки минут
+			if seen < 0.5 and (s.ok[v] or 0) + (s.err[v] or 0) < 0.5 and not m then
+				local pr = SM.pri[slot] and SM.pri[slot][v]
+				if pr then sc = sc + 0.03 - pr * 0.001
+				elseif SM.isbase[slot] and SM.isbase[slot][v] then sc = sc + 0.01 end
+			end
 			-- при равенстве — авторский вариант, ближайший по номеру после текущего
 			if m then sc = sc - 0.02 - (v - MUT_BASE) * 0.00001
 			else sc = sc - (((v - cb) % n) * 0.0001) end
@@ -1126,6 +1135,14 @@ function smart(ctx, desync)
 		SM.allow[slot], SM.nallow[slot] = base_set(desync.arg.base, nall)
 	else
 		SM.allow[slot], SM.nallow[slot] = nil, nil
+	end
+	-- основной набор и первые в очереди (pri=) — для порядка перебора
+	-- непроверенных вариантов (см. next_strategy)
+	SM.isbase[slot] = desync.arg.base and (base_set(desync.arg.base, nall)) or nil
+	if desync.arg.pri and not SM.pri[slot] then
+		local p, i = {}, 0
+		for x in desync.arg.pri:gmatch("%d+") do i = i + 1; p[tonumber(x)] = i end
+		SM.pri[slot] = p
 	end
 	if not host or n == 0 then
 		local verdict = VERDICT_PASS

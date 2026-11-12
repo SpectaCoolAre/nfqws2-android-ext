@@ -300,6 +300,9 @@ assert_contains "$(grep '^ *--lua-desync=multidisorder:pos=1,midsld:strategy=48'
 # google.com (Youtube_circular #1) открыл 94 из 94, одиночный fake — 0 из 41
 assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",21,34," "Youtube_circular #1 is in the Google base set"
 assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ":first=21" "and Google sites start on it"
+# 12.11, МТС: Youtube_circular перестал проходить, hardcorp74 проходил — а
+# перебор шёл к нему через десятки вариантов. Теперь он первый после стартового
+assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ":pri=1,47,48" "hardcorp74 (Google, wide-youtube, googlevideo) is tried right after the start variant"
 assert_contains "$(grep 'strategy=21$' "$REPO_DIR/strategies/smart.conf")" "hostfakesplit:host=google.com:tcp_ts=-600000" "it is the hostfakesplit google.com variant"
 assert_not_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" "46" "Yv35 (3 of 5) waits in the extended pool"
 assert_eq "" "$(grep -o 'slot=tls[a-z_0-9]*:pass=14:base=[0-9,-]*' "$REPO_DIR/strategies/smart.conf" | grep -v 'base=1,4-6,8-9,')" "hardcorp74 #1 and #2 (96%, each opens sites no other does) are in the base set of every TLS slot"
