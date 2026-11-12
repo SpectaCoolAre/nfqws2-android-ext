@@ -96,8 +96,3 @@ dns.zombiez.ru
 # для пробы (12.11): по keyoneday.ru — DoT/DoH dns.keyoneday.ru, 2.58.127.63;
 # ChatGPT, Claude, Gemini, Flow, Notion; только с российских адресов
 dns.keyoneday.ru
-
-[Comss]
-# снова для пробы (12.11): в ноябре по нашим проверкам ChatGPT, Claude и
-# Gemini не обходил; по 4pda (11.11) — снова для ИИ (212.109.221.20, .195.93)
-dns.comss.one
