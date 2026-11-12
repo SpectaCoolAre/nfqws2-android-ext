@@ -769,3 +769,38 @@ func TestVerifyRoutesOnlyListedHosts(t *testing.T) {
 		t.Fatalf("Claude через bezmezhau — не обход, остальные домены не проверяются: %q %q", res[0].marks, res[1].marks)
 	}
 }
+
+// Gemini с «/» переадресует на /app, и отказ по стране — только там: проверка
+// идёт за переадресацией на свою же страницу (12.11, dns.zombiez.ru)
+func TestVerifyProxyFollowsSameHostRedirect(t *testing.T) {
+	refuse := true
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "https://example.com/app", http.StatusFound)
+			return
+		}
+		if refuse {
+			io.WriteString(w, "<html>Gemini isn't currently supported in your country. Stay tuned!</html>")
+		} else {
+			io.WriteString(w, "<html>Gemini</html>")
+		}
+	}))
+	t.Cleanup(srv.Close)
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	tlsRoots = pool
+	t.Cleanup(func() { tlsRoots = nil })
+	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	proxyTLSPort = port
+	t.Cleanup(func() { proxyTLSPort = "443" })
+	if verifyProxy(ip("127.0.0.1"), "example.com", 2*time.Second) {
+		t.Fatal("отказ по стране на странице, куда ведёт переадресация, — прокси не годится")
+	}
+	refuse = false
+	if !verifyProxy(ip("127.0.0.1"), "example.com", 2*time.Second) {
+		t.Fatal("обычная страница за переадресацией — годится")
+	}
+	if p := sameHostRedirect("HTTP/1.1 302 Found\r\nLocation: https://evil.example/app\r\n\r\n", "example.com"); p != "" {
+		t.Fatalf("переадресация на другой сайт не проверяется: %q", p)
+	}
+}

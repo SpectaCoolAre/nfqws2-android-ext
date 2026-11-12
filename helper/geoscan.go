@@ -870,21 +870,65 @@ func (r *scanResult) flaky() bool { return r.okTry > 0 && r.okTry < r.tries }
 // Затем — что отвечает сайт (siteRefuses).
 // Тесты подменяют
 var verifyProxy = func(ip net.IP, host string, wait time.Duration) bool {
+	// и что отвечает сам сайт: страница «необычный трафик», капча или «не
+	// работает в вашей стране» — прокси сайт не обходит (у Gemini так бывает
+	// у прокси, чей адрес Google считает подозрительным)
+	r, ok := proxyGet(ip, host, "/", wait, 32768)
+	if !ok {
+		return false
+	}
+	if siteRefuses(r) {
+		return false
+	}
+	// переадресация на свою же страницу — и её: gemini.google.com с «/» уходит
+	// на /app, и «не поддерживается в вашей стране» было только там (12.11:
+	// Gemini через dns.zombiez.ru — геоблок, а проверка его пропустила)
+	if p := sameHostRedirect(r, host); p != "" {
+		if r2, ok := proxyGet(ip, host, p, wait, 262144); ok && siteRefuses(r2) {
+			return false
+		}
+	}
+	return true
+}
+
+// proxyGet — GET path по адресу прокси с именем сайта: ответ целиком (до
+// limit байт); false — TLS не установился (сертификат не сайта или нет связи)
+func proxyGet(ip net.IP, host, path string, wait time.Duration, limit int64) (string, bool) {
 	d := tls.Dialer{NetDialer: &net.Dialer{Timeout: wait}, Config: &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12, RootCAs: rootPool()}}
 	ctx, cancel := context.WithTimeout(context.Background(), wait)
 	defer cancel()
 	c, err := d.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), proxyTLSPort))
 	if err != nil {
-		return false
+		return "", false
 	}
 	defer c.Close()
-	// и что отвечает сам сайт: страница «необычный трафик», капча или «не
-	// работает в вашей стране» — прокси сайт не обходит (у Gemini так бывает
-	// у прокси, чей адрес Google считает подозрительным)
 	c.SetDeadline(time.Now().Add(wait))
-	fmt.Fprintf(c, "GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36\r\nAccept: text/html\r\nConnection: close\r\n\r\n", host)
-	b, _ := io.ReadAll(io.LimitReader(c, 32768))
-	return !siteRefuses(string(b))
+	fmt.Fprintf(c, "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36\r\nAccept: text/html\r\nAccept-Language: en-US,en;q=0.9\r\nConnection: close\r\n\r\n", path, host)
+	b, _ := io.ReadAll(io.LimitReader(c, limit))
+	return string(b), true
+}
+
+// sameHostRedirect — путь переадресации 3xx на тот же сайт ("/app"), иначе ""
+func sameHostRedirect(resp, host string) string {
+	head, _, _ := strings.Cut(resp, "\r\n\r\n")
+	f := strings.Fields(head)
+	if len(f) < 2 || len(f[1]) != 3 || f[1][0] != '3' {
+		return ""
+	}
+	for _, l := range strings.Split(head, "\r\n") {
+		k, v, ok := strings.Cut(l, ":")
+		if !ok || !strings.EqualFold(strings.TrimSpace(k), "location") {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		if strings.HasPrefix(v, "https://"+host+"/") {
+			v = v[len("https://"+host):]
+		}
+		if strings.HasPrefix(v, "/") && !strings.HasPrefix(v, "//") {
+			return v
+		}
+	}
+	return ""
 }
 
 // siteRefuses — ответ сайта говорит, что через этот адрес его не открыть:
@@ -907,7 +951,9 @@ func siteRefuses(resp string) bool {
 	low = strings.ToLower(body)
 	for _, m := range []string{"unusual traffic", "our systems have detected", "not available in your country", "isn't supported in your country",
 		"is not supported in your country", "not available in your region", "unsupported_country", "unsupported country",
-		"app-unavailable-in-region", "unavailable in your region"} {
+		"app-unavailable-in-region", "unavailable in your region",
+		// «isn't currently supported in your country», «…in your country or region»
+		"supported in your country"} {
 		if strings.Contains(low, m) {
 			return true
 		}
