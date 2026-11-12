@@ -493,6 +493,10 @@ func TestSiteRefuses(t *testing.T) {
 		{"HTTP/1.1 200 OK\r\n\r\nOur systems have detected unusual traffic from your computer network.", true},
 		{"HTTP/1.1 200 OK\r\n\r\nGemini isn't supported in your country yet", true},
 		{"HTTP/1.1 302 Found\r\nLocation: https://gemini.google.com/app\r\n\r\n", false},
+		// Claude вне поддерживаемых стран — переадресация на эту страницу
+		{"HTTP/1.1 307 Temporary Redirect\r\nLocation: https://claude.ai/app-unavailable-in-region\r\n\r\n", true},
+		{"HTTP/1.1 307 Temporary Redirect\r\nLocation: /app-unavailable-in-region\r\n\r\n", true},
+		{"HTTP/1.1 302 Found\r\nLocation: https://claude.ai/login\r\n\r\n", false},
 		{"", false},
 	} {
 		if got := siteRefuses(c.resp); got != c.bad {
@@ -743,5 +747,25 @@ func TestGeoScanRetriesUnansweredDomains(t *testing.T) {
 	res := geoScan([]string{"127.0.0.1/dns-query"}, names, boot, 6*time.Second)
 	if !res[0].ok || string(res[0].marks) != "pppp" {
 		t.Fatalf("домены без ответа с первого раза спрошены ещё раз: %+v", res[0])
+	}
+}
+
+// Полная проверка (-verifyhosts): ответ сайта — только у основных сервисов.
+// Через прокси bezmezhau Claude отвечал «недоступно в регионе», а полная
+// проверка этого не видела, и группа Anthropic уходила к нему
+func TestVerifyRoutesOnlyListedHosts(t *testing.T) {
+	good := map[string]bool{"5.5.5.5 claude.ai": true}
+	orig := verifyProxy
+	verifyProxy = func(ip net.IP, host string, _ time.Duration) bool { return good[ip.String()+" "+host] }
+	t.Cleanup(func() { verifyProxy = orig; verifyOnly = nil })
+	verifyOnly = map[string]bool{"claude.ai": true}
+	mk := func(name, a1, a2 string) scanResult {
+		return scanResult{server: name, ok: true, marks: []byte("pp"), share: []int{1, 1},
+			ans: [][]net.IP{{ip(a1)}, {ip(a2)}}, tries: 3, okTry: 3}
+	}
+	res := []scanResult{mk("magicdns", "5.5.5.5", "81.17.20.86"), mk("bezmezhau", "185.236.9.58", "81.17.20.87")}
+	verifyRoutes(res, []string{"claude.ai", "example.org"}, time.Second)
+	if string(res[0].marks) != "pp" || string(res[1].marks) != "cp" {
+		t.Fatalf("Claude через bezmezhau — не обход, остальные домены не проверяются: %q %q", res[0].marks, res[1].marks)
 	}
 }

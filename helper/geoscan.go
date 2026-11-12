@@ -898,13 +898,16 @@ func siteRefuses(resp string) bool {
 		return true
 	}
 	for _, l := range strings.Split(low, "\r\n") {
-		if strings.HasPrefix(l, "location:") && (strings.Contains(l, "/sorry/") || strings.Contains(l, "unsupported")) {
+		// Google — /sorry/, OpenAI — unsupported_country, Claude —
+		// /app-unavailable-in-region
+		if strings.HasPrefix(l, "location:") && (strings.Contains(l, "/sorry/") || strings.Contains(l, "unsupported") || strings.Contains(l, "unavailable-in-region")) {
 			return true
 		}
 	}
 	low = strings.ToLower(body)
 	for _, m := range []string{"unusual traffic", "our systems have detected", "not available in your country", "isn't supported in your country",
-		"is not supported in your country", "not available in your region", "unsupported_country", "unsupported country"} {
+		"is not supported in your country", "not available in your region", "unsupported_country", "unsupported country",
+		"app-unavailable-in-region", "unavailable in your region"} {
 		if strings.Contains(low, m) {
 			return true
 		}
@@ -938,7 +941,7 @@ func verifyRoutes(res []scanResult, names []string, wait time.Duration) {
 	for k := range res {
 		for i, m := range res[k].marks {
 			ip := first(res[k].ans[i])
-			if m != 'p' || ip == nil {
+			if m != 'p' || ip == nil || (len(verifyOnly) > 0 && !verifyOnly[names[i]]) {
 				continue
 			}
 			kk := key{ip.String(), names[i]}
@@ -960,6 +963,9 @@ func verifyRoutes(res []scanResult, names []string, wait time.Duration) {
 	}
 	wg.Wait()
 	for i := range names {
+		if len(verifyOnly) > 0 && !verifyOnly[names[i]] {
+			continue
+		}
 		any := false
 		for k := range res {
 			if ip := first(res[k].ans[i]); res[k].marks[i] == 'p' && ip != nil && good[key{ip.String(), names[i]}] {
@@ -1039,6 +1045,12 @@ var lastWhoami string
 
 // verifyCerts — включает verifyRoutes (частая проверка, -verify)
 var verifyCerts bool
+
+// verifyOnly — проверить ответ сайта только у этих доменов (-verifyhosts,
+// полная проверка: основные сервисы). Без неё полная проверка не видела, что
+// через прокси bezmezhau Claude отвечает «недоступно в регионе», и группа
+// уходила к нему до частой проверки через полчаса
+var verifyOnly map[string]bool
 
 // siteOf — сайт домена (последние две метки, у co.uk и подобных — три):
 // поддомены одного сайта у прокси считаются одним сайтом
@@ -1300,7 +1312,7 @@ func geoScan(servers, names []string, boot string, wait time.Duration) []scanRes
 			}
 		}
 	}
-	if verifyCerts {
+	if verifyCerts || len(verifyOnly) > 0 {
 		verifyRoutes(res, names, 4*time.Second)
 	}
 	lastNetBypass = netBypassMarks(netAns, real, res)

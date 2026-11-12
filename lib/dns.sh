@@ -419,7 +419,8 @@ dns_geo_scan() { # [full|hot]
         -max "$DNS_GEO_POOL" -groups "$DNS_GEO_GROUPS" -asncache "$DNS_GEO_SCAN_DIR/asn.cache" -shared "$f" -verify 2>/dev/null
     else
       "$HELPER_BIN" -geoscan "$cand" -samples "@$DNS_RUN_DIR/geoscan.list" -boot "$boot" -ref "$DNS_GEO_REF" -wait 40s \
-        -max "$DNS_GEO_POOL" -groups "$DNS_GEO_GROUPS" -asncache "$DNS_GEO_SCAN_DIR/asn.cache" 2>/dev/null
+        -max "$DNS_GEO_POOL" -groups "$DNS_GEO_GROUPS" -asncache "$DNS_GEO_SCAN_DIR/asn.cache" \
+        -verifyhosts "$(echo "$DNS_GEO_HOT_BASE" | tr ' ' '\n' | grep -v '^game' | tr '\n' ' ')" 2>/dev/null
     fi
   } > "$out"
   rm -f "$DNS_RUN_DIR/geoscan.list"
