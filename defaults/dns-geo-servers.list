@@ -40,6 +40,8 @@ dns.malw.link
 api.magicinfo.art
 api.magicinfo.art/rpc
 de.magicdns.ru
+# api.magicdns.ru (109.120.177.170, 45.88.163.92) — по 4pda (11.11)
+api.magicdns.ru
 
 [zapret.moe]
 # только DoH через Cloudflare: DoT и обычный DNS закрыты с 03.11 (адрес
@@ -57,7 +59,12 @@ d.webshiftvpn.ru
 
 [GeoHide]
 # 45.155.204.190, 5.175.161.40, 37.221.93.141…; DoT на Wi‑Fi закрыт — по DoH.
-# 12.11: сайт geohide.ru отвечает 503, репозиторий GeoHideDNS — «в разработке»
+# 12.11: сайт geohide.ru отвечает 503, но по status.dns.geohide.ru российские
+# узлы в сети (193.233.112.67/68/88, 37.230.192.51, 46.8.158.6 — 96–100% за
+# 30 дней), 45.155.204.190 (EU) — 0%. Американские — us.geohide.ru
+# (192.255.159.240/241, 192.3.233.253, 107.175.76.134; 4pda, 11.11)
+geohide.ru
+us.geohide.ru
 eu.geohide.ru
 
 [Semqka]
@@ -85,3 +92,12 @@ free.pereval.top
 # ChatGPT, Gemini, Claude, Copilot, Grok, Perplexity…
 dns.zombiez.ru
 
+[Keyoneday]
+# для пробы (12.11): по keyoneday.ru — DoT/DoH dns.keyoneday.ru, 2.58.127.63;
+# ChatGPT, Claude, Gemini, Flow, Notion; только с российских адресов
+dns.keyoneday.ru
+
+[Comss]
+# снова для пробы (12.11): в ноябре по нашим проверкам ChatGPT, Claude и
+# Gemini не обходил; по 4pda (11.11) — снова для ИИ (212.109.221.20, .195.93)
+dns.comss.one
