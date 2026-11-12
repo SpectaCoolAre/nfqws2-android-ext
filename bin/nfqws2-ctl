@@ -1166,7 +1166,7 @@ probe_cause() { # <домен> <ip>
 #      и проба через обход: помогает или нет.
 # Итог — в журнале DNS и в <сеть>.ipcheck (архив журналов): по нему видно,
 # обходится ли блокировка по IP или она глухая
-GEO_IPCHECK_MAX=24       # адресов за проверку, не больше
+GEO_IPCHECK_MAX=32       # адресов за проверку, не больше
 # Прокси — тот адрес, что сервер даёт для домена сейчас (nfqws2-helper -ask), а
 # не самый частый адрес сервера: тот мог быть прокси других сайтов (игровой у
 # NullsProxy), и проба «не открывалась» у рабочего сервера. Игровые серверы
@@ -1184,16 +1184,25 @@ geo_ipcheck_targets() { # <файл проверки> -> «адрес роль �
   done | awk '!s[$1]++'
 }
 _geo_ipcheck_targets() {
-  # прокси закреплённых за группой серверов не проверяются (см. dns_geo_off_eff)
-  awk -F'\t' -v base="$DNS_GEO_HOT_BASE" -v fx=" $(dns_geo_fixed | tr '\n' ' ') " '
+  # прокси закреплённых за группой серверов не проверяются (см. dns_geo_off_eff).
+  # Кроме одного домена на сервер — каждый основной сервис (claude.ai,
+  # chatgpt.com…) по адресу, который ему даёт сервер, через который он сейчас
+  # идёт: у сервера прокси разные, и проверка bezmezhau по Supercell не
+  # заметила, что его прокси для Claude закрыт (МТС, 12.11)
+  local rt
+  rt=$(dns_geo_routes 2>/dev/null | awk -F'\t' '$2 != "" && $2 != "-" { printf " %s=%s", $1, $2 }')
+  awk -F'\t' -v base="$DNS_GEO_HOT_BASE" -v fx=" $(dns_geo_fixed | tr '\n' ' ') " -v rt="$rt" '
     BEGIN { nb = split(base, b, " "); for (i = 1; i <= nb; i++) B[b[i]] = 1 }
     /^!/ { h = substr($1, 2); if ($4 != "") { a[h] = $4; ord[++no] = h }; next }
     /^\+/ { h = substr($1, 2); if (!(h in px) || $3 + 0 > pn[h]) { px[h] = $2; pn[h] = $3 + 0 }; next }
     /^=game[a-z0-9]*\./ { next }
     /^=/ { d = substr($1, 2); n = split($2, sv, ",")
       for (i = 1; i <= n; i++) { h = sv[i]; if (!(h in dm)) dm[h] = d; else if ((d in B) && !(dm[h] in B)) dm[h] = d } }
-    END { for (k = 1; k <= no; k++) { h = ord[k]; print a[h], "server", h, h
-      if ((h in px) && (h in dm) && !index(fx, " " h " ")) print px[h], "proxy", h, dm[h] } }' "$1" | head -n "$GEO_IPCHECK_MAX"
+    END { nr = split(rt, rr, " "); for (i = 1; i <= nr; i++) { j = index(rr[i], "="); R[substr(rr[i], 1, j - 1)] = substr(rr[i], j + 1) }
+      for (k = 1; k <= no; k++) { h = ord[k]; print a[h], "server", h, h
+        if ((h in px) && (h in dm) && !index(fx, " " h " ")) print px[h], "proxy", h, dm[h] }
+      for (i = 1; i <= nb; i++) { d = b[i]; if (d ~ /^game[a-z0-9]*\./ || !(d in R)) continue; h = R[d]
+        if ((h in px) && dm[h] != d && !index(fx, " " h " ")) print px[h], "proxy", h, d } }' "$1" | head -n "$GEO_IPCHECK_MAX"
 }
 # Быстрая проверка (quick, после частой проверки DNS): только прокси серверов
 # в работе (пул, группы, маршруты) и серверов на паузе, чей срок подошёл
@@ -1211,7 +1220,9 @@ geo_down_update() { # <файл проверки> <итог проверки а�
   local f="$1" res="$2" now="$3" full="$4"
   { cat "$f.down" 2>/dev/null; } | awk -F'\t' -v res="$res" -v now="$now" -v out="$f.down.new" -v full="$full" '
     BEGIN { while ((getline l < res) > 0) { if (l ~ /^#/) continue; split(l, a, "\t")
-        if (a[2] != "proxy") continue; v[a[3]] = a[8]; ip[a[3]] = a[1] } }
+        if (a[2] != "proxy") continue
+        # у сервера проверяется несколько прокси (по сервису): не открылся хоть один — пауза
+        if (!(a[3] in v) || a[8] == "closed" || a[8] == "nobypass") { v[a[3]] = a[8]; ip[a[3]] = a[1] } } }
     NF >= 5 { old[$1] = $0; n[$1] = $5; since[$1] = $3 }
     END {
       for (s in v) {

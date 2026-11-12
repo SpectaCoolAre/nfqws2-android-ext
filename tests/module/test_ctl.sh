@@ -750,7 +750,7 @@ fi
 exit "$(cat "$MOCK_DIR/via.$ip" 2>/dev/null || echo 0)"
 X
 # -ask <сервер> -samples <домен>: что сервер отвечает (ask.<сервер>), иначе ничего
-printf '#!/bin/sh\nif [ "$1" = -ask ]; then [ -f "$MOCK_DIR/ask.$2" ] && printf "%%s\\t%%s\\n" "$4" "$(cat "$MOCK_DIR/ask.$2")"; exit 0; fi\nfor a; do [ "$p" = -ip ] && ip="$a"; p="$a"; done\nprintf "%%s\\ttcp=x\\n" "$(cat "$MOCK_DIR/cause.$ip" 2>/dev/null || echo tls)"\n' > "$HELPER_BIN"
+printf '#!/bin/sh\nif [ "$1" = -ask ]; then x="$MOCK_DIR/ask.$2.$4"; [ -f "$x" ] || x="$MOCK_DIR/ask.$2"; [ -f "$x" ] && printf "%%s\\t%%s\\n" "$4" "$(cat "$x")"; exit 0; fi\nfor a; do [ "$p" = -ip ] && ip="$a"; p="$a"; done\nprintf "%%s\\ttcp=x\\n" "$(cat "$MOCK_DIR/cause.$ip" 2>/dev/null || echo tls)"\n' > "$HELPER_BIN"
 chmod 0755 "$MOCKBIN/curl" "$HELPER_BIN"
 iptables -w -t mangle -N nfqws_post 2>/dev/null
 f=$(dns_geo_scan_file); mkdir -p "${f%/*}"
@@ -794,6 +794,15 @@ kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; fakesvc=$(fake_daemon 
 ctl geo-ipcheck
 assert_contains "$(cat "$f.ipcheck")" "203.0.113.77	proxy	a.example	chatgpt.com" "the proxy is the address the server gives for that domain now"
 rm -f "$MOCK_DIR/ask.a.example" "$IPSET_AUTO"
+# каждый основной сервис — по адресу, который ему даёт его сервер: у
+# bezmezhau прокси для Supercell открывался, а для Claude — нет (МТС, 12.11)
+cp "$f" "$f.keep"; sed -i 's/^=claude.ai\tc.example$/=claude.ai\ta.example/' "$f"
+echo 203.0.113.20 > "$MOCK_DIR/ask.a.example.claude.ai"; echo 35 > "$MOCK_DIR/via.203.0.113.20"
+kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; fakesvc=$(fake_daemon "$PIDFILE")
+ctl geo-ipcheck
+assert_contains "$(cat "$f.ipcheck")" "203.0.113.20	proxy	a.example	claude.ai" "the proxy a server gives Claude is checked too, not only the one for its first domain"
+assert_contains "$(cut -f1 "$f.down" 2>/dev/null)" "a.example" "it does not open even through the bypass — the server is paused, although its chatgpt.com proxy opens"
+mv -f "$f.keep" "$f"; rm -f "$f.down" "$IPSET_AUTO" "$MOCK_DIR/ask.a.example.claude.ai" "$MOCK_DIR/via.203.0.113.20"
 # игровые серверы — не по HTTPS: на них прокси не проверяется
 cp "$f" "$f.keep"; sed -i 's/^=chatgpt.com\ta.example$/=gamea.clashofclans.com\ta.example/' "$f"
 kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; fakesvc=$(fake_daemon "$PIDFILE")
