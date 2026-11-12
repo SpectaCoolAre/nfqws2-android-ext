@@ -6,8 +6,9 @@
 # проверку DNS и сертификата проходили, но Gemini через них отвечал геоблоком.
 # Comss убран (с ноября не обходит Gemini), magicdns — его адрес de.magicdns.ru,
 # dns.bezmezhau.com не отвечает (10–11.11) — остался sync.bezmezhau.com
-# MagicDNS с 12.11 — и api.magicinfo.art (его нынешний адрес)
-google de.magicdns.ru api.magicinfo.art api.magicinfo.art/rpc dns.zapret.moe dns.malw.link dns.dns-ai.ru sync.bezmezhau.com
+# MagicDNS с 12.11 — и api.magicinfo.art (его нынешний адрес). zapret.moe —
+# первым (12.11): на роутере Gemini через него работает и под аккаунтом
+google dns.zapret.moe de.magicdns.ru api.magicinfo.art dns.malw.link dns.dns-ai.ru sync.bezmezhau.com
 # «=сервер» — закреплён: вся группа через него, пока он отвечает в этой сети,
 # без сравнения «обходит / не обходит» и без паузы по пробе прокси.
 # Supercell: dns.nullsproxy.com обслуживает все игры, а в проверке виден
