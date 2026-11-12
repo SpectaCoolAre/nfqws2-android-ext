@@ -1177,6 +1177,7 @@ assert_contains "$(cat "$DNS_GEO_SCAN_DIR/groups.pin")" "@google c.example" "and
 mkhot "a.example"
 assert_contains "$(dns_geo_routes)" "gemini.google.com	c.example" "a preferred group server missing one check is still kept (two misses in a row change it)"
 printf '@google\tc.example\t0.300\t2\n@google\tb.example\t0.300\t2\n' > "$(dns_geo_scan_file).rel"
+echo "@google c.example 1" > "$DNS_GEO_SCAN_DIR/groups.pin"   # выбран давно — удержание (6 ч) прошло
 assert_contains "$(dns_geo_routes)" "gemini.google.com	a.example" "no preferred one serves it — any server, the site keeps working"
 mkhot "a.example,b.example,c.example"
 echo "@google b.example" > "$DNS_GEO_SCAN_DIR/groups.pin"
@@ -1233,6 +1234,25 @@ assert_contains "$r" "gemini.google.com	big.example" "a group server must bypass
 assert_contains "$r" "gemini.gstatic.com	big.example" "and the whole group goes through it (one exit address)"
 assert_contains "$DNS_GEO_HOT_BASE" "signaler-pa.clients6.google.com" "Gemini's main domains are main services"
 rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
+# Сервер группы, выбранный недавно (меньше 6 ч), держится, пока по полной
+# проверке обходит основные домены группы, даже если частые проверки его
+# теряют: каждая смена — новый адрес выхода для аккаунта (Gemini — временный
+# бан за день смен, 12.11)
+{ printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
+  printf 'g.example\tok\t20\t5\t5\t0\ttls\n'; printf 'n.example\tok\t30\t5\t5\t0\ttls\n'
+  for d in gemini.google.com geminiweb-pa.clients6.google.com signaler-pa.clients6.google.com apis.google.com waa-pa.clients6.google.com; do printf '=%s\tg.example,n.example\n' "$d"; done; } > "$(dns_geo_scan_file)"
+{ printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
+  printf 'g.example\tok\t20\t4\t5\t0\ttls\n'; printf 'n.example\tok\t30\t5\t5\t0\ttls\n'
+  printf '=gemini.google.com\tn.example\n=signaler-pa.clients6.google.com\tg.example,n.example\n'; } > "$(dns_geo_scan_file).hot"
+touch -d "@$(( $(date +%s) + 60 ))" "$(dns_geo_scan_file).hot" 2>/dev/null || touch "$(dns_geo_scan_file).hot"
+printf '@google\tg.example\t0.300\t2\n' > "$(dns_geo_scan_file).rel"
+echo "@google g.example $(( $(date +%s) - 3600 ))" > "$DNS_GEO_SCAN_DIR/groups.pin"
+assert_contains "$(dns_geo_routes)" "gemini.google.com	g.example" "a group server chosen an hour ago stays while the full check has it on all main domains (no new exit address)"
+echo "@google g.example $(( $(date +%s) - 30000 ))" > "$DNS_GEO_SCAN_DIR/groups.pin"
+assert_contains "$(dns_geo_routes)" "gemini.google.com	n.example" "after the hold (6 h) two misses in a row change it"
+dns_geo_pin_save
+assert_match "$(cat "$DNS_GEO_SCAN_DIR/groups.pin")" "@google n.example [0-9]{10}" "a new group server is saved with the time it was chosen"
+rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).rel" "$(dns_geo_scan_file).hot"
 # порог группы — 70% доменов от лучшего: серверы DoH отвечают не на все
 # запросы, и сервер, обходящий почти всё, не должен проигрывать из-за этого
 { printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"

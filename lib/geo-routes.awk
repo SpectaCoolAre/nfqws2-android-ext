@@ -11,7 +11,9 @@ function out(d, x) { if (x == "-") print d "\t-"; else print d "\t" x "\t" pr[x]
 BEGIN { while ((getline l < of) > 0) { gsub(/[[:space:]]/, "", l); if (l != "") off[l] = 1 }
   while ((getline l < pf) > 0) { split(l, a, " "); if (a[1] != "") pin[a[1]] = a[2] }
   while ((getline l < gf) > 0) { sub(/#.*/, "", l); n = split(tolower(l), a, " "); for (i = 2; i <= n; i++) grp[a[i]] = a[1] }
-  while ((getline l < gpf) > 0) { split(l, a, " "); if (a[1] != "") gpin[a[1]] = a[2] }
+  # «@группа сервер [время выбора]»
+  while ((getline l < gpf) > 0) { split(l, a, " "); if (a[1] != "") { gpin[a[1]] = a[2]; gts[a[1]] = a[3] + 0 } }
+  if (hold == "") hold = 21600
   # «=сервер» — закреплён за группой: вся группа через него, пока он отвечает
   while ((getline l < prf) > 0) { sub(/#.*/, "", l); n = split(tolower(l), a, " ")
     for (i = 2; i <= n; i++) { if (substr(a[i], 1, 1) == "=") { a[i] = substr(a[i], 2); fixed["@" a[1]] = a[i] }; pref["@" a[1], a[i]] = i } }
@@ -71,6 +73,11 @@ END {
       for (i = 1; i <= ns[s]; i++) { h = so[s, i]; if (cnt[s, h] >= nr && call[s, h] > mx[s]) mx[s] = call[s, h]; if (callf[s, h] > mxf) mxf = callf[s, h] }
       for (i = 1; i <= ns[s]; i++) if (gfit(s, so[s, i])) anyfit = 1
       if (usable(g) && gfit(s, g)) { ch[s] = g; continue }
+      # выбранный недавно (меньше hold, 6 ч) держится, пока по полной проверке
+      # обходит основные домены группы: каждая смена — новый адрес выхода для
+      # аккаунта, и за день смен на webshift, MagicDNS, zombiez Gemini дал
+      # временный бан (12.11)
+      if (usable(g) && now + 0 > 0 && gts[s] > 0 && now - gts[s] < hold && nbf[s] + 0 > 0 && bf[s, g] + 0 >= nbf[s] + 0) { ch[s] = g; continue }
       # по старым данным сети — пока отвечает; одна неудачная частая
       # проверка не снимает, если по полной обходит всё
       if (usable(g) && !fresh) { ch[s] = g; continue }
@@ -132,7 +139,7 @@ END {
   if (save == "save") {
     if ("*" in pin) print "* " pin["*"] > pf
     for (s in ch) if (ch[s] != "" && ch[s] != "-" && substr(s, 1, 1) != "@") print s, ch[s] > pf
-    for (s in ch) if (substr(s, 1, 1) == "@" && ch[s] != "") gpin[s] = ch[s]
-    for (s in gpin) if (gpin[s] != "") print s, gpin[s] > gpf
+    for (s in ch) if (substr(s, 1, 1) == "@" && ch[s] != "") { if (gpin[s] != ch[s]) gts[s] = now + 0; gpin[s] = ch[s] }
+    for (s in gpin) if (gpin[s] != "") print s, gpin[s], gts[s] + 0 > gpf
   }
 }

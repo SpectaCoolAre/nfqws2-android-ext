@@ -287,7 +287,7 @@ dns_geo_routes() { # [save]
   local fresh=0 ft
   ft=$(sed -n '1s/^#time=\([0-9]*\).*/\1/p' "${h:-$f}" 2>/dev/null)
   [ -n "$ft" ] && [ $(( $(date +%s) - ft )) -lt $(( DNS_GEO_HOT_EVERY * 2 )) ] && fresh=1
-  awk -F'\t' -v prf="$DNS_GEO_PREFER" -v of="$(dns_geo_off_eff)" -v pf="$f.pin" -v gpf="$DNS_GEO_SCAN_DIR/groups.pin" -v rf="$f.rel" -v fresh="$fresh" -v base="$DNS_GEO_HOT_BASE" -v gf="$DNS_GEO_GROUPS" -v gl="$DNS_GEO_LIST" -v hf="$h" -v save="$1" -v pool="$(dns_geo_pick)" -f "$MODDIR/lib/geo-routes.awk" "$f" $h
+  awk -F'\t' -v prf="$DNS_GEO_PREFER" -v of="$(dns_geo_off_eff)" -v pf="$f.pin" -v gpf="$DNS_GEO_SCAN_DIR/groups.pin" -v rf="$f.rel" -v fresh="$fresh" -v base="$DNS_GEO_HOT_BASE" -v gf="$DNS_GEO_GROUPS" -v gl="$DNS_GEO_LIST" -v hf="$h" -v save="$1" -v now="$(date +%s)" -v pool="$(dns_geo_pick)" -f "$MODDIR/lib/geo-routes.awk" "$f" $h
 }
 # Что сменилось в маршрутах против прежних (файл): «: домен старый → новый, …»,
 # первые пять и сколько ещё
