@@ -65,3 +65,11 @@ w.quic.best
 [NullsProxy]
 # Supercell (Clash of Clans, Clash Royale, Brawl Stars) — отвечает почти всегда
 dns.nullsproxy.com
+
+[Geodema]
+# для пробы (12.11): DoT из описания сервиса — Xbox, ChatGPT, Claude
+dns.geodema.love
+
+[Pereval]
+# для пробы (12.11): частный DNS (Казахстан) — Claude, ChatGPT, Gemini
+free.pereval.top

@@ -47,8 +47,9 @@ END {
   for (k = 1; k <= n; k++) {
     d = ord[k]; if (!(d in rtf) || rtf[d] == "-") continue
     s = site(d); m = split(rtf[d], hs, ","); c = 0
-    for (i = 1; i <= m; i++) if (usable(hs[i])) { callf[s, hs[i]]++; c++ }
+    for (i = 1; i <= m; i++) if (usable(hs[i])) { callf[s, hs[i]]++; c++; if (d in basehot) bf[s, hs[i]]++ }
     if (c) nkf[s]++
+    if (c && (d in basehot)) nbf[s]++
   }
   for (s in nd) {
     isg = substr(s, 1, 1) == "@"
@@ -73,7 +74,10 @@ END {
       # по старым данным сети — пока отвечает; одна неудачная частая
       # проверка не снимает, если по полной обходит всё
       if (usable(g) && !fresh) { ch[s] = g; continue }
-      if (usable(g) && ((s, g) in rst) && rst[s, g] < 2 && mxf && callf[s, g] * 10 >= mxf * 7) { ch[s] = g; continue }
+      # …но только если по ней он обходит и основные сервисы группы (claude.ai,
+      # gemini.google.com): bezmezhau держал Anthropic и Google по второстепенным
+      # доменам, а сами Claude и Gemini через него не открывались (12.11, МТС)
+      if (usable(g) && ((s, g) in rst) && rst[s, g] < 2 && mxf && callf[s, g] * 10 >= mxf * 7 && bf[s, g] + 0 >= nbf[s] + 0) { ch[s] = g; continue }
       # используемые не обходит никто — держится выбранный, пока отвечает
       if (usable(g) && !anyfit) { ch[s] = g; continue }
       # новый: годные (предпочтительные, надёжные), затем обходящие

@@ -1201,6 +1201,17 @@ assert_contains "$(dns_geo_routes)" "gamea.clashofclans.com	t.example" "so does 
 DNS_GEO_OFF=$offk
 DNS_GEO_PREFER=$pkeep; rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
 assert_contains "$(cat "$DNS_GEO_PREFER")" "supercell =dns.nullsproxy.com" "the module fixes NullsProxy for Supercell"
+# Выбранный сервер группы держится по полной проверке, только если обходит и
+# её основные сервисы: bezmezhau держал Anthropic и Google по второстепенным
+# доменам, а claude.ai и gemini.google.com проверка нашла только у webshift
+# (12.11, МТС; через bezmezhau они не открывались)
+{ printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
+  printf 'big.example\tok\t20\t10\t10\t0\ttls\n'; printf 'ws.example\tok\t30\t3\t10\t0\ttls\n'
+  printf '=claude.ai\tws.example\n=anthropic.com\tbig.example,ws.example\n=claude.com\tbig.example\n=claudeusercontent.com\tbig.example\n'; } > "$(dns_geo_scan_file)"
+echo "@anthropic big.example" > "$DNS_GEO_SCAN_DIR/groups.pin"
+printf '@anthropic\tbig.example\t0.900\t0\n' > "$(dns_geo_scan_file).rel"
+assert_contains "$(dns_geo_routes)" "claude.ai	ws.example" "a pinned group server that does not serve the main service (claude.ai) gives the group to one that does"
+rm -f "$DNS_GEO_SCAN_DIR/groups.pin" "$(dns_geo_scan_file).rel"
 # порог группы — 70% доменов от лучшего: серверы DoH отвечают не на все
 # запросы, и сервер, обходящий почти всё, не должен проигрывать из-за этого
 { printf '#time=%s boot=x v=%s\n' "$(date +%s)" "$DNS_GEO_SCAN_VER"
