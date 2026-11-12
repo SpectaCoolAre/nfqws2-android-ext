@@ -15,11 +15,14 @@
 # Адреса в комментариях — для справки.
 
 [bezmezhau]
-# 185.236.10.189, 31.58.216.201; обходит больше всех (≈360 доменов)
+# 185.236.10.189, 31.58.216.201; обходит больше всех (≈360 доменов). Проект
+# для Беларуси: по его сайту (12.11) dns.bezmezhau.com в России может не
+# работать, адрес для России — в закреплённом сообщении канала
 sync.bezmezhau.com
 
 [dagami]
-# 48.102.213.179, 185.149.145.6
+# 48.102.213.179, 185.149.145.6. По его сайту (проверка 12.11): ChatGPT,
+# Gemini открываются, Claude — проверка Cloudflare; маршрут — Швеция
 dns.dagami.ru
 
 [DNS-AI]
@@ -31,11 +34,17 @@ dns.dns-ai.ru
 dns.malw.link
 
 [MagicDNS]
-# 94.249.177.102: на МТС отвечает, на домашнем Wi‑Fi — нет
+# Нынешний адрес по magicdns.ru (12.11): DoT — api.magicinfo.art
+# (217.144.190.216, 109.120.187.249), DoH — api.magicinfo.art/rpc.
+# de.magicdns.ru (94.249.177.102) — прежний: на МТС с 12.11 не отвечает
+api.magicinfo.art
+api.magicinfo.art/rpc
 de.magicdns.ru
 
 [zapret.moe]
-# только DoH: адреса внутри сети Cloudflare меняются
+# только DoH через Cloudflare: DoT и обычный DNS закрыты с 03.11 (адрес
+# сервера в России заблокирован). Прокси — вход в Москве, сервер в США;
+# хостингам и зарубежным адресам вход отказывает (dns.zapret.moe, 12.11)
 dns.zapret.moe
 
 [wlrus]
@@ -47,12 +56,9 @@ dns.wlrus.cfd
 d.webshiftvpn.ru
 
 [GeoHide]
-# 45.155.204.190, 5.175.161.40, 37.221.93.141…; DoT на Wi‑Fi закрыт — по DoH
+# 45.155.204.190, 5.175.161.40, 37.221.93.141…; DoT на Wi‑Fi закрыт — по DoH.
+# 12.11: сайт geohide.ru отвечает 503, репозиторий GeoHideDNS — «в разработке»
 eu.geohide.ru
-
-[Tamaev]
-# 188.130.251.99
-tamaev-gifts.xyz
 
 [Semqka]
 # 45.198.0.84
@@ -67,17 +73,15 @@ w.quic.best
 dns.nullsproxy.com
 
 [Geodema]
-# для пробы (12.11): DoT из описания сервиса — Xbox, ChatGPT, Claude
+# для пробы (12.11): по его сайту — DoT/DoH dns.geodema.love, 179.236.130.10/11
 dns.geodema.love
 
 [Pereval]
-# для пробы (12.11): частный DNS (Казахстан) — Claude, ChatGPT, Gemini
+# для пробы (12.11): по его сайту — DoT free.pereval.top, 153.80.200.170
 free.pereval.top
 
 [Zombiez]
-# для пробы (12.11): из списка Flowseal/zapret-discord-youtube #3423
+# для пробы (12.11): по его сайту — DoT/DoH dns.zombiez.ru, 186.243.168.31;
+# ChatGPT, Gemini, Claude, Copilot, Grok, Perplexity…
 dns.zombiez.ru
 
-[MagicInfo]
-# для пробы (12.11): оттуда же
-api.magicinfo.art
