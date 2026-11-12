@@ -753,6 +753,12 @@ dns_net_servers() {
   printf '%s' "$s" | tr ',' '\n' | grep -E '^[0-9A-Fa-f.:%a-z_]+$' | head -n 4 | tr '\n' ',' | sed 's/,$//'
 }
 
+# dnsproxy запущен без DNS сети (сети не было — мобильный интернет выключен), а
+# сейчас она есть: его надо перезапустить (см. watchdog)
+dns_net_returned() {
+  dns_pid >/dev/null && [ -f "$DNS_RUN_DIR/net_dns" ] && [ -z "$(tr -d ' \n' < "$DNS_RUN_DIR/net_dns")" ] && [ -n "$(dns_net_servers)" ]
+}
+
 # 1.2.3.4 -> 1.2.3.4:53, fe80::1%wlan0 -> [fe80::1%wlan0]:53
 dns_addr_port() {
   case "$1" in *:*) printf '[%s]:53' "$1" ;; *) printf '%s:53' "$1" ;; esac

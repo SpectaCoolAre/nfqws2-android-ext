@@ -274,6 +274,23 @@ assert_match "$log" "не работает \\(PID $pid: (нет в /proc|ест�
 assert_contains "$log" "watchdog: запуск dnsproxy" "followed by the restart"
 assert_contains "$(cat "$SERVICE_LOG")" "DNS: dnsproxy перезапущен" "the service log confirms the restart"
 
+# Мобильный интернет выключили вручную: dnsproxy перезапустился без DNS сети;
+# включили — маршрут тот же, DNS сети появляется позже события, и dnsproxy
+# оставался запущенным «без сети» до следующей смены сети (12.11, 12 минут)
+section "the network comes back after DNS started without it"
+mv "$MOCKBIN/dumpsys" "$MOCKBIN/dumpsys.keep"; printf '#!/bin/sh\necho "Active default network: 0"\n' > "$MOCKBIN/dumpsys"; chmod 0755 "$MOCKBIN/dumpsys"
+pg=$(getprop net.dns1 2>/dev/null)
+dns_build >/dev/null 2>&1
+if [ -z "$pg" ]; then
+  assert_eq "" "$(tr -d ' \n' < "$DNS_RUN_DIR/net_dns")" "built with no network DNS"
+  dns_net_returned; assert_rc 1 $? "still no network: nothing to do"
+  mv -f "$MOCKBIN/dumpsys.keep" "$MOCKBIN/dumpsys"
+  if dns_pid >/dev/null; then dns_net_returned; assert_rc 0 $? "the network DNS is back: the running dnsproxy started without it must restart"; fi
+  dns_build >/dev/null 2>&1
+  dns_net_returned; assert_rc 1 $? "after a build with the network DNS — nothing more"
+else mv -f "$MOCKBIN/dumpsys.keep" "$MOCKBIN/dumpsys"; fi
+assert_contains "$(cat "$MODDIR/service.sh")" '"$(dns_enabled && dns_net_servers)"' "the network signature includes the network DNS (rechecks catch it appearing)"
+
 section "the watchdog asks dnsproxy, not only /proc"
 
 # помощник-заглушка: отвечает dnsproxy или нет — по файлу; аргументы — в лог

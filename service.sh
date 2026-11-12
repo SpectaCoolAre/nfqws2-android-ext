@@ -479,8 +479,12 @@ ensure_netwatch() { # зовётся только из ensure_watchdog, посл
 net_signature() {
   local dev
   dev=$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
-  # Wi‑Fi или мобильная сеть под VPN: маршрут один (tun), а сеть под ним разная
-  printf '%s|%s|%s' "$dev" "$(vpn_active && echo vpn)" "$(on_wifi && echo wifi)"
+  # Wi‑Fi или мобильная сеть под VPN: маршрут один (tun), а сеть под ним разная.
+  # И DNS сети: после ручного выключения и включения мобильного интернета
+  # маршрут тот же, а DNS сети Android отдаёт на секунды позже события —
+  # dnsproxy, запущенный без сети, оставался до следующей смены сети (12.11:
+  # 12 минут без связи, до перезапуска)
+  printf '%s|%s|%s|%s' "$dev" "$(vpn_active && echo vpn)" "$(on_wifi && echo wifi)" "$(dns_enabled && dns_net_servers)"
 }
 
 # Разбор смены сети: DNS, сеть умного режима, правила, пауза. Зовётся из
@@ -539,7 +543,7 @@ netwatch() {
   trap 'kill -TERM "$mon" "$reader" "$sp" 2>/dev/null; rm -f "$WN_PIDFILE" "$fifo" "$STATE_DIR/conf_seen.$$"; exit 0' TERM INT HUP
   # Перепроверки и после старта: при загрузке сеть ещё устанавливается, и её
   # смена до запуска ip monitor не дала бы события
-  read -r up _ < /proc/uptime; base=${up%.*}; rq="${NW_RECHECK:-3 10 30}"
+  read -r up _ < /proc/uptime; base=${up%.*}; rq="${NW_RECHECK:-3 10 30 60 120}"
   while :; do
     if [ -z "$mon" ] || ! kill -0 "$mon" 2>/dev/null; then
       # ip monitor упал или не поддерживается: не перезапускать в цикле
@@ -576,11 +580,11 @@ netwatch() {
       # пачка событий одной смены сети: ждём секунду тишины
       while [ "$wake" = 1 ]; do wake=0; sleep 1; done
       netwatch_apply "ip monitor"
-      # Перепроверки через 3, 10 и 30 с: событие приходит, когда сеть ещё
+      # Перепроверки через 3, 10, 30, 60 и 120 с: событие приходит, когда сеть ещё
       # поднимается (маршрута наружу нет, Wi‑Fi в переходном состоянии), а
       # следующего может не быть — связь вернулась, а модуль считал бы, что её
       # нет (DNS без перезапуска, умный режим на «нет связи»)
-      read -r up _ < /proc/uptime; base=${up%.*}; rq="${NW_RECHECK:-3 10 30}"
+      read -r up _ < /proc/uptime; base=${up%.*}; rq="${NW_RECHECK:-3 10 30 60 120}"
       continue
     fi
     if [ -n "$rq" ]; then
@@ -667,6 +671,11 @@ watchdog() {
       ( sh "$MODDIR/bin/nfqws2-ctl" dpi-distance </dev/null >/dev/null 2>&1 & )
     # DNS — до проверки WATCHDOG: упавший dnsproxy с правилами перехвата
     # оставил бы телефон совсем без DNS
+    # DNS запущен без DNS сети (сети не было), а она появилась — перезапуск:
+    # событие сети могло прийти раньше, чем Android отдал её DNS
+    if dns_enabled && dns_net_returned; then
+      dns_start "появилась сеть" force
+    fi
     dns_enabled && DNS_PROBE=$rare dns_check
     [ "$WATCHDOG" = "1" ] || continue
     [ -f "$DESIRED_FILE" ] || continue
