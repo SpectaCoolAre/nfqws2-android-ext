@@ -30,6 +30,9 @@ EOF
 chmod 0755 "$MOCKBIN/dumpsys" "$MOCKBIN/settings" "$MODDIR/bin/dnsproxy"
 export STUB_PRIVATE STUB_PRIVATE_HOST
 load_common
+# убить и дождаться, пока процесса не станет (sleep 0.3 под нагрузкой не хватало:
+# проверка видела живой dnsproxy и не перезапускала — тест падал через раз)
+kill_wait() { kill "$1" 2>/dev/null; i=0; while kill -0 "$1" 2>/dev/null && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i + 1)); done; }
 # проверка DNS обхода геоблока в фоне здесь не запускается: её раздел зовёт
 # dns_geo_scan сам (иначе фоновая гонялась бы с заглушками других разделов)
 dns_geo_scan_bg() { :; }
@@ -394,7 +397,7 @@ assert_rc 0 $? "and then brings dnsproxy back"
 kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
 
 mkdir "$DNS_LOCK"; echo 999999 > "$DNS_LOCK/pid"
-pid=$(cat "$DNS_PIDFILE"); kill "$pid"; sleep 0.3
+pid=$(cat "$DNS_PIDFILE"); kill_wait "$pid"
 dns_check
 kill -0 "$(cat "$DNS_PIDFILE" 2>/dev/null)" 2>/dev/null
 assert_rc 0 $? "a lock left by a dead process is taken over"
@@ -414,7 +417,7 @@ sleep 600 & stray=$!
 printf '#!/bin/sh\necho %s\n' "$stray" > "$MOCKBIN/pidof"
 printf '#!/bin/sh\n[ "$1" = /proc/%s/exe ] && { echo "%s"; exit 0; }\nexec /bin/readlink "$@"\n' "$stray" "$DNS_BIN" > "$MOCKBIN/readlink"
 chmod 0755 "$MOCKBIN/pidof" "$MOCKBIN/readlink"
-pid=$(cat "$DNS_PIDFILE"); kill "$pid"; sleep 0.3
+pid=$(cat "$DNS_PIDFILE"); kill_wait "$pid"
 dns_check
 assert_eq "$stray" "$(cat "$DNS_PIDFILE")" "a running dnsproxy of this module is adopted instead of restarted"
 assert_contains "$(tail -n 2 "$DNS_LOG")" "PID-файл исправлен" "and the log says why"
@@ -485,7 +488,7 @@ svc start
 svc stop
 assert_file "$DNS_PIDFILE" "stopping the service leaves DNS running"
 assert_contains "$(ipt_rules OUTPUT nat)" "-j nfqws_dns" "with its interception"
-pid=$(cat "$DNS_PIDFILE"); kill "$pid"; sleep 0.3
+pid=$(cat "$DNS_PIDFILE"); kill_wait "$pid"
 dns_check
 [ -f "$DNS_PIDFILE" ] && [ "$(cat "$DNS_PIDFILE")" != "$pid" ]
 assert_rc 0 $? "the watchdog check restarts it without the service"

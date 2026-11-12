@@ -73,3 +73,11 @@ dns.geodema.love
 [Pereval]
 # для пробы (12.11): частный DNS (Казахстан) — Claude, ChatGPT, Gemini
 free.pereval.top
+
+[Zombiez]
+# для пробы (12.11): из списка Flowseal/zapret-discord-youtube #3423
+dns.zombiez.ru
+
+[MagicInfo]
+# для пробы (12.11): оттуда же
+api.magicinfo.art
