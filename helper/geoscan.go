@@ -705,10 +705,7 @@ func dohScan(server string, names []string, boot string, wait time.Duration) sca
 		if err != nil {
 			return nil, nil
 		}
-		// запрос — не дольше dohReq: зависший держал место до конца проверки
-		ctx, cancel := context.WithTimeout(context.Background(), dohReq)
-		defer cancel()
-		req, _ := http.NewRequestWithContext(ctx, "POST", "https://"+host+path, bytes.NewReader(q))
+		req, _ := http.NewRequest("POST", "https://"+host+path, bytes.NewReader(q))
 		req.Header.Set("Content-Type", "application/dns-message")
 		req.Header.Set("Accept", "application/dns-message")
 		resp, err := cl.Do(req)
@@ -756,9 +753,6 @@ func dohScan(server string, names []string, boot string, wait time.Duration) sca
 	wg.Wait()
 	return r
 }
-
-// dohReq — сколько ждать ответа на один запрос DoH
-var dohReq = 8 * time.Second
 
 // dohPort — порт DoH (тесты подменяют)
 var dohPort = "443"

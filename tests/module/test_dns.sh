@@ -833,6 +833,19 @@ assert_rc 1 $? "while the network DNS is unknown (network not up yet) there is n
 mv -f "$HELPER_BIN.ok" "$HELPER_BIN"
 dns_geo_scan >/dev/null
 assert_no_file "$(dns_geo_scan_file).fail" "a check with answers clears the failure count"
+# ответили меньше половины прошлых — сбой сети на время проверки: роутер 12.11
+# получил 2 ответа из 13, и все группы ушли на один сервер
+printf '#time=%s boot=x v=%s\nfast.example\tok\t20\t5\t7\t0\ttls\nb.example\tok\t20\t5\t7\t0\ttls\nc.example\tok\t20\t5\t7\t0\ttls\nd.example\tok\t20\t5\t7\t0\ttls\n' "$(date +%s)" "$DNS_GEO_SCAN_VER" > "$(dns_geo_scan_file)"
+good=$(cat "$(dns_geo_scan_file)")
+mv "$HELPER_BIN" "$HELPER_BIN.ok"
+printf '#!/bin/sh\nprintf "fast.example\\tok\\t20\\t5\\t7\\t0\\ttls\\nb.example\\tfail\\t0\\t0\\t7\\t0\\t-\\tDoT: i/o timeout\\n"\n' > "$HELPER_BIN"; chmod 0755 "$HELPER_BIN"
+dns_geo_scan >/dev/null
+assert_eq "$good" "$(cat "$(dns_geo_scan_file)")" "one server answering where four did is a glitch: the previous result stays"
+assert_contains "$(tail -n 1 "$DNS_LOG")" "похоже на сбой сети" "the DNS log says why"
+dns_geo_scan >/dev/null; dns_geo_scan >/dev/null
+assert_eq "1" "$(grep -c '	ok	' "$(dns_geo_scan_file)")" "the third such check in a row is the truth and is taken"
+mv -f "$HELPER_BIN.ok" "$HELPER_BIN"; rm -f "$(dns_geo_scan_file).fail"
+dns_geo_scan >/dev/null
 printf '#time=%s boot=x\nfast.example\tok\t40\t7\t7\tchatgpt.com=p\n' "$(date +%s)" > "$(dns_geo_scan_file)"
 dns_geo_scan_due
 assert_rc 0 $? "a fresh check of an older version (samples only) is redone"
