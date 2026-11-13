@@ -2102,7 +2102,7 @@ bench_profile() { # <сайт> -> «профиль число_вариантов
 # весь пул. Нет строки — все варианты 1…N
 bench_set() {
   local f
-  case "$1" in google) f=google ;; quic*) f=quic ;; *) f=tls ;; esac
+  case "$1" in google*) f=google ;; quic*) f=quic ;; *) f=tls ;; esac
   sed -n "s/^#@bench-$f //p" "$STRATEGIES_DIR/smart.conf" 2>/dev/null | head -n 1 | awk -v n="$2" '
     { c = split($0, p, ","); for (i = 1; i <= c; i++) { gsub(/[^0-9-]/, "", p[i]); if (p[i] == "") continue
         a = p[i]; b = p[i]; if (index(p[i], "-")) { split(p[i], r, "-"); a = r[1]; b = r[2] }
@@ -2258,7 +2258,7 @@ cmd_smart_bench_run() {
   if [ ! -f "$BENCH_DIR/stop" ]; then
     sed -i 's/^stage=.*/stage=2/' "$BENCH_DIR/info"
     { sed 's/^/U\t/' "$BENCH_DIR/urls" 2>/dev/null; cat "$BENCH_DIR"/res.* 2>/dev/null; } | awk -F'\t' -v top="$BENCH_TOP" -v d="$BENCH_DIR" -v w="$BENCH_W" '
-      function fam(s) { return s == "google" ? "google" : (s ~ /^quic/ ? "quic" : "tls") }
+      function fam(s) { return s ~ /^google/ ? "google" : (s ~ /^quic/ ? "quic" : "tls") }
       $1 == "U" { url[$2] = $3; next }
       $1 != 1 && $1 != 2 { next }
       # без обхода: удача — удача; «не соединился» не перекрывает другой итог
@@ -2306,7 +2306,7 @@ cmd_smart_bench_report() {
   names=$(sed -n 's/^#@\([a-z]*\) \([0-9]*\) \(.*\)$/N\t\1\t\2\t\3/p' "$STRATEGIES_DIR/smart.conf" 2>/dev/null)
   # медианы времени — по отсортированным значениям
   { printf '%s\n' "$names"; cat "$res"; } | awk -F'\t' '
-    function fam(s) { return s == "google" ? "google" : (s ~ /^quic/ ? "quic" : "tls") }
+    function fam(s) { return s ~ /^google/ ? "google" : (s ~ /^quic/ ? "quic" : "tls") }
     $1 == "N" || $1 == 0 { next }
     # время — только на заблокированных сайтах: там же, где считаются удачи
     $4 == 0 { if ($1 == 1 && base[$2] != "ok" && ($5 != "connect" || base[$2] == "")) base[$2] = $5; next }
@@ -2316,7 +2316,7 @@ cmd_smart_bench_report() {
     END { for (k in c) { n = c[k]; m = (n % 2) ? v[k, (n + 1) / 2] : int((v[k, n / 2] + v[k, n / 2 + 1]) / 2); print "M\t" k "\t" m } }
   ' > "$BENCH_DIR/med" 2>/dev/null
   { printf '%s\n' "$names"; cat "$BENCH_DIR/med"; cat "$res"; } | awk -F'\t' -v mode="$1" -v net="$net" -v live="$live" -v info="$(tr '\n' ' ' < "$BENCH_DIR/info" 2>/dev/null)" '
-    function fam(s) { return s == "google" ? "google" : (s ~ /^quic/ ? "quic" : "tls") }
+    function fam(s) { return s ~ /^google/ ? "google" : (s ~ /^quic/ ? "quic" : "tls") }
     function q(s) { gsub(/["\\]/, "", s); return s }
     $1 == "N" { nm[$2 "|" $3] = $4; next }
     $1 == "M" { med[$2 "|" $3 "|" $4] = $5; next }
