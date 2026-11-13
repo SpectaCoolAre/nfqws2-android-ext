@@ -152,6 +152,7 @@ if [ -d "$DP" ] && [ ! -f "$CONF/dns/.presets4" ]; then
   : > "$CONF/dns/.presets4"
 fi
 
+GEO_DROP="www.google.com"
 for src in "$MODPATH"/lists/*.list; do
   [ -f "$src" ] || continue
   f=${src##*/}
@@ -165,7 +166,12 @@ for src in "$MODPATH"/lists/*.list; do
     # списки геоблока и Google только пополняются (геоблока — и кнопкой
     # «Обновить»): свои домены пользователя остаются, новые из релиза
     # (домены Gemini, YouTube) — добавляются
-    { grep '^#' "$src"; { grep -v '^#' "$dst"; grep -v '^#' "$src"; } | tr -d '\r' | awk 'NF' | sort -u; } > "$dst.new" &&
+    # GEO_DROP — домены, убранные из списка в релизе: пополнение их бы не убрало
+    # (www.google.com, v2.3.7: поиск Google шёл через профиль геоблока и стал
+    # медленным, а прокси для него почти ни у кого нет)
+    { grep '^#' "$src"; { grep -v '^#' "$dst"; grep -v '^#' "$src"; } | tr -d '\r' | awk -v f="$f" -v drop="$GEO_DROP" '
+        BEGIN { if (f == "geoblock.list") { n = split(drop, a, " "); for (i = 1; i <= n; i++) d[a[i]] = 1 } }
+        NF && !($1 in d)' | sort -u; } > "$dst.new" &&
       mv -f "$dst.new" "$dst" || abort "! Failed to update $f"
   elif [ ! -f "$dst" ] || cmp -s "$src" "$dst"; then
     cp -f "$src" "$dst" || abort "! Failed to install $f"

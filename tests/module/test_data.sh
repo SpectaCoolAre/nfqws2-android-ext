@@ -404,4 +404,20 @@ for d in googlevideo.com ggpht.com ytimg.com youtubei.googleapis.com gvt1.com; d
   assert_eq "1" "$(grep -cx "$d" "$REPO_DIR/lists/google.list")" "google.list has $d"
 done
 
+# www.google.com убран из списка геоблока (v2.3.7 добавил: поиск пошёл через
+# профиль геоблока и стал медленным). Пополнение при обновлении его бы не
+# убрало — GEO_DROP: прогоняем цикл списков customize.sh на настоящих файлах
+assert_eq "0" "$(grep -cx 'www.google.com' "$REPO_DIR/lists/geoblock.list")" "www.google.com is not in the geoblock list"
+cz=$(mktemp -d)
+mkdir -p "$cz/mod/lists" "$cz/conf/lists" "$cz/dist"
+printf '# hdr\na.com\n' > "$cz/mod/lists/geoblock.list"
+printf 'a.com\nwww.google.com\nmine.org\n' > "$cz/conf/lists/geoblock.list"
+printf 'g.com\n' > "$cz/mod/lists/google.list"
+printf 'g.com\nwww.google.com\n' > "$cz/conf/lists/google.list"
+sed -n '/^GEO_DROP=/,/^done$/p' "$REPO_DIR/customize.sh" > "$cz/loop.sh"
+( MODPATH="$cz/mod" CONF="$cz/conf" DIST="$cz/dist"; abort() { echo "$*"; exit 1; }; ui_print() { :; }; . "$cz/loop.sh" )
+assert_eq "# hdr a.com mine.org" "$(tr '\n' ' ' < "$cz/conf/lists/geoblock.list" | sed 's/ $//')" "an update drops www.google.com from the installed geoblock list, the user's own domains stay"
+assert_contains "$(cat "$cz/conf/lists/google.list")" "www.google.com" "only from the geoblock list"
+rm -rf "$cz"
+
 harness_finish
