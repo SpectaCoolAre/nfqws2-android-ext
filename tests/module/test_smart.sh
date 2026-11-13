@@ -301,8 +301,8 @@ assert_contains "$(grep '^ *--lua-desync=multidisorder:pos=1,midsld:strategy=48'
 assert_contains "$(grep '^#@google 49 ' "$REPO_DIR/strategies/smart.conf")" "wssize" "the wssize YouTube variant is a Google variant"
 assert_contains "$(grep -A1 'wssize:wsize=1:scale=1:strategy=49' "$REPO_DIR/strategies/smart.conf" | tr -s ' \n' ' ')" "wssize:wsize=1:scale=1:strategy=49 --lua-desync=multidisorder:pos=midsld:strategy=49" "wssize goes before the split, as in the guide"
 assert_contains "$(grep '^#@bench-google' "$REPO_DIR/strategies/smart.conf")" ",49" "and the benchmark tries it"
-# 13.11: в слоте google wssize доставался и www.gstatic.com, fonts.googleapis.com,
-# google.ru — поиск медленный, Gemini без связи. Теперь — только три домена
+# wssize в слоте google мог бы достаться и www.gstatic.com, fonts.googleapis.com,
+# google.ru — каждое соединение открывалось бы медленнее. Только три домена
 # YouTube из того же гайда, свой профиль и слот; в слоте google его нет
 yt=$(tr '\n' ' ' < "$REPO_DIR/strategies/smart.conf" | sed 's/--new/\n/g' | grep 'slot=google_yt:')
 assert_contains "$yt" "--hostlist-domains=youtube.com,googlevideo.com,youtubei.googleapis.com" "wssize is only for the three YouTube domains of the guide"
