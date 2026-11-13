@@ -9,10 +9,10 @@
       "repo": "Dea1hwa1cher/nfqws2-android",
       "branch": "main",
       "track": "commits",
-      "ref": "e1632efa2aad0d03f0ce9a0c5020402cb193ff33",
-      "label": "v3.0.0",
-      "date": "2026-11-10T13:43:41+03:00",
-      "use": "Основа модуля: служба, правила iptables, WebUI, сборка. Списки отсюда не берём; из v2.0.5–v2.1.0 — признаки проверки доступности из dpi-detector (переадресация без имени узла, ответ не по HTTP) и порты голоса Discord 50000–65535; из v2.1.1–v2.2.1 — проверка, что PID службы — наш nfqws2, возврат настроек ядра при остановке, серия автоперезапусков сторожа на диске, подъём netwatch при живом стороже; из v3.0.0 — заглушка установщика META-INF (0ab0c73) и защита таймера времени работы в WebUI (502e229); остальное v3.0.0 (новые пресеты, stealth, CPU affinity, zapret-sni, чистка lua) не взято, декодирование GGC у нас уже было"
+      "ref": "9a35f831415fb0e001877faa804847c85b847141",
+      "label": "v3.0.1",
+      "date": "2026-11-12T07:02:31+03:00",
+      "use": "Основа модуля: служба, правила iptables, WebUI, сборка. Списки отсюда не берём; из v2.0.5–v2.1.0 — признаки проверки доступности из dpi-detector (переадресация без имени узла, ответ не по HTTP) и порты голоса Discord 50000–65535; из v2.1.1–v2.2.1 — проверка, что PID службы — наш nfqws2, возврат настроек ядра при остановке, серия автоперезапусков сторожа на диске, подъём netwatch при живом стороже; из v3.0.0 — заглушка установщика META-INF (0ab0c73) и защита таймера времени работы в WebUI (502e229); остальное v3.0.0 (новые пресеты, stealth, CPU affinity, zapret-sni, чистка lua) не взято, декодирование GGC у нас уже было; v3.0.1 — только показ режима скрытия (stealth) на главной, не взято"
     },
     {
       "id": "nfqws-menu",
@@ -21,10 +21,10 @@
       "branch": "main",
       "path": "strategies",
       "track": "commits",
-      "ref": "3f85c9b17bd34ed90f6e3051b6a571c639bdad44",
-      "label": "3f85c9b",
-      "date": "2026-11-11T21:26:09+00:00",
-      "use": "Все стратегии (с IPv6 и без fastpath), списки lists/, блобы, hosts (пресет «nfqws-menu»); 11.11 — профиль hardcorp74 для wide-youtube.l.google.com (92685de); 12.11 — его профиль googlevideo.com: одиночный fake и multidisorder (fced8d1); Antiscan и warpscout — для роутеров, не берём"
+      "ref": "99cb156998a1fd9a0115f37baedbf4873722c9d7",
+      "label": "99cb156",
+      "date": "2026-11-13T14:42:30+00:00",
+      "use": "Все стратегии (с IPv6 и без fastpath), списки lists/, блобы, hosts (пресет «nfqws-menu»); 11.11 — профиль hardcorp74 для wide-youtube.l.google.com (92685de); 12.11 — его профиль googlevideo.com: одиночный fake и multidisorder (fced8d1); Antiscan и warpscout — для роутеров, не берём; 13.11 — hardcorp74 #1, #2, HTTP, wide-youtube и хостинги по AS в новой редакции (b84df16, 5f22067): стратегия обновлена, в умном режиме — новыми вариантами TLS 55–56 и Google 50 рядом с прежними; его профиль googlevideo.com автор убрал"
     },
     {
       "id": "zapret-manager",
@@ -33,10 +33,10 @@
       "branch": "main",
       "path": "files/Zapret2/zapret2",
       "track": "commits",
-      "ref": "a0c509ed794c4293784646ccb10295525a8e95d5",
-      "label": "v5.040",
-      "date": "2026-11-07T05:02:02+05:00",
-      "use": "Стратегия «Zapret Manager» и кандидаты умного режима (TLS 38–54, Google 21–42) из его готового конфига zapret2, Google 43–44 — «Отдельный обход googlevideo.com» (4.995). Следим только за этим файлом: изменения в нём — повод подтянуть стратегии; варианты YouTube Yv34, Yv35 (Google 45–46) из files/StrYoutube"
+      "ref": "9e041d09aeddba784aed3a5af62efb7f1c371b4c",
+      "label": "v5.072",
+      "date": "2026-11-14T02:00:50+05:00",
+      "use": "Стратегия «Zapret Manager» и кандидаты умного режима (TLS 38–54, Google 21–42) из его готового конфига zapret2, Google 43–44 — «Отдельный обход googlevideo.com» (4.995). Следим только за этим файлом: изменения в нём — повод подтянуть стратегии; варианты YouTube Yv34, Yv35 (Google 45–46) из files/StrYoutube; до v5.072 (14.11) файлы стратегий не менялись — только панель LuCI"
     },
     {
       "id": "zapret2",
@@ -46,7 +46,7 @@
       "track": "releases",
       "ref": "v1.0.7",
       "date": "2026-11-05T10:40:38+03:00",
-      "use": "Бинарник nfqws2 (сборка в CI) — v1.0.7; скрипты lua/ — v1.0.7 (zapret-lib, antidpi, auto совпадают с v1.0.6)",
+      "use": "Бинарник nfqws2 (сборка в CI) — v1.0.7; скрипты lua/ — v1.0.7 (zapret-lib, antidpi, auto совпадают с v1.0.6); master после v1.0.7 (исправления lua, u16add) требует нового бинарника — ждём релиза",
       "label": "v1.0.7"
     },
     {

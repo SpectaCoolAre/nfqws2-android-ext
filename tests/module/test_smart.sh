@@ -291,7 +291,7 @@ assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",43-4
 # nfqws-menu 92685de (11.11): профиль hardcorp74 для wide-youtube.l.google.com —
 # с ним на роутере заработал YouTube
 assert_contains "$(grep '^#@google 47 ' "$REPO_DIR/strategies/smart.conf")" "hardcorp74: wide-youtube" "the new hardcorp74 YouTube profile is a Google variant"
-assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",47-49:" "and in the base set"
+assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",47-50:" "and in the base set"
 # профиль hardcorp74 для googlevideo.com (стабильный поток видео) — тоже вариант;
 # nfqws-menu fced8d1 (11.11): одиночный fake и multidisorder вместо multisplit
 assert_contains "$(grep 'strategy=48' "$REPO_DIR/strategies/smart.conf")" "fake:blob=0x00000000:tcp_ack=-66000:tcp_ts_up:strategy=48" "the hardcorp74 googlevideo profile is a Google variant too"
@@ -301,6 +301,33 @@ assert_contains "$(grep '^ *--lua-desync=multidisorder:pos=1,midsld:strategy=48'
 assert_contains "$(grep '^#@google 49 ' "$REPO_DIR/strategies/smart.conf")" "wssize" "the wssize YouTube variant is a Google variant"
 assert_contains "$(grep -A1 'wssize:wsize=1:scale=1:strategy=49' "$REPO_DIR/strategies/smart.conf" | tr -s ' \n' ' ')" "wssize:wsize=1:scale=1:strategy=49 --lua-desync=multidisorder:pos=midsld:strategy=49" "wssize goes before the split, as in the guide"
 assert_contains "$(grep '^#@bench-google' "$REPO_DIR/strategies/smart.conf")" ",49" "and the benchmark tries it"
+# nfqws-menu 13.11 (b84df16, 5f22067): hardcorp74 #1, #2 и wide-youtube в новой
+# редакции — рядом с прежними (8, 9, 47 — лучшие по обучению), в основном наборе
+assert_contains "$(grep '^#@tls 5[56] ' "$REPO_DIR/strategies/smart.conf" | tr '\n' ' ')" "hardcorp74 #2 (13.11)" "the new hardcorp74 #1 and #2 are TLS variants 55 and 56"
+assert_contains "$(grep 'strategy=55$' "$REPO_DIR/strategies/smart.conf" | head -n 2 | tail -n 1)" "hostfakesplit:host=ozon.ru:midhost=host-2:badsum:tcp_md5:tcp_ts_up" "as in nfqws-menu now"
+assert_eq "" "$(grep -o 'slot=tls[a-z_0-9]*:pass=14:base=[0-9,-]*' "$REPO_DIR/strategies/smart.conf" | grep -v ',55-56$')" "both in the base set of every TLS slot"
+assert_contains "$(grep 'strategy=8$' "$REPO_DIR/strategies/smart.conf" | head -n 2 | tail -n 1)" "host=ya.ru" "the previous #1 stays variant 8"
+assert_contains "$(grep 'strategy=50$' "$REPO_DIR/strategies/smart.conf" | grep sni=www.google.com)" "fake:blob=tls_sochi:tcp_seq=-10000:repeats=6:tls_mod=rnd,dupsid,sni=www.google.com" "the new wide-youtube profile is Google variant 50"
+assert_contains "$(grep 'slot=google:' "$REPO_DIR/strategies/smart.conf")" ",47-50:" "in the Google base set"
+assert_contains "$(grep -A3 'hostlist-domains=wide-youtube' "$REPO_DIR/strategies/hardcorp74.conf")" "tls_clienthello_sochi_park:tcp_seq=-10000:repeats=6" "the hardcorp74 strategy is as in nfqws-menu 13.11"
+assert_not_contains "$(cat "$REPO_DIR/strategies/hardcorp74.conf")" "hostlist-domains=googlevideo.com" "its googlevideo profile is gone, as the author removed it"
+# 13.11: видео YouTube — решение zapret GUI «Default + YouTube no QUIC + wssize»,
+# проверенное на роутере: wssize 1:1 с SYN по кэшу имён и без QUIC к кэшам
+prof=$(awk '/^NFQWS_ARGS_CUSTOM="/{f=1} f && !/^ *#/{print} f && /"$/ && !/^NFQWS_ARGS_CUSTOM="/{f=0}' "$REPO_DIR/strategies/smart.conf" | tr -s '\n ' '  ' | sed 's/--new/\n/g')
+assert_contains "$(grep -A2 '^NFQWS_BASE_ARGS=' "$REPO_DIR/strategies/smart.conf")" "--ipcache-hostname=1" "nfqws2 remembers host names by address (the profile works from SYN)"
+wsp=$(printf '%s\n' "$prof" | grep 'wssize:wsize=1:scale=1' | grep -v 'strategy=')
+assert_contains "$wsp" "--filter-l7=unknown" "the wssize profile only holds until ClientHello (then the smart google profile takes over)"
+assert_contains "$wsp" "--hostlist-domains=googlevideo.com" "and is only for the video caches"
+dq=$(printf '%s\n' "$prof" | grep -- '--lua-desync=drop')
+assert_contains "$dq" "--filter-l7=quic" "QUIC to the video caches is dropped"
+assert_contains "$dq" "--hostlist-domains=googlevideo.com" "only to googlevideo.com"
+wi=$(printf '%s\n' "$prof" | grep -n 'wssize:wsize=1:scale=1' | grep -v 'strategy=' | cut -d: -f1)
+di=$(printf '%s\n' "$prof" | grep -n -- '--lua-desync=drop' | cut -d: -f1)
+gi=$(printf '%s\n' "$prof" | grep -n 'slot=google:' | cut -d: -f1)
+qi=$(printf '%s\n' "$prof" | grep -n 'filter-udp=443 --filter-l7=quic --hostlist=[^ ]*google.list' | cut -d: -f1)
+[ "${wi:-99}" -lt "${gi:-0}" ] && [ "${di:-99}" -lt "${qi:-0}" ] && _ok "both come before the google.list profiles" || _fail "order: wssize $wi google $gi drop $di quic $qi"
+# с кэшем имён профиль с хостлистом и без --filter-l7 сработал бы уже на SYN
+assert_eq "" "$(printf '%s\n' "$prof" | grep -E -- '--hostlist(-domains)?=' | grep -v -- '--filter-l7=')" "every hostlist profile has an l7 filter: the name cache changes no other profile"
 # видео YouTube на МТС — с кэшей Google в сети оператора: там hostfakesplit
 # google.com (Youtube_circular #1) открыл 94 из 94, одиночный fake — 0 из 41
 assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",21,34," "Youtube_circular #1 is in the Google base set"
