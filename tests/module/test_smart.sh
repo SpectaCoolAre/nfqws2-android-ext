@@ -281,7 +281,7 @@ assert_not_contains "$(cat "$MOCK_IPT_STORE/iptables/filter/OUTPUT" 2>/dev/null)
 
 section "every Google variant has a name and every name a variant"
 # Zapret-Manager 5.040 (StrYoutube Yv34, Yv35) — варианты 45, 46 слота google
-gv=$(awk '/^SMART_GOOGLE(_YT)?="/{f=1} f{ while (match($0, /strategy=[0-9]+/)) { print substr($0, RSTART + 9, RLENGTH - 9); $0 = substr($0, RSTART + RLENGTH) } } f && /"$/ && !/^SMART_GOOGLE(_YT)?="/{f=0}' "$REPO_DIR/strategies/smart.conf" | sort -un | tr '\n' ' ')
+gv=$(awk '/^SMART_GOOGLE="/{f=1} f{ while (match($0, /strategy=[0-9]+/)) { print substr($0, RSTART + 9, RLENGTH - 9); $0 = substr($0, RSTART + RLENGTH) } } f && /"$/ && !/^SMART_GOOGLE="/{f=0}' "$REPO_DIR/strategies/smart.conf" | sort -un | tr '\n' ' ')
 gn=$(sed -n 's/^#@google \([0-9]*\) .*/\1/p' "$REPO_DIR/strategies/smart.conf" | sort -un | tr '\n' ' ')
 assert_eq "$gv" "$gn" "the variants of the google slot and their names match"
 assert_contains "$(grep '^#@google 4[56] ' "$REPO_DIR/strategies/smart.conf")" "Manager: Yv35" "Yv34 and Yv35 of Zapret-Manager are in"
@@ -291,7 +291,7 @@ assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",43-4
 # nfqws-menu 92685de (11.11): профиль hardcorp74 для wide-youtube.l.google.com —
 # с ним на роутере заработал YouTube
 assert_contains "$(grep '^#@google 47 ' "$REPO_DIR/strategies/smart.conf")" "hardcorp74: wide-youtube" "the new hardcorp74 YouTube profile is a Google variant"
-assert_contains "$(grep 'slot=google:' "$REPO_DIR/strategies/smart.conf")" ",47-48:" "and in the base set"
+assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",47-49:" "and in the base set"
 # профиль hardcorp74 для googlevideo.com (стабильный поток видео) — тоже вариант;
 # nfqws-menu fced8d1 (11.11): одиночный fake и multidisorder вместо multisplit
 assert_contains "$(grep 'strategy=48' "$REPO_DIR/strategies/smart.conf")" "fake:blob=0x00000000:tcp_ack=-66000:tcp_ts_up:strategy=48" "the hardcorp74 googlevideo profile is a Google variant too"
@@ -301,18 +301,6 @@ assert_contains "$(grep '^ *--lua-desync=multidisorder:pos=1,midsld:strategy=48'
 assert_contains "$(grep '^#@google 49 ' "$REPO_DIR/strategies/smart.conf")" "wssize" "the wssize YouTube variant is a Google variant"
 assert_contains "$(grep -A1 'wssize:wsize=1:scale=1:strategy=49' "$REPO_DIR/strategies/smart.conf" | tr -s ' \n' ' ')" "wssize:wsize=1:scale=1:strategy=49 --lua-desync=multidisorder:pos=midsld:strategy=49" "wssize goes before the split, as in the guide"
 assert_contains "$(grep '^#@bench-google' "$REPO_DIR/strategies/smart.conf")" ",49" "and the benchmark tries it"
-# wssize в слоте google мог бы достаться и www.gstatic.com, fonts.googleapis.com,
-# google.ru — каждое соединение открывалось бы медленнее. Только три домена
-# YouTube из того же гайда, свой профиль и слот; в слоте google его нет
-yt=$(tr '\n' ' ' < "$REPO_DIR/strategies/smart.conf" | sed 's/--new/\n/g' | grep 'slot=google_yt:')
-assert_contains "$yt" "--hostlist-domains=youtube.com,googlevideo.com,youtubei.googleapis.com" "wssize is only for the three YouTube domains of the guide"
-assert_contains "$yt" "\$SMART_GOOGLE_YT" "with their own variant set"
-assert_contains "$(grep 'slot=google_yt:' "$REPO_DIR/strategies/smart.conf")" ",47-49:" "where it is in the base set"
-assert_eq "" "$(awk '/^SMART_GOOGLE="/{f=1} f{print} f && /"$/ && !/^SMART_GOOGLE="/{f=0}' "$REPO_DIR/strategies/smart.conf" | grep -v '^ *#' | grep wssize)" "the Google set (google.list: search, gstatic, fonts) has no wssize"
-assert_eq "" "$(tr '\n' ' ' < "$REPO_DIR/strategies/smart.conf" | sed 's/--new/\n/g' | grep 'slot=google:' | grep SMART_GOOGLE_YT)" "and the google.list profile does not use the YouTube set"
-yi=$(tr '\n' ' ' < "$REPO_DIR/strategies/smart.conf" | sed 's/--new/\n/g' | grep -n 'slot=google_yt:' | cut -d: -f1)
-gi=$(tr '\n' ' ' < "$REPO_DIR/strategies/smart.conf" | sed 's/--new/\n/g' | grep -n 'slot=google:' | cut -d: -f1)
-[ "${yi:-99}" -lt "${gi:-0}" ] && _ok "the YouTube profile comes before google.list (it lists youtube.com too)" || _fail "the YouTube profile must come before google.list: $yi vs $gi"
 # видео YouTube на МТС — с кэшей Google в сети оператора: там hostfakesplit
 # google.com (Youtube_circular #1) открыл 94 из 94, одиночный fake — 0 из 41
 assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",21,34," "Youtube_circular #1 is in the Google base set"
