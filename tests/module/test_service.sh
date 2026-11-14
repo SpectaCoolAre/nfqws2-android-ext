@@ -609,7 +609,9 @@ assert_no_file "$HOME_PAUSED_FILE" "and clears the pause"
 # VPN: правила ip rule с uidrange (приложения в интерфейс) у него нет
 mkdir -p "$NFQWS_SYSNET/ipsec1"; printf '0x1091\n' > "$NFQWS_SYSNET/ipsec1/flags"
 NFQWS_IPRULE="$SANDBOX/iprule"; export NFQWS_IPRULE
-printf '0:\tfrom all lookup local \n17000:\tfrom all iif lo oif rmnet1 lookup rmnet1 \n' > "$NFQWS_IPRULE"
+# правила как на Pixel (14.11): служебное «oif ipsec1 uidrange 0-0» есть у
+# каждой сети, приложения (UID от 10000) через туннель не идут
+printf '0:\tfrom all lookup local \n11000:\tfrom all iif lo oif wlan0 uidrange 0-0 lookup wlan0 \n11000:\tfrom all iif lo oif ipsec1 uidrange 0-0 lookup ipsec1 \n15040:\tfrom all fwmark 0x10064/0x1ffff iif lo uidrange 10174-10174 lookup wlan0 \n16000:\tfrom all fwmark 0xd0066/0xdffff iif lo lookup ipsec1 \n17000:\tfrom all fwmark 0xc0000/0xc0000 iif lo oif ipsec1 lookup ipsec1 \n' > "$NFQWS_IPRULE"
 svc home_check >/dev/null 2>&1
 assert_file "$PIDFILE" "an IPsec tunnel of Wi-Fi calling is not a VPN: the bypass keeps running"
 assert_no_file "$HOME_PAUSED_FILE" "and nothing is paused"

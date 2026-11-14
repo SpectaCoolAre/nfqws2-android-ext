@@ -1685,10 +1685,17 @@ vpn_active() {
     # к своему шлюзу, и модуль принимал домашний Wi‑Fi за VPN — обход и DNS
     # вставали на паузу (14.11). VPN Android (и встроенный IKEv2) направляет в
     # свой интерфейс приложения — правило ip rule с uidrange; у туннеля звонков
-    # такого правила нет
+    # такого правила нет. Строка «oif ipsec1 uidrange 0-0» (только root,
+    # служебная — такая есть у каждой сети, и у wlan0) — не в счёт: у VPN
+    # диапазон захватывает приложения (UID от 10000, обычно 0-99999). Pixel,
+    # 14.11: из-за неё туннель звонков снова считался VPN
     case "$i" in ipsec*)
       [ "$got" = 1 ] || { rules=$(vpn_ip_rules); got=1; }
-      printf '%s\n' "$rules" | grep -q "uidrange [0-9-]* lookup $i *$" || continue ;;
+      printf '%s\n' "$rules" | awk -v i="$i" '
+        $NF == i && $(NF - 1) == "lookup" {
+          for (k = 1; k < NF; k++) if ($k == "uidrange") { split($(k + 1), r, "-"); if (r[2] + 0 >= 10000) f = 1 }
+        }
+        END { exit !f }' || continue ;;
     esac
     return 0
   done
