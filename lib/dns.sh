@@ -230,6 +230,8 @@ dns_geo_servers() {
 # другом (МТС: 213.87.142.94,95 и 95,94), и это одна сеть, а не новая —
 # иначе итог проверки «терялся», и до новой были Comss и ошибки
 dns_geo_net_key() {
+  # закреплённые DNS сети (DNS_NET_PIN) — и ключ тот же на всю команду
+  if [ -n "${DNS_GEO_KEY_PIN:-}" ] && [ -n "${DNS_NET_PIN+x}" ]; then printf '%s' "$DNS_GEO_KEY_PIN"; return 0; fi
   local s; s=$(dns_net_servers | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//'); [ -n "$s" ] || s=default
   printf '%s' "$s" | tr -c 'A-Za-z0-9.' '_'
 }
@@ -737,6 +739,10 @@ dns_profile_set_enabled() { # <id> <0|1>
 # свойства net.dns1/net.dns2 старых версий.
 dns_net_servers() {
   local s
+  # одна команда WebUI спрашивает DNS сети десяток раз (имя файла проверки,
+  # описание, правила) — а dumpsys на телефоне долгий: значение на всю команду
+  # (DNS_NET_PIN задаёт dns_ctl, наследует и service.sh dns_apply)
+  if [ -n "${DNS_NET_PIN+x}" ]; then printf '%s' "$DNS_NET_PIN"; return 0; fi
   s=$(dumpsys connectivity 2>/dev/null | awk '
     /^ *Active default network:/ { act = $NF }
     /NetworkAgentInfo/ && match($0, /network\{[0-9]+\}/) {
@@ -1848,13 +1854,57 @@ dns_backup_restore() { # <каталог из архива>
 # ---------------------------------------------------------------- команды nfqws2-ctl
 dns_apply_now() { # применить сейчас: dns_start сам решит, запускать или снимать
   dns_wanted || dns_pid >/dev/null || dns_rules_ok || return 0
+  # Из WebUI (NFQWS_WEBUI=1) — в фоне: смена конфига — это новый dnsproxy и
+  # подмена им прежнего без пропуска DNS, на телефоне 3–4 с, и экран DNS
+  # ждал их на каждом действии. Изменение уже сохранено; правки подряд
+  # сливаются в одно применение (dns_apply_bg)
+  if [ "${NFQWS_WEBUI:-0}" = 1 ]; then dns_apply_bg; return 0; fi
   sh "$MODDIR/service.sh" dns_apply >/dev/null 2>&1 || echo "Сохранено, но DNS не перезапустился — см. журнал службы" >&2
+}
+# Применение в фоне: заявка — файл apply.pending, исполнитель — один (каталог
+# apply.lock). Пока он применяет, новые заявки только отмечаются, и он берёт
+# их следом — последний сохранённый конфиг применится всегда. Замок старше
+# двух минут — от убитого исполнителя
+dns_apply_bg() {
+  local p="$DNS_RUN_DIR/apply.pending" l="$DNS_RUN_DIR/apply.lock"
+  mkdir -p "$DNS_RUN_DIR"; : > "$p"
+  [ -n "$(find "$l" -maxdepth 0 -mmin +2 2>/dev/null)" ] && rmdir "$l" 2>/dev/null
+  mkdir "$l" 2>/dev/null || return 0
+  # своя сессия (setsid): менеджер снимает группу процессов команды WebUI, как
+  # только она ответила (см. dns_geo_scan_req)
+  ( setsid sh "$MODDIR/bin/nfqws2-ctl" dns-apply-run </dev/null >/dev/null 2>&1 & ) 2>/dev/null ||
+    ( sh "$MODDIR/bin/nfqws2-ctl" dns-apply-run </dev/null >/dev/null 2>&1 & ) 2>/dev/null
+}
+dns_apply_run() { # исполнитель заявок dns_apply_bg; замок apply.lock уже взят
+  local p="$DNS_RUN_DIR/apply.pending" l="$DNS_RUN_DIR/apply.lock"
+  # закреплённые DNS сети команды, что подала заявку, здесь устарели бы: заявки
+  # исполняются и позже, сеть могла смениться
+  unset DNS_NET_PIN DNS_GEO_KEY_PIN NFQWS_WEBUI
+  while :; do
+    while [ -f "$p" ]; do
+      rm -f "$p"
+      sh "$MODDIR/service.sh" dns_apply >/dev/null 2>&1 || log_msg "DNS: изменение сохранено, но dnsproxy не перезапустился — подробности в журнале DNS"
+    done
+    rmdir "$l" 2>/dev/null
+    # заявка между последней проверкой и снятием замка — не потерять
+    [ -f "$p" ] && mkdir "$l" 2>/dev/null && continue
+    break
+  done
 }
 
 dns_ctl() {
   local cmd="$1" n; shift
+  # короткие команды экрана DNS — DNS сети один раз на команду. Не для долгих
+  # (проверка серверов, обновление списка, перезапуск): сеть за это время
+  # может смениться
+  case "$cmd" in
+    dns-state|dns-save-b64|dns-profile-enable|dns-delete|dns-set-default|dns-set-enabled|dns-set-home|dns-geo-off|dns-geo-domain)
+      [ -n "${DNS_NET_PIN+x}" ] || { DNS_NET_PIN=$(dns_net_servers); export DNS_NET_PIN
+        DNS_GEO_KEY_PIN=$(dns_geo_net_key); export DNS_GEO_KEY_PIN; } ;;
+  esac
   case "$cmd" in
     dns-state) dns_state ;;
+    dns-apply-run) dns_apply_run ;;
     dns-set-enabled)
       dns_init
       case "$1" in

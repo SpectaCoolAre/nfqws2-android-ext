@@ -605,6 +605,20 @@ rm -rf "$NFQWS_SYSNET/tun0"
 svc home_check >/dev/null 2>&1
 assert_file "$PIDFILE" "the VPN going away resumes the bypass"
 assert_no_file "$HOME_PAUSED_FILE" "and clears the pause"
+# 14.11: звонки по Wi‑Fi (VoWiFi) поднимают ipsec-туннель к оператору — это не
+# VPN: правила ip rule с uidrange (приложения в интерфейс) у него нет
+mkdir -p "$NFQWS_SYSNET/ipsec1"; printf '0x1091\n' > "$NFQWS_SYSNET/ipsec1/flags"
+NFQWS_IPRULE="$SANDBOX/iprule"; export NFQWS_IPRULE
+printf '0:\tfrom all lookup local \n17000:\tfrom all iif lo oif rmnet1 lookup rmnet1 \n' > "$NFQWS_IPRULE"
+svc home_check >/dev/null 2>&1
+assert_file "$PIDFILE" "an IPsec tunnel of Wi-Fi calling is not a VPN: the bypass keeps running"
+assert_no_file "$HOME_PAUSED_FILE" "and nothing is paused"
+printf '12000:\tfrom all fwmark 0x0/0x20000 iif lo uidrange 0-99999 lookup ipsec1 \n' >> "$NFQWS_IPRULE"
+svc home_check >/dev/null 2>&1
+assert_no_file "$PIDFILE" "the built-in IPsec VPN of Android (apps routed into it) still pauses"
+rm -rf "$NFQWS_SYSNET/ipsec1"; unset NFQWS_IPRULE
+svc home_check >/dev/null 2>&1
+assert_file "$PIDFILE" "and its going away resumes the bypass"
 svc stop >/dev/null 2>&1
 conf_reset
 unset NFQWS_SYSNET

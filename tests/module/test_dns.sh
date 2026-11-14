@@ -1414,6 +1414,43 @@ assert_file "$DNS_ENABLED_FILE" "the feature is switched on"
 ctl dns-set-enabled 0
 assert_no_file "$DNS_ENABLED_FILE" "and off"
 
+section "WebUI: the DNS screen does not wait for dnsproxy"
+# 14.11: каждое действие экрана DNS ждало новый dnsproxy (3–4 с на телефоне), а
+# dns-state звал dumpsys connectivity 11 раз. Из WebUI (NFQWS_WEBUI=1) смена
+# применяется в фоне, правки подряд сливаются; DNS сети — раз на команду
+ctl dns-set-enabled 1
+ctl dns-save-b64 web1 "$(b64 'NAME=Веб
+ENABLED=1
+SERVER=tls://dns.google
+DOMAIN=first.example')"
+svc dns_apply
+assert_contains "$(cat "$DNS_RUN_DIR/upstreams.txt" 2>/dev/null)" "first.example" "the profile is applied"
+NFQWS_WEBUI=1; export NFQWS_WEBUI
+t0=$(date +%s)
+for d in second.example third.example last.example; do
+  ctl dns-save-b64 web1 "$(b64 "NAME=Веб
+ENABLED=1
+SERVER=tls://dns.google
+DOMAIN=$d")"
+done
+t1=$(date +%s)
+assert_rc 0 "$ctl_rc" "saving from the WebUI answers OK"
+[ $((t1 - t0)) -le 3 ]; assert_rc 0 $? "three saves return without waiting for dnsproxy ($((t1 - t0)) s)"
+n=0; while { [ -d "$DNS_RUN_DIR/apply.lock" ] || [ -f "$DNS_RUN_DIR/apply.pending" ]; } && [ "$n" -lt 400 ]; do sleep 0.1; n=$((n + 1)); done
+assert_no_file "$DNS_RUN_DIR/apply.pending" "the background apply finishes"
+assert_contains "$(cat "$DNS_RUN_DIR/upstreams.txt" 2>/dev/null)" "last.example" "and the last saved profile is what runs"
+assert_not_contains "$(cat "$DNS_RUN_DIR/upstreams.txt" 2>/dev/null)" "second.example" "intermediate saves do not stick"
+unset NFQWS_WEBUI
+mv "$MOCKBIN/dumpsys" "$SANDBOX/dumpsys.real"
+printf '#!/bin/sh\necho x >> "%s"\nexec "%s" "$@"\n' "$SANDBOX/dumpsys.calls" "$SANDBOX/dumpsys.real" > "$MOCKBIN/dumpsys"; chmod 0755 "$MOCKBIN/dumpsys"
+: > "$SANDBOX/dumpsys.calls"
+ctl dns-state
+assert_eq "1" "$(grep -c x "$SANDBOX/dumpsys.calls")" "dns-state asks Android for the network DNS once"
+mv "$SANDBOX/dumpsys.real" "$MOCKBIN/dumpsys"
+ctl dns-delete web1
+svc dns_apply
+ctl dns-set-enabled 0
+
 section "backup carries the profiles"
 
 : > "$DNS_ENABLED_FILE"; echo insta > "$DNS_DEFAULT_FILE"

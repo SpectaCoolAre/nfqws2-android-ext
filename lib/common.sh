@@ -1672,17 +1672,29 @@ active_ssid() {
 # Включён ли VPN: интерфейс VPN-приложения (tun), WireGuard или IPsec поднят.
 # Пока VPN работает, трафик идёт через туннель, и обход DPI ему не нужен.
 vpn_active() {
-  local d f
+  local d f i rules="" got=0
   local n="${NFQWS_SYSNET:-/sys/class/net}"
   # tun — VpnService-приложения, wg — WireGuard, ppp/ipsec — встроенный VPN
   # Android, tap/tailscale — Tailscale и мосты (список как в оригинале)
   for d in "$n"/tun* "$n"/wg* "$n"/ppp* "$n"/ipsec* "$n"/tap* "$n"/tailscale*; do
     [ -r "$d/flags" ] || continue
     f=$(cat "$d/flags" 2>/dev/null)
-    case "$f" in 0x*) [ $(( $f & 1 )) -eq 1 ] && return 0 ;; esac
+    case "$f" in 0x*) [ $(( $f & 1 )) -eq 1 ] || continue ;; *) continue ;; esac
+    i=${d##*/}
+    # ipsec — и звонки по Wi‑Fi (VoWiFi): дома оператор поднимает IPsec-туннель
+    # к своему шлюзу, и модуль принимал домашний Wi‑Fi за VPN — обход и DNS
+    # вставали на паузу (14.11). VPN Android (и встроенный IKEv2) направляет в
+    # свой интерфейс приложения — правило ip rule с uidrange; у туннеля звонков
+    # такого правила нет
+    case "$i" in ipsec*)
+      [ "$got" = 1 ] || { rules=$(vpn_ip_rules); got=1; }
+      printf '%s\n' "$rules" | grep -q "uidrange [0-9-]* lookup $i *$" || continue ;;
+    esac
+    return 0
   done
   return 1
 }
+vpn_ip_rules() { if [ -n "$NFQWS_IPRULE" ]; then cat "$NFQWS_IPRULE" 2>/dev/null; else ip rule 2>/dev/null; fi; }
 # Телефон подключён к Wi‑Fi: интерфейс wlan* в состоянии up (associated).
 # Без Wi‑Fi трафик (и VPN поверх него) идёт через мобильную сеть
 # Белые списки мобильного оператора: открываются только разрешённые

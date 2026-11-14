@@ -352,7 +352,8 @@ async function detectSpawn(){
   const r = await spawnRun("printf 'nfq_a\\n\\nnfq_b\\n'; (exit 3)", 3000);
   spawnOK = r.code === 3 && r.out === 'nfq_a\n\nnfq_b';
 }
-const ctlCmd = a => (LANG === 'en' ? 'NFQWS_LANG=en ' : '') + 'sh ' + q(CTL) + ' ' + a.map(q).join(' ');
+/* NFQWS_WEBUI=1: долгие применения (DNS) модуль делает в фоне, экран не ждёт */
+const ctlCmd = a => 'NFQWS_WEBUI=1 ' + (LANG === 'en' ? 'NFQWS_LANG=en ' : '') + 'sh ' + q(CTL) + ' ' + a.map(q).join(' ');
 /* Длинный аргумент (base64 архива или большого списка) одной командой не
    пройдёт: предел ядра на длину аргумента ~128 КБ. Такой уходит частями
    командой upload, а в саму команду идёт ссылка @up:<метка>. */
