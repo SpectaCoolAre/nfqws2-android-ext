@@ -1,6 +1,6 @@
 {
-  "version": "v2.3.9-hotfix",
-  "versionCode": 2390,
-  "zipUrl": "https://github.com/SpectaCoolAre/nfqws2-android-ext/releases/download/v2.3.9-hotfix/nfqws2-android-ext-v2.3.9-hotfix.zip",
+  "version": "v2.4.0",
+  "versionCode": 2400,
+  "zipUrl": "https://github.com/SpectaCoolAre/nfqws2-android-ext/releases/download/v2.4.0/nfqws2-android-ext-v2.4.0.zip",
   "changelog": "https://raw.githubusercontent.com/SpectaCoolAre/nfqws2-android-ext/main/changelog.md"
 }
