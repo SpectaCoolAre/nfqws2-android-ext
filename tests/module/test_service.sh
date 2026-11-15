@@ -369,6 +369,36 @@ firewall_stop >/dev/null 2>&1
 conf_reset
 load_conf >/dev/null 2>&1
 
+section "the heavy YouTube mode queues every packet to the video nets"
+cp -f "$REPO_DIR/strategies/smart.conf" "$CONFFILE"
+load_conf >/dev/null 2>&1
+ipt_reset
+firewall_start >/dev/null 2>&1
+assert_not_contains "$(ipt_rules nfqws_post)" "74.125.0.0/16" "off by default: only the first packets, as usual"
+firewall_stop >/dev/null 2>&1
+printf 'YT_RAMP=1\n' >> "$CONFFILE"
+load_conf >/dev/null 2>&1
+ipt_reset
+firewall_start >/dev/null 2>&1
+post=$(ipt_rules nfqws_post)
+assert_contains "$post" "-p tcp --dport 443 -d 74.125.0.0/16 -j NFQUEUE --queue-num 300 --queue-bypass" "on: everything to 74.125/16 goes to the queue"
+assert_contains "$post" "-d 173.194.0.0/16 -j NFQUEUE" "and to 173.194/16"
+mi=$(printf '%s\n' "$post" | grep -n 'mark --mark' | head -n 1 | cut -d: -f1)
+ri=$(printf '%s\n' "$post" | grep -n '74.125.0.0/16' | cut -d: -f1)
+ci=$(printf '%s\n' "$post" | grep -n 'connbytes\|nfqws_qout' | head -n 1 | cut -d: -f1)
+[ "${mi:-99}" -lt "${ri:-0}" ] && [ "${ri:-99}" -lt "${ci:-0}" ] && _ok "after the processed-mark return, before the packet limit" || _fail "order: mark $mi ramp $ri limit $ci"
+assert_not_contains "$(ipt_rules nfqws_post mangle ip6tables)" "74.125.0.0/16" "IPv4 only"
+firewall_stop >/dev/null 2>&1
+conf_reset
+printf 'YT_RAMP=1\n' >> "$CONFFILE"
+load_conf >/dev/null 2>&1
+ipt_reset
+firewall_start >/dev/null 2>&1
+assert_not_contains "$(ipt_rules nfqws_post)" "74.125.0.0/16" "a strategy without the video step: no extra rule"
+firewall_stop >/dev/null 2>&1
+conf_reset
+load_conf >/dev/null 2>&1
+
 section "start skips a dry-run the same arguments already passed"
 conf_reset
 printf 'WATCHDOG=0\n' >> "$CONFFILE"   # без наблюдателей: они пережили бы секцию

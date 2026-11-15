@@ -12,7 +12,7 @@
       "ref": "9926471f2b74bca96485aa77cd3dbaac247957d8",
       "label": "v3.0.3",
       "date": "2026-11-15T19:46:23+03:00",
-      "use": "Основа модуля: служба, правила iptables, WebUI, сборка. Списки отсюда не берём; из v2.0.5–v2.1.0 — признаки проверки доступности из dpi-detector (переадресация без имени узла, ответ не по HTTP) и порты голоса Discord 50000–65535; из v2.1.1–v2.2.1 — проверка, что PID службы — наш nfqws2, возврат настроек ядра при остановке, серия автоперезапусков сторожа на диске, подъём netwatch при живом стороже; из v3.0.0 — заглушка установщика META-INF (0ab0c73) и защита таймера времени работы в WebUI (502e229); остальное v3.0.0 (новые пресеты, stealth, CPU affinity, zapret-sni, чистка lua) не взято, декодирование GGC у нас уже было; v3.0.1 — только показ режима скрытия (stealth) на главной, не взято; v3.0.2–v3.0.3 — в основном перенос из нашего v2.4.0 (умный режим v25, wssize googlevideo, VoWiFi); hostfakesplit_alt в antidpi не нужен — пресетам без умного режима zapret-smart.lua добавляет stat_inject; полная очистка /data/adb/nfqws2 при удалении не взята — настройки сохраняются намеренно; lua zapret2 из master не взята — у нас бинарники и lua релиза v1.0.7"
+      "use": "Основа модуля: служба, правила iptables, WebUI, сборка. Списки отсюда не берём; из v2.0.5–v2.1.0 — признаки проверки доступности из dpi-detector (переадресация без имени узла, ответ не по HTTP) и порты голоса Discord 50000–65535; из v2.1.1–v2.2.1 — проверка, что PID службы — наш nfqws2, возврат настроек ядра при остановке, серия автоперезапусков сторожа на диске, подъём netwatch при живом стороже; из v3.0.0 — заглушка установщика META-INF (0ab0c73) и защита таймера времени работы в WebUI (502e229); остальное v3.0.0 (новые пресеты, stealth, CPU affinity, zapret-sni, чистка lua) не взято, декодирование GGC у нас уже было; v3.0.1 — только показ режима скрытия (stealth) на главной, не взято; v3.0.2–v3.0.3 — в основном перенос из нашего v2.4.0 (умный режим v25, wssize googlevideo, VoWiFi); hostfakesplit_alt в antidpi не нужен — пресетам без умного режима zapret-smart.lua добавляет stat_inject; полная очистка /data/adb/nfqws2 при удалении не взята — настройки сохраняются намеренно; lua zapret2 из master не взята — у нас бинарники и lua релиза v1.0.7; 15.11 — его переносы стратегий universal_v12, universal_v13, anti_throttle, rostelecom, fake_disorder, z2r_rocket, z_attacker взяты в список (без лишнего custom_funcs.lua; у z2r_rocket исправлены порча и профили), турецкие и nzapret — нет"
     },
     {
       "id": "nfqws-menu",
@@ -37,6 +37,29 @@
       "label": "v5.081",
       "date": "2026-11-15T20:05:22+05:00",
       "use": "Стратегия «Zapret Manager» и кандидаты умного режима (TLS 38–54, Google 21–42) из его готового конфига zapret2, Google 43–44 — «Отдельный обход googlevideo.com» (4.995). Следим только за этим файлом: изменения в нём — повод подтянуть стратегии; варианты YouTube Yv34, Yv35 (Google 45–46) из files/StrYoutube; до v5.072 (14.11) файлы стратегий не менялись — только панель LuCI; до v5.081 (15.11) стратегии не менялись; из его DoH для геоблока взяты новые tamaev-gifts.xyz и dns.magicdns.ru"
+    },
+    {
+      "id": "netzapret",
+      "name": "NetZapret — YouTube и пресеты",
+      "repo": "RixyPow/netzapret",
+      "branch": "master",
+      "track": "commits",
+      "ref": "65ebe2bca56b9aada6e0f0b88856e676dc319d29",
+      "label": "65ebe2b",
+      "date": "2026-11-14T18:02:03+03:00",
+      "use": "Шаг nz_first2 (config/lua/video.lua → lua/zapret-nzvideo.lua): малое окно только узлам видео, у которых срезали ответ, сброс зависшего соединения, тяжёлый режим с пересчётом окна (YT_RAMP); рецепты googlevideo из пресетов Universal V8–V13 и Zapret GUI (Google 51–56), общий V13 (TLS 57–58); стратегии universal_v13 (из nfqws2-android) и universal_v13_ytfix; из vendor/zapret-gui — пресет «Default + YouTube no QUIC + wssize» (стратегия zapret_gui_yt), блоб tls_clienthello_7, tls_multisplit_sni. Автонастройка YouTube (замер узлов в программе Windows) не перенесена"
+    },
+    {
+      "id": "zapret-2-gui",
+      "name": "Zapret 2 GUI — lua",
+      "repo": "TheFirstNoob/Zapret-2-GUI",
+      "branch": "main",
+      "path": "lua/zapret-custom.lua",
+      "track": "commits",
+      "ref": "b8eaa9dfd6d928e66e18a966869910dcc7c073d7",
+      "label": "b8eaa9d",
+      "date": "2026-11-14T16:20:08+03:00",
+      "use": "lua/zapret-custom.lua (tls_fake_disorder, fake_disorder) для стратегий fake_disorder и z2r_rocket"
     },
     {
       "id": "zapret2",

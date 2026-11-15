@@ -143,6 +143,7 @@ local SLOW_BYTES = 12000    -- и столько байт ответа
 local SLOW_BPS = 32768      -- байт/с: медленнее — похоже на замедление,
 local SLOW_RATIO = 4        --   если ещё и во столько раз медленнее обычного для сети
 local SLOW_BASE_N = 5       -- обычная скорость сети — после стольких соединений
+local SLOW_SWITCH = 2       -- медленных ответов в окне сайта — смена варианта, сколько бы ни было удач
 
 -- Общие зоны: сайт в них — на уровень глубже
 local SLD2 = { co = 1, com = 1, net = 1, org = 1, gov = 1, edu = 1, ac = 1, ["or"] = 1, ne = 1, go = 1,
@@ -785,9 +786,9 @@ local function on_err(slot, key, r, v, n, t, pass, mid, c)
 	-- а не добавляет вторую запись
 	local found = false
 	if mid and c then
-		for _, x in ipairs(r.win or {}) do if x.c == c then x.v = 0; x.w = nil; found = true end end
+		for _, x in ipairs(r.win or {}) do if x.c == c then x.v = 0; x.w = nil; x.s = c.slow; found = true end end
 	end
-	if not found then win_push(r, c, 0) end
+	if not found then win_push(r, c, 0); if c and c.slow then r.win[#r.win].s = true end end
 	-- менять вариант — когда в окне ошибок не меньше трёх и больше, чем удач;
 	-- варианту с хорошей историей у этого сайта (80% удач, от пяти) — от четырёх.
 	-- Сайту, что ещё ни разу не открылся, — от двух: к редким сайтам (API
@@ -797,6 +798,12 @@ local function on_err(slot, key, r, v, n, t, pass, mid, c)
 	local need = r.everok and 3 or 2
 	if share(r.ok[v], r.err[v]) >= 0.8 and (r.ok[v] or 0) >= 5 then need = 4 end
 	local bad = e >= need and e > o
+	-- медленно (замедление или обрыв на 16 КБ) — сайт работает, но плохо: удачи
+	-- соединений, что просто открылись, тут не в счёт. Два таких ответа в окне —
+	-- сразу смена варианта (15.11: видео, где прежний вариант медленный)
+	local nslow = 0
+	for _, x in ipairs(r.win or {}) do if x.s and x.v == 0 then nslow = nslow + 1 end end
+	if nslow >= SLOW_SWITCH then bad = true end
 	if not bad or t - (r.sw or 0) < SWITCH_GAP then return end
 	-- сайт не открылся ни разу, а с первых пакетов ломается на многих
 	-- вариантах — это не блокировка: сервер недоступен, прокси или само
@@ -1200,6 +1207,7 @@ function smart(ctx, desync)
 		local prev = r.lastc
 		if prev and not prev.done and prev.maxin >= 14000 and prev.maxin < 17000 and t - prev.tin <= 30 then
 			prev.done = true
+			prev.slow = true
 			DLOG("smart: " .. key .. ": previous connection stalled at " .. prev.maxin .. " bytes")
 			SJ(key .. ": соединение замерло на " .. prev.maxin .. " байтах (обрыв на 16 КБ) — ошибка " .. vname(slot, prev.v))
 			-- начало у него было удачным (больше 4 КБ) — это обрыв посреди работы
@@ -1231,6 +1239,7 @@ function smart(ctx, desync)
 			if not (r.nodpi and r.nodpi > t) then
 				SJ(key .. ": медленно — " .. math.floor(slowbps / 1024 + 0.5) .. " КБ/с при обычных для сети " ..
 					math.floor(slowbase / 1024 + 0.5) .. " КБ/с — ошибка " .. vname(slot, cs.v))
+				cs.slow = true
 				on_err(slot, key, r, cs.v, n, t, pass, true, cs)
 			end
 		end

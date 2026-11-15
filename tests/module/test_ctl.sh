@@ -149,6 +149,14 @@ assert_rc 0 "$ctl_rc" "APP_MODE accepts include"
 ctl set APP_MODE whatever
 assert_rc 1 "$ctl_rc" "APP_MODE rejects an unknown mode"
 
+ctl set YT_RAMP 1
+assert_rc 0 "$ctl_rc" "YT_RAMP (the heavy YouTube mode, developer settings) accepts 1"
+ctl json-status
+assert_contains "$ctl_out" '"yt_ramp":1' "and the status reports it to the WebUI"
+ctl set YT_RAMP 2
+assert_rc 1 "$ctl_rc" "YT_RAMP rejects 2"
+ctl set YT_RAMP 0
+
 ctl set NFQWS_ARGS "--lua-desync=fake"
 assert_rc 1 "$ctl_rc" "set refuses parameters outside the allow-list"
 

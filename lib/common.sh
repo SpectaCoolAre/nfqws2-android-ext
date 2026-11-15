@@ -136,6 +136,7 @@ set_defaults() {
   : "${WL_PAUSE:=1}"
   : "${SMART_POOL:=0}"
   : "${PUSH_FIX:=0}"
+  : "${YT_RAMP:=0}"
 }
 
 # Старше ли файл (каталог) <секунд>. По stat -c %Y, а не find -mmin: find из
@@ -563,7 +564,51 @@ _startup_args() {
   [ -n "$ipset" ] && args="$args $tcp $ipset --ipset-ip=0.0.0.0 --new"
   args="$args $tcp $extra"
 
-  printf '%s' "$args" | tr -s ' ' | stat_inject | ttl_inject
+  if yt_ramp_on; then
+    printf '%s' "$args" | tr -s ' ' | stat_inject | ttl_inject | yt_ramp_inject
+  else
+    printf '%s' "$args" | tr -s ' ' | stat_inject | ttl_inject
+  fi
+}
+
+# Тяжёлый режим YouTube (YT_RAMP=1, «Для разработчиков»): у главных сетей
+# узлов видео шаг nz_first2:syn (lua/zapret-nzvideo.lua) занижает множитель
+# окна в SYN до 1 вместо того, чтобы убрать его, — малое окно вдвое шире
+# (до 131 КБ на задержку). Телефон о занижении не знает и шлёт окно в своём
+# масштабе: каждое исходящее окно такого соединения пересчитывает шаг
+# nz_first2:ramp — он встаёт последним в каждый TCP-профиль (соединение с
+# ClientHello уходит в профиль своего имени) и отдельным профилем в конце —
+# для имён без профиля. Поэтому в очередь идут все пакеты к этим сетям
+# (правило iptables без лимита пакетов), а не первые 15: больше работы
+# процессору. Только у стратегий с этим шагом (умный режим)
+YT_RAMP_NETS="74.125.0.0/16 173.194.0.0/16"
+yt_ramp_on() {
+  [ "$YT_RAMP" = "1" ] || return 1
+  case "$NFQWS_BASE_ARGS" in *zapret-nzvideo.lua*) return 0 ;; esac
+  return 1
+}
+yt_ramp_inject() {
+  awk -v nets="$(printf '%s' "$YT_RAMP_NETS" | tr ' ' ',')" '
+    function flush(   i, tcp, lua_any, syn) {
+      tcp = 0; lua_any = 0; syn = 0
+      for (i = 1; i <= n; i++) {
+        if (p[i] ~ /^--filter-tcp=/) tcp = 1
+        if (p[i] ~ /^--lua-desync=/) lua_any = 1
+        if (p[i] ~ /^--lua-desync=nz_first2:syn/) syn = 1
+        if (p[i] ~ /^--lua-desync=nz_first2:syn:/ && p[i] ~ /:main(:|$)/) p[i] = p[i] ":scale=1"
+        out = out " " p[i]
+      }
+      # профиль шага syn пересчитывает окно сам
+      if (tcp && lua_any && !syn) out = out " --out-range=a --payload=all --lua-desync=nz_first2:ramp"
+      n = 0
+    }
+    { for (j = 1; j <= NF; j++) { if ($j == "--new") { flush(); out = out " --new" } else p[++n] = $j } }
+    END {
+      flush()
+      out = out " --new --filter-tcp=443 --ipset-ip=" nets " --out-range=a --payload=all --lua-desync=nz_first2:ramp"
+      print substr(out, 2)
+    }
+  '
 }
 
 # Режим «Стратегии»: статистика соединений (lua smartstat). Первым экземпляром
@@ -962,6 +1007,15 @@ _fw_iface_rules() {
   # счёта; длина пакета больше заголовков (ACK — до 100 байт)
   if [ "$HAS_SMALLMSS" = 1 ] && [ -n "$TP" ]; then
     _fw_add_rule "$CMD" $IPT_GROUP_POST "$OUT" tcp dports "$TP" "-m connmark --mark $MARK_SMALLMSS -m length --length 101:$((SMALLMSS_MAX + 100))" "$JNFQ"
+  fi
+
+  # тяжёлый режим YouTube (yt_ramp_on): все исходящие к сетям узлов видео
+  # — в очередь, пустые подтверждения тоже: окно каждого пересчитывает nfqws2
+  if [ "${FW_FAMILY:-$CMD}" = "iptables" ] && yt_ramp_on; then
+    local net
+    for net in $YT_RAMP_NETS; do
+      $CMD -w -t mangle -A $IPT_GROUP_POST $OUT -p tcp --dport 443 -d "$net" $JNFQ
+    done
   fi
 
   # outgoing (POSTROUTING)
@@ -1598,7 +1652,7 @@ render_strategy() {
 
 # Module settings (same across strategies) are carried over whole from the live
 # config on strategy change/reset. NFQWS_EXTRA_ARGS only for standard $MODE_* refs.
-USER_KEYS="META_QUIC_REJECT IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL SMART_LEARN WL_PAUSE SMART_POOL PUSH_FIX NFQWS_EXTRA_ARGS"
+USER_KEYS="META_QUIC_REJECT IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL SMART_LEARN WL_PAUSE SMART_POOL PUSH_FIX YT_RAMP NFQWS_EXTRA_ARGS"
 merge_user_keys() { # <generated config> <settings source config>  -> stdout
   awk -v keys=" $USER_KEYS " -v src="$2" '
     function quotes(str,   t) { t = str; return gsub(/"/, "", t) }

@@ -291,7 +291,7 @@ assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",43-4
 # nfqws-menu 92685de (11.11): профиль hardcorp74 для wide-youtube.l.google.com —
 # с ним на роутере заработал YouTube
 assert_contains "$(grep '^#@google 47 ' "$REPO_DIR/strategies/smart.conf")" "hardcorp74: wide-youtube" "the new hardcorp74 YouTube profile is a Google variant"
-assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",47-50:" "and in the base set"
+assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",47-56:" "and in the base set"
 # профиль hardcorp74 для googlevideo.com (стабильный поток видео) — тоже вариант;
 # nfqws-menu fced8d1 (11.11): одиночный fake и multidisorder вместо multisplit
 assert_contains "$(grep 'strategy=48' "$REPO_DIR/strategies/smart.conf")" "fake:blob=0x00000000:tcp_ack=-66000:tcp_ts_up:strategy=48" "the hardcorp74 googlevideo profile is a Google variant too"
@@ -305,27 +305,42 @@ assert_contains "$(grep '^#@bench-google' "$REPO_DIR/strategies/smart.conf")" ",
 # редакции — рядом с прежними (8, 9, 47 — лучшие по обучению), в основном наборе
 assert_contains "$(grep '^#@tls 5[56] ' "$REPO_DIR/strategies/smart.conf" | tr '\n' ' ')" "hardcorp74 #2 (13.11)" "the new hardcorp74 #1 and #2 are TLS variants 55 and 56"
 assert_contains "$(grep 'strategy=55$' "$REPO_DIR/strategies/smart.conf" | head -n 2 | tail -n 1)" "hostfakesplit:host=ozon.ru:midhost=host-2:badsum:tcp_md5:tcp_ts_up" "as in nfqws-menu now"
-assert_eq "" "$(grep -o 'slot=tls[a-z_0-9]*:pass=14:base=[0-9,-]*' "$REPO_DIR/strategies/smart.conf" | grep -v ',55-56$')" "both in the base set of every TLS slot"
+assert_eq "" "$(grep -o 'slot=tls[a-z_0-9]*:pass=14:base=[0-9,-]*' "$REPO_DIR/strategies/smart.conf" | grep -v ',55-58$')" "both in the base set of every TLS slot"
 assert_contains "$(grep 'strategy=8$' "$REPO_DIR/strategies/smart.conf" | head -n 2 | tail -n 1)" "host=ya.ru" "the previous #1 stays variant 8"
 assert_contains "$(grep 'strategy=50$' "$REPO_DIR/strategies/smart.conf" | grep sni=www.google.com)" "fake:blob=tls_sochi:tcp_seq=-10000:repeats=6:tls_mod=rnd,dupsid,sni=www.google.com" "the new wide-youtube profile is Google variant 50"
-assert_contains "$(grep 'slot=google:' "$REPO_DIR/strategies/smart.conf")" ",47-50:" "in the Google base set"
+assert_contains "$(grep 'slot=google:' "$REPO_DIR/strategies/smart.conf")" ",47-56:" "in the Google base set"
 assert_contains "$(grep -A3 'hostlist-domains=wide-youtube' "$REPO_DIR/strategies/hardcorp74.conf")" "tls_clienthello_sochi_park:tcp_seq=-10000:repeats=6" "the hardcorp74 strategy is as in nfqws-menu 13.11"
 assert_not_contains "$(cat "$REPO_DIR/strategies/hardcorp74.conf")" "hostlist-domains=googlevideo.com" "its googlevideo profile is gone, as the author removed it"
-# 13.11: видео YouTube — решение zapret GUI «Default + YouTube no QUIC + wssize»,
-# проверенное на роутере: wssize 1:1 с SYN по кэшу имён и без QUIC к кэшам
+# 15.11: видео YouTube — шаг nz_first2 из NetZapret вместо постоянного wssize:
+# SYN — по сетям узлов и по имени из кэша, приветствие — шаг в профиле google.list
 prof=$(awk '/^NFQWS_ARGS_CUSTOM="/{f=1} f && !/^ *#/{print} f && /"$/ && !/^NFQWS_ARGS_CUSTOM="/{f=0}' "$REPO_DIR/strategies/smart.conf" | tr -s '\n ' '  ' | sed 's/--new/\n/g')
 assert_contains "$(grep -A2 '^NFQWS_BASE_ARGS=' "$REPO_DIR/strategies/smart.conf")" "--ipcache-hostname=1" "nfqws2 remembers host names by address (the profile works from SYN)"
-wsp=$(printf '%s\n' "$prof" | grep 'wssize:wsize=1:scale=1' | grep -v 'strategy=')
-assert_contains "$wsp" "--filter-l7=unknown" "the wssize profile only holds until ClientHello (then the smart google profile takes over)"
+assert_contains "$(grep -A8 '^NFQWS_BASE_ARGS=' "$REPO_DIR/strategies/smart.conf")" "zapret-nzvideo.lua" "the NetZapret video step is loaded"
+assert_eq "" "$(printf '%s\n' "$prof" | grep 'wssize:wsize=1:scale=1')" "no fixed wssize on every video connection any more"
+synm=$(printf '%s\n' "$prof" | grep 'nz_first2:syn' | grep -- '--ipset-ip=')
+assert_contains "$synm" "--ipset-ip=74.125.0.0/16,173.194.0.0/16" "SYN to the main video nets goes to the syn step"
+assert_contains "$synm" "nz_first2:syn:far=35:main" "marked as the main nets (the heavy mode lowers the scale there)"
+assert_contains "$synm" "--filter-l7=unknown" "only until ClientHello"
+wsp=$(printf '%s\n' "$prof" | grep 'nz_first2:syn' | grep -- '--hostlist-domains=')
+assert_contains "$wsp" "--filter-l7=unknown" "the name-cache SYN profile only holds until ClientHello (then the smart google profile takes over)"
 assert_contains "$wsp" "--hostlist-domains=googlevideo.com" "and is only for the video caches"
+gp=$(printf '%s\n' "$prof" | grep 'slot=google:')
+assert_contains "$gp" '--lua-desync=nz_first2:reset:far=35:hosts=googlevideo.com,youtube.com --lua-desync=$SMART:slot=google:' "the name step stands right before smart mode, for video and youtube.com only"
 dq=$(printf '%s\n' "$prof" | grep -- '--lua-desync=drop')
 assert_contains "$dq" "--filter-l7=quic" "QUIC to the video caches is dropped"
 assert_contains "$dq" "--hostlist-domains=googlevideo.com" "only to googlevideo.com"
-wi=$(printf '%s\n' "$prof" | grep -n 'wssize:wsize=1:scale=1' | grep -v 'strategy=' | cut -d: -f1)
+wi=$(printf '%s\n' "$prof" | grep -n 'nz_first2:syn' | head -n 1 | cut -d: -f1)
 di=$(printf '%s\n' "$prof" | grep -n -- '--lua-desync=drop' | cut -d: -f1)
 gi=$(printf '%s\n' "$prof" | grep -n 'slot=google:' | cut -d: -f1)
 qi=$(printf '%s\n' "$prof" | grep -n 'filter-udp=443 --filter-l7=quic --hostlist=[^ ]*google.list' | cut -d: -f1)
-[ "${wi:-99}" -lt "${gi:-0}" ] && [ "${di:-99}" -lt "${qi:-0}" ] && _ok "both come before the google.list profiles" || _fail "order: wssize $wi google $gi drop $di quic $qi"
+[ "${wi:-99}" -lt "${gi:-0}" ] && [ "${di:-99}" -lt "${qi:-0}" ] && _ok "both come before the google.list profiles" || _fail "order: syn $wi google $gi drop $di quic $qi"
+# 15.11: рецепты googlevideo из пресетов NetZapret и Zapret GUI — Google 51–56,
+# общий Universal V13 — TLS 57–58; сразу за лидером очереди
+assert_contains "$(grep 'strategy=51$' "$REPO_DIR/strategies/smart.conf")" "multidisorder:pos=1,host+2,sld+2,sld+5,sniext+1,sniext+2,endhost-2:seqovl=1" "Google 51 is the Universal V13 googlevideo recipe"
+assert_contains "$(grep 'strategy=53$' "$REPO_DIR/strategies/smart.conf")" "seqovl_pattern=tls7" "Google 53 is the Zapret GUI YouTube recipe"
+assert_contains "$(grep -A20 '^NFQWS_BASE_ARGS=' "$REPO_DIR/strategies/smart.conf")" "tls_clienthello_7.bin" "with its tls7 blob"
+assert_contains "$(grep '^#@bench-google' "$REPO_DIR/strategies/smart.conf")" ",49-56" "the benchmark tries the new Google variants"
+assert_contains "$(grep '^#@bench-tls' "$REPO_DIR/strategies/smart.conf")" ",55-58" "and the new TLS ones"
 # с кэшем имён профиль с хостлистом и без --filter-l7 сработал бы уже на SYN
 assert_eq "" "$(printf '%s\n' "$prof" | grep -E -- '--hostlist(-domains)?=' | grep -v -- '--filter-l7=')" "every hostlist profile has an l7 filter: the name cache changes no other profile"
 # видео YouTube на МТС — с кэшей Google в сети оператора: там hostfakesplit
@@ -343,8 +358,8 @@ assert_contains "$(grep -o 'slot=tls:pass=14:base=[0-9,-]*:first=[0-9]*' "$REPO_
 # пуст, а приоритет TLS — по замеру на МТС (8 63%, 55 62%, 15 61%, 23 и 39 57%)
 assert_eq "" "$(awk '/^SMART_TLS="/{f=1} f{print} f && /"$/ && !/^SMART_TLS="/{f=0}' "$REPO_DIR/strategies/smart.conf" | grep -v '^ *#' | grep 'strategy=35$')" "eduncey #4 (TLS 35) is gone"
 assert_not_contains "$(grep '^#@bench-tls' "$REPO_DIR/strategies/smart.conf")" ",35," "and out of the benchmark"
-assert_eq "" "$(grep -o 'slot=tls[a-z_0-9]*:pass=14:base=[^ ]*' "$REPO_DIR/strategies/smart.conf" | grep -v ':pri=8,55,15,23,39$')" "every TLS slot tries the best of the MTS benchmark first"
-assert_contains "$(grep 'slot=google:' "$REPO_DIR/strategies/smart.conf")" ":pri=50,6,43,44,45,15" "Google: what opened everything on MTS (hardcorp74 Google 0 of 5 there)"
+assert_eq "" "$(grep -o 'slot=tls[a-z_0-9]*:pass=14:base=[^ ]*' "$REPO_DIR/strategies/smart.conf" | grep -v ':pri=8,55,57,15,23,39,58$')" "every TLS slot tries the best of the MTS benchmark first, the new V13 right after the leaders"
+assert_contains "$(grep 'slot=google:' "$REPO_DIR/strategies/smart.conf")" ":pri=50,51,53,52,54,56,55,6,43,44,45,15" "Google: the leader, then the new NetZapret and Zapret GUI recipes, then what opened everything on MTS"
 
 section "the active strategy says whether smart mode is on"
 ctl get-strategy
@@ -365,6 +380,15 @@ elif command -v luajit >/dev/null 2>&1; then
   out=$(cd "$REPO_DIR/lua" && luajit -e "dofile('$TESTS_DIR/lua/luajit-prelude.lua')" -e "SMART_TEST_HOME='$H'" \
     -e "dofile('zapret-lib.lua') dofile('zapret-antidpi.lua') dofile('zapret-auto.lua') dofile('zapret-smart.lua') dofile('$TESTS_DIR/lua/test_smart.lua')" 2>&1)
   assert_contains "$out" "PASS" "tests/lua/test_smart.lua passes"
+  printf '%s\n' "$out" | grep -E '^   FAIL|^luajit:' || true
+fi
+
+# шаг видео NetZapret (lua/zapret-nzvideo.lua) — его заглушки движка в самом тесте
+if command -v luajit >/dev/null 2>&1; then
+  section "the NetZapret video step (LuaJIT)"
+  out=$(cd "$REPO_DIR/lua" && luajit -e "dofile('$TESTS_DIR/lua/luajit-prelude.lua')" -e "dofile('zapret-lib.lua')" \
+    -e "dofile('$TESTS_DIR/lua/test_nzvideo.lua')" 2>&1)
+  assert_contains "$out" "PASS" "tests/lua/test_nzvideo.lua passes"
   printf '%s\n' "$out" | grep -E '^   FAIL|^luajit:' || true
 fi
 

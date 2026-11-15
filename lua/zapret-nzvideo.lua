@@ -1,0 +1,385 @@
+-- zapret-nzvideo.lua — шаг nz_first2 из NetZapret (RixyPow/netzapret, MIT,
+-- (c) 2026 RixyPow), config/lua/video.lua от 14.11.2026 (65ebe2b): узлы видео
+-- YouTube, у которых фильтр срезает первый пакет ответа. В модуле — без
+-- изменений логики; добавлен только аргумент hosts (см. ниже).
+--
+-- В модуле (smart.conf): шаг nz_first2:syn — в профилях SYN к узлам видео
+-- (по сетям 74.125/16, 173.194/16 и по имени из кэша адресов), nz_first2 —
+-- в профиле google.list перед умным режимом, с hosts=googlevideo.com,youtube.com:
+-- профиль у нас общий для всех сайтов Google, а следить и сбрасывать нужно
+-- только узлы видео и youtube.com, как в секциях NetZapret.
+-- Тяжёлый режим (YT_RAMP=1, настройки разработчика): множитель окна в SYN
+-- занижается до 1 (scale=1), а каждое исходящее окно соединения пересчитывается
+-- шагом nz_first2:ramp — модуль дописывает его в конец каждого TCP-профиля и
+-- ставит в очередь все пакеты к сетям узлов видео.
+--
+-- arg (добавлен в модуле): hosts — список суффиксов имён через запятую; шаг
+-- по имени не трогает соединения с другими именами
+--
+-- Первый пакет ответа сервера — не больше двух байт, дальше окно настоящее.
+--
+-- Фильтр по адресу на зарубежных узлах видео Google (ТСПУ, с октября 2026) режет соединение
+-- по первому пакету ответа сервера: начинается он с 16 03 03 (запись TLS) — поток гибнет,
+-- какое бы имя ни стояло в приветствии. Смотрит он только этот первый пакет. Замер 10.11 на
+-- трёх сетях: окно приёма 2 Б — ответ проходит (3 из 3), 3 Б и больше — нет (0 из 9); после
+-- первых двух байт окно можно открыть, и весь ответ сервера (4,6 КБ) приходит за 0,13 с.
+--
+-- Окно в два байта множителем не выразить: множитель окна задаётся в SYN один раз на всё
+-- соединение, у Windows он 8, и наименьшее ненулевое окно — 256 Б. Занизить множитель в SYN
+-- (как wssize из zapret-antidpi) — значит до конца соединения показывать серверу окно
+-- в 2^(8-заниженный) раз меньше настоящего: скорость падает в десятки раз. Поэтому множитель
+-- из SYN убирается вовсе: сервер тогда свой тоже не шлёт, Windows выключает масштаб у себя,
+-- и обе стороны считают окно одинаково — до 65535 Б, без подгонки каждого подтверждения
+-- (её делает wssize_ramp из custom_funcs, но ей нужны все пустые подтверждения, а их
+-- WinDivert отдаёт только с --wf-tcp-empty=1).
+--
+-- Цена — те самые 65535 Б: замер 10.11 дома, видео через зарубежный узел — 6,7–7,7 Мбит/с
+-- вместо 150–300. А режет фильтр не всех: дома — пятую часть соединений (132 рукопожатия
+-- из 150 проходят и так), на других сетях часть узлов наглухо, а остальные не трогает.
+-- Поэтому малое окно получает не всякое соединение, а только группа узлов, у которой ответ
+-- только что срезали: приветствие ушло, а ответа за две секунды не было. Срез — малое окно
+-- на минуту: узел, потерявший одно соединение, через минуту снова работает на полной
+-- скорости. На час — группе, закрытой наглухо: второй срез подряд, если обычным соединением
+-- она не отвечала ни разу, третий подряд — если отвечала. Одного «второго подряд» мало:
+-- дома первое обычное соединение после минуты срезается так же часто, как любое другое
+-- (6 из 47 вечером 10.11), и группа за группой уходили в час за пять минут пробы.
+--
+-- Счёт ведётся не по адресу, а по группе узлов — 16 соседних адресов: узлы одной группы
+-- (rr1…rr5 стоят подряд) фильтр закрывает вместе, и плееру, перешедшему на соседний, не
+-- приходится виснуть на каждом. Шире нельзя: на сети с закрытыми узлами 173.194.164.241
+-- был закрыт, а 173.194.164.209 из той же /24 отвечал (замер 10.11). И не 32, как было
+-- до 11.11: группа серверов Google видна по обратной записи DNS (…-in-fN.1e100.net),
+-- и у узлов вида sn-aj5go5-5p она — 16 адресов; 32 склеивали две площадки в разных
+-- городах (74.125.111.96–111 и .112–127: задержка 88 и 45 мс), и ответы живой площадки
+-- обнуляли бы счёт срезов закрытой. У крупных площадок группа — 32 адреса, их половины
+-- учатся врозь; пять адресов одного узла в одну шестнадцатку попадают всегда.
+--
+-- Цена малого окна зависит от задержки до узла (arg far, с 11.11): скорость соединения
+-- без множителя — 65535 Б на задержку. Замер 11.11 дома на фронтах Google в тех же сетях:
+-- 36 мс — 16 Мбит/с, 50 мс — 9,6–10,6 (обычное соединение — 100–220). До узлов видео
+-- дома 25–31 мс у одних групп и 50–61 у других. Близкой группе малое окно почти не
+-- вредит, и ей оно даётся с первого среза, как раньше. Далёкой (задержка больше far мс)
+-- первый срез прощается: повтор после сброса идёт обычным соединением и в 83–89 % случаев
+-- проходит на полной скорости; малое окно — со второго среза подряд. Замер 11.11, восемь
+-- узлов под фильтром по 30 рукопожатий через 1,5 с: без прощения обычных 63, с малым
+-- окном 169, отказов 8; с прощением всем — 157, 50 и 33 (отказ — сброс через 1 с и повтор).
+-- Задержка группы — наименьшее время от SYN до приветствия по её соединениям: приветствие
+-- клиент шлёт сразу за ответом на SYN. Группе, у которой задержка ещё не мерилась (первое
+-- же соединение не дошло до приветствия), срез не прощается.
+-- С 14.11 прощается только группе, которая хоть раз ответила обычным соединением: срез у неё
+-- случайный, и повтор обычным соединением чаще всего проходит. Группе, не отвечавшей ни разу,
+-- прощение стоит лишнего сброса и повтора, который срежут так же: отчёт с Метросети 14.11 —
+-- все восемь узлов закрыты наглухо, пинг 69–97 мс, и у каждого ряд «нет, нет, прошло».
+--
+-- Срезанный ответ узнаётся на следующем SYN к той же группе (так помечается группа), а на
+-- самом зависшем соединении — по таймеру через resetafter с (arg reset): оно без ответа
+-- пакетов больше не шлёт, ждать его клиент будет до своего таймаута, поэтому с reset ему
+-- сразу шлётся RST и плеер повторяет; без reset первое такое соединение виснет, зато
+-- следующее к группе проходит. Проверено 11.11 замером A/B: без reset срезанное молчит до
+-- таймаута (5,3 с у пробы, в браузере дольше), с reset — сброс за ~2 с при пороге 1,6 с
+-- и за 1,36–1,50 с при пороге 1 с, дальше малое окно. Порог по умолчанию — 1 с: на 101
+-- здоровом соединении ложных сбросов при нём не было (все ответили быстрее секунды).
+-- Приветствия без ответа помнятся по
+-- соединениям, а не одно на группу: плеер открывает к узлу несколько соединений сразу
+-- (видео и проверка связи), и ответ одного не должен стирать молчание другого — замер
+-- 10.11: при двух адресах группы одновременно из пяти срезов два терялись. И ответ
+-- засчитывается, только если пришёл в срок: запоздалый (сервер повторяет ответ и после
+-- того, как клиент сдался) иначе обнулял бы счёт срезов и делал группу «отвечавшей».
+--
+-- Два шага, потому что у SYN имени ещё нет и его берёт секция по адресам, а приветствие —
+-- секция по имени:
+--   nz_first2:syn  — в секции по адресам: решает, нужно ли адресу малое окно, и если да —
+--                    убирает множитель окна из SYN;
+--   nz_first2      — в секциях по имени (googlevideo.com и youtube.com: те же узлы плеер
+--                    зовёт и как rrN---sn-….c.youtube.com), перед рецептом приветствия: соединению с малым
+--                    окном ставит исходящим пакетам окно в два байта, пока сервер не прислал
+--                    ни байта; за обычным следит — пришёл ли ответ. Соединения, чей SYN
+--                    первый шаг не видел (узел провайдера), не трогает.
+-- Подтверждение первых двух байт уходит от Windows уже с настоящим окном — пустые пакеты
+-- сюда не попадают, — и сервер шлёт остальное как обычно.
+--
+-- standard args : direction
+-- arg : syn - шаг для SYN (см. выше)
+-- arg : always - (с syn) малое окно всем соединениям, без оглядки на то, резали ли ответ
+-- arg : after - сколько секунд приветствие может ждать ответа (по умолчанию 2); в обоих шагах
+--               одно и то же: шаг по имени позже этого срока ответ уже не засчитывает
+-- arg : hold - (с syn) на сколько секунд группа получает малое окно после среза (60)
+-- arg : hold2 - (с syn) на сколько — группа, закрытая наглухо (3600)
+-- arg : far - задержка в мс, выше которой группе прощается первый срез (в обоих шагах одна
+--             и та же); без него не прощается никому
+-- arg : scale - (с syn) множитель окна в SYN не убирать, а занизить до этого (1): окно до
+--               131 КБ вместо 64 КБ, вдвое быстрее; тогда каждое исходящее окно соединения
+--               пересчитывается — пустые подтверждения нужны в перехвате (--wf-tcp-empty=1
+--               с условием на сети узлов), а шаг ramp — в каждой секции TCP (его ставит код)
+-- arg : ramp - только пересчёт окна соединения с заниженным множителем, ничего больше
+-- arg : wsize - окно до первых байт ответа сервера (по умолчанию 2)
+-- arg : reset - (в шаге по имени) первое соединение, чей ответ срезан, не ждёт таймаута
+--               клиента: через resetafter с без ответа ему шлётся RST от имени сервера
+--               (dis_reverse + ifin), плеер сразу открывает новое — и оно идёт с малым
+--               окном, потому что группа к этому мигу помечена. Без reset первое висит.
+-- arg : resetafter - (с reset) через сколько секунд слать RST (по умолчанию 1; обычный
+--                     ответ узла — меньше 0.5 с, самый долгий в замере — 0,97 с)
+
+-- Группа узлов → до какого времени ей малое окно.
+local nz_first2_until = {}
+-- Группа узлов → приветствия обычных соединений, на которые ещё нет ответа:
+-- номер соединения → когда ушло.
+local nz_first2_asked = {}
+-- Номер, выданный последнему обычному соединению с приветствием.
+local nz_first2_serial = 0
+-- Группа узлов → сколько раз подряд ответ не пришёл.
+local nz_first2_cuts = {}
+-- Группа узлов → обычному соединению она хоть раз ответила: значит, не закрыта наглухо.
+local nz_first2_alive = {}
+
+-- Группа узлов → наименьшая задержка в мс (от SYN до приветствия).
+local nz_first2_rtt = {}
+
+-- Срез засчитан: группе малое окно, если он не прощён. Прощается первый из срезов подряд —
+-- группе с задержкой выше far мс, которая уже отвечала обычным соединением (см. шапку);
+-- неизвестная задержка и группа, не отвечавшая ни разу, не прощаются.
+local function nz_first2_cut(ip, far, hold, hold2, now)
+	local cuts = (nz_first2_cuts[ip] or 0) + 1
+	nz_first2_cuts[ip] = cuts
+	local closed = cuts >= (nz_first2_alive[ip] and 3 or 2)
+	local rtt = nz_first2_rtt[ip]
+	local spared = far and rtt and rtt > far and cuts == 1 and nz_first2_alive[ip]
+	if not spared then nz_first2_until[ip] = now + (closed and hold2 or hold) end
+	return cuts, spared
+end
+
+-- Группа узла: у IPv4 — 16 соседних адресов (последний байт без четырёх младших бит),
+-- у IPv6 — сам адрес.
+local function nz_first2_group(ip)
+	if #ip ~= 4 then return ip end
+	return string.sub(ip, 1, 3)..string.char(bitand(string.byte(ip, 4), 240))
+end
+
+-- Быстрый отказ (arg reset, с 11.11): сброс зависшего первого соединения к клиенту, чтобы
+-- плеер повторил сразу, не дожидаясь своего таймаута. По таймеру через resetafter с после
+-- приветствия без ответа: группа помечается (повтор пойдёт с малым окном) и клиенту от имени
+-- шлётся RST (dis_reverse + ifin, как stock standard_failure_detector). Только с arg reset.
+function nz_first2_reset_fire(name, data)
+	local st = data.st
+	if st.nz_first2_data_seen then return end
+	if st.nz_first2 ~= "watch" then return end
+	local ip = data.ip
+	local wait = nz_first2_asked[ip]
+	if wait and data.id then
+		wait[data.id] = nil
+		if next(wait) == nil then nz_first2_asked[ip] = nil end
+	end
+	local cuts, spared = nz_first2_cut(ip, data.far, data.hold, data.hold2, os.time())
+	rawsend_dissect(data.dis, {ifout = data.ifin})
+	if b_debug then DLOG("nz_first2: сброс зависшего соединения к клиенту; срез "..cuts..(spared and ", прощён: группа далеко" or ", группа помечена")) end
+end
+
+-- Сколько байт ответа сервера клиент подтвердил; 0 — ещё ни одного. Номер подтверждения
+-- значим только с флагом ACK: у сброса без него в поле ноль.
+local function nz_first2_acked(track, tcp)
+	local server = track.pos and track.pos.server and track.pos.server.tcp
+	if not (server and server.seq0 and bitand(tcp.th_flags, TH_ACK) ~= 0) then return 0 end
+	local acked = (tcp.th_ack - server.seq0 - 1) % 4294967296
+	if acked >= 2147483648 then return 0 end
+	return acked
+end
+
+-- Окно соединения с заниженным множителем (arg scale, с 14.11): до первых байт ответа —
+-- два байта, дальше — каждое окно Windows, умноженное обратно на 2^(настоящий-заниженный),
+-- не больше 65535. Windows о занижении не знает и шлёт окно в своём масштабе (×256), сервер
+-- читает его в нашем (×2): без пересчёта он видит окно в 128 раз меньше, и соединение
+-- почти встаёт — замер 11.11: 45 КБ за 30 с у имени, чья секция окно не пересчитывала.
+local function nz_first2_scaled(tcp, st, acked)
+	if acked == 0 then
+		tcp.th_win = st.nz_first2_first
+	else
+		local win = math.floor(tcp.th_win * 2^st.nz_first2_shift)
+		tcp.th_win = win > 65535 and 65535 or win
+	end
+	return VERDICT_MODIFY
+end
+
+function nz_first2(ctx, desync)
+	local dis = desync.dis
+	if not dis.tcp then
+		if not dis.icmp then instance_cutoff_shim(ctx, desync) end
+		return
+	end
+	direction_cutoff_opposite(ctx, desync)
+	if not direction_check(desync) then return end
+	local track = desync.track
+	local ip = dis_ipdst(dis)
+	if ip then ip = nz_first2_group(ip) end
+	if not track or not ip then
+		-- Без учёта соединения не узнать ни пометки, ни того, начал ли сервер отвечать.
+		instance_cutoff_shim(ctx, desync)
+		return
+	end
+	local tcp = dis.tcp
+	local st = track.lua_state
+	-- модуль: только перечисленные имена (шаг по имени, не syn и не ramp)
+	if desync.arg.hosts and not desync.arg.syn and not desync.arg.ramp then
+		local h = track.hostname
+		local hit = false
+		if h and not track.hostname_is_ip then
+			for sfx in string.gmatch(desync.arg.hosts, "[^,]+") do
+				if h == sfx or (#h > #sfx and string.sub(h, -#sfx - 1) == "." .. sfx) then hit = true; break end
+			end
+		end
+		if not hit then
+			instance_cutoff_shim(ctx, desync)
+			return
+		end
+	end
+	-- Шаг ramp (arg ramp) код окна ставит последним в каждую секцию TCP, когда пресет занижает
+	-- множитель: после приветствия соединение уходит в секцию по своему имени — googlevideo,
+	-- youtube, «Google (сервисы)», щит «напрямую», свой рецепт, — и пересчитывать окно
+	-- должна она, иначе соединение с заниженным множителем почти встаёт. Остальным
+	-- соединениям шаг не делает ничего и выключается на первом же пакете.
+	if desync.arg.ramp then
+		if st.nz_first2 ~= "small" or not st.nz_first2_shift then
+			instance_cutoff_shim(ctx, desync)
+			return
+		end
+		return nz_first2_scaled(tcp, st, nz_first2_acked(track, tcp))
+	end
+	if desync.arg.syn then
+		if bitand(tcp.th_flags, TH_SYN) == 0 then
+			-- Имя без своей секции (или ещё без имени) остаётся в секции по адресам:
+			-- окно пересчитывает она.
+			if st.nz_first2 == "small" and st.nz_first2_shift then
+				return nz_first2_scaled(tcp, st, nz_first2_acked(track, tcp))
+			end
+			instance_cutoff_shim(ctx, desync)
+			return
+		end
+		local small = desync.arg.always ~= nil
+		-- Повторный SYN сдвигает отсчёт: задержка мерится от последнего.
+		st.nz_first2_syn = clock_getfloattime()
+		if not small then
+			local now = os.time()
+			local wait = nz_first2_asked[ip]
+			if wait then
+				-- Приветствия к этой группе, оставшиеся без ответа дольше срока: ответ срезан.
+				-- Сколько бы их ни набралось к этому SYN, срез считается один.
+				local after = tonumber(desync.arg.after) or 2
+				local cut = false
+				for id, at in pairs(wait) do
+					if now - at >= after then
+						wait[id] = nil
+						cut = true
+					end
+				end
+				if next(wait) == nil then nz_first2_asked[ip] = nil end
+				if cut then
+					local cuts, spared = nz_first2_cut(ip, tonumber(desync.arg.far),
+						tonumber(desync.arg.hold) or 60, tonumber(desync.arg.hold2) or 3600, now)
+					if b_debug then DLOG("nz_first2: группа "..(#ip == 4 and ntop(ip) or "ipv6").." ответ срезан "..cuts.." раз"..(spared and " — прощён: группа далеко" or " — малое окно")) end
+				end
+			end
+			local till = nz_first2_until[ip]
+			if till then
+				if now < till then
+					small = true
+				else
+					nz_first2_until[ip] = nil
+				end
+			end
+		end
+		if not small then
+			st.nz_first2 = "watch"
+			return
+		end
+		st.nz_first2 = "small"
+		local i = find_tcp_option(tcp.options, TCP_KIND_SCALE)
+		if not i then return end
+		-- arg scale: множитель занижается, а не убирается — окно до 65535×2^scale вместо
+		-- 65535, но каждый пакет соединения придётся пересчитывать (nz_first2_scaled).
+		-- Замер 11.11 на фронте Google (50 мс): 20 МБ на 18–20 Мбит/с против 9,6–10,6.
+		-- Два байта первого пакета при множителе 1 — окно 1: больше 1 его не поднять.
+		local keep = tonumber(desync.arg.scale)
+		if keep then
+			local real = u8(tcp.options[i].data)
+			if real <= keep then return end
+			tcp.options[i].data = bu8(keep)
+			st.nz_first2_shift = real - keep
+			st.nz_first2_first = math.max(1, math.floor((tonumber(desync.arg.wsize) or 2) / 2^keep))
+			if b_debug then DLOG("nz_first2: SYN, множитель "..real.." → "..keep) end
+			return VERDICT_MODIFY
+		end
+		table.remove(tcp.options, i)
+		if b_debug then DLOG("nz_first2: SYN без множителя окна") end
+		return VERDICT_MODIFY
+	end
+	local mode = st.nz_first2
+	if not mode then
+		instance_cutoff_shim(ctx, desync)
+		return
+	end
+	local acked = nz_first2_acked(track, tcp)
+	if acked > 0 then
+		if mode == "watch" then
+			st.nz_first2_data_seen = true
+			-- Обычному соединению сервер ответил в срок: группа не закрыта, счёт начинается
+			-- заново. Забывается только своё приветствие — чужое молчание остаётся на счету.
+			-- Запоздалый ответ не меняет ничего: приветствие остаётся на счету до следующего
+			-- SYN или уже сочтено срезом. Замер 10.11: группа, у которой первое же соединение
+			-- срезал фильтр, сочлась отвечавшей, а счёт срезов обнулился — засчитаться там мог
+			-- только запоздалый ответ того соединения (сервер повторяет его и после того, как
+			-- клиент сдался). Самого запоздалого пакета я не видел, это вывод из хода счёта.
+			local wait = nz_first2_asked[ip]
+			local id = st.nz_first2_id
+			local at = wait and id and wait[id]
+			if at and os.time() - at <= (tonumber(desync.arg.after) or 2) then
+				wait[id] = nil
+				if next(wait) == nil then nz_first2_asked[ip] = nil end
+				nz_first2_cuts[ip] = nil
+				nz_first2_alive[ip] = true
+			end
+		end
+		instance_cutoff_shim(ctx, desync)
+		return
+	end
+	if #dis.payload == 0 then return end
+	if st.nz_first2_syn then
+		local rtt = math.floor((clock_getfloattime() - st.nz_first2_syn) * 1000)
+		st.nz_first2_syn = nil
+		if rtt >= 0 and (not nz_first2_rtt[ip] or rtt < nz_first2_rtt[ip]) then
+			nz_first2_rtt[ip] = rtt
+			if b_debug then DLOG("nz_first2: задержка группы "..rtt.." мс") end
+		end
+	end
+	if mode == "watch" then
+		-- Приветствие обычного соединения: запомнить, когда ушло (повторы времени не сдвигают).
+		if not st.nz_first2_id then
+			nz_first2_serial = nz_first2_serial + 1
+			st.nz_first2_id = nz_first2_serial
+			local wait = nz_first2_asked[ip]
+			if not wait then
+				wait = {}
+				nz_first2_asked[ip] = wait
+			end
+			wait[st.nz_first2_id] = os.time()
+		end
+		if desync.arg.reset and not st.nz_first2_armed then
+			st.nz_first2_armed = true
+			local rst = deepcopy(dis)
+			rst.payload = nil
+			dis_reverse(rst)
+			rst.tcp.th_flags = TH_RST
+			rst.tcp.th_win = (track.pos and track.pos.reverse and track.pos.reverse.tcp and track.pos.reverse.tcp.winsize) or 64
+			rst.tcp.options = nil
+			local ms = math.floor((tonumber(desync.arg.resetafter) or 1) * 1000)
+			timer_set("nzr_"..desync_timer_name(desync), "nz_first2_reset_fire", ms, true, {
+				dis = rst, ifin = desync.ifin, st = st, ip = ip, id = st.nz_first2_id,
+				hold = tonumber(desync.arg.hold) or 60, hold2 = tonumber(desync.arg.hold2) or 3600,
+				far = tonumber(desync.arg.far),
+			})
+		end
+		return
+	end
+	-- С заниженным множителем окно в поле — в его масштабе (два байта при множителе 1 — это 1).
+	tcp.th_win = st.nz_first2_shift and st.nz_first2_first or (tonumber(desync.arg.wsize) or 2)
+	if b_debug then DLOG("nz_first2: окно "..tcp.th_win.." до первых байт ответа") end
+	return VERDICT_MODIFY
+end

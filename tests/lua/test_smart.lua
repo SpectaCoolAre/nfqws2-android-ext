@@ -779,6 +779,16 @@ check(errs("edgeslow.example") == 0, "on a network that is slow for everyone a s
 SMART.rate, SMART.raten = nil, 0
 later(); rated("early.example", 0.5)
 check(errs("early.example") == 0, "no verdict before the usual speed of the network is known")
+-- 15.11: медленно — сайт работает, но плохо; удачи соединений, что просто
+-- открылись, смену варианта не держат: два медленных ответа — сразу смена
+SMART.rate, SMART.raten = nil, 0
+for i = 1, 6 do later(); rated("fast2" .. i .. ".example", 0.002) end
+for i = 1, 6 do later(); okconn("vid.example") end
+local vbefore = rec("vid.example").cur
+later(); rated("vid.example", 0.5)
+check(rec("vid.example").cur == vbefore, "one slow answer among good ones does not switch yet")
+later(); rated("vid.example", 0.5)
+check(rec("vid.example").cur ~= vbefore, "the second slow answer switches the variant at once, whatever the successes (" .. tostring(vbefore) .. " -> " .. tostring(rec("vid.example").cur) .. ")")
 
 section("a server that takes the ClientHello and stays silent")
 -- ТСПУ глушит ответ: ClientHello подтверждён (переотправок нет), ответа нет;

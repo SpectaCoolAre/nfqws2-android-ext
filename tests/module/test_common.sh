@@ -298,6 +298,33 @@ args=$(_startup_args)
 assert_contains "$args" "--bind-fix4" "bind-fix4 still applies"
 assert_not_contains "$args" "--bind-fix6" "bind-fix6 is skipped with IPv6 disabled"
 
+# Тяжёлый режим YouTube (YT_RAMP): у главных сетей узлов видео множитель окна
+# в SYN занижается до 1, шаг пересчёта окна — в конце каждого TCP-профиля
+# (кроме профилей шага syn) и отдельным профилем в самом конце
+section "_startup_args: the heavy YouTube mode"
+cp -f "$REPO_DIR/strategies/smart.conf" "$CONFFILE"
+reload_conf
+args=$(_startup_args)
+assert_not_contains "$args" "nz_first2:ramp" "off by default: no ramp step"
+assert_contains "$args" "nz_first2:syn:far=35:main --" "and the syn step keeps no scale argument"
+printf 'YT_RAMP=1\n' >> "$CONFFILE"
+reload_conf
+args=$(_startup_args)
+assert_contains "$args" "nz_first2:syn:far=35:main:scale=1" "on: the main video nets get the scale lowered to 1"
+assert_not_contains "$args" "nz_first2:syn:far=35:scale=1" "the name-cache SYN profile does not"
+profs=$(printf '%s' "$args" | sed 's/ --new /\n/g')
+assert_eq "" "$(printf '%s\n' "$profs" | grep -- '--filter-tcp=' | grep -- '--lua-desync=' | grep -v 'nz_first2:syn' | grep -v 'nz_first2:ramp$')" "every other TCP profile ends with the ramp step"
+assert_eq "" "$(printf '%s\n' "$profs" | grep 'nz_first2:syn' | grep 'nz_first2:ramp')" "the syn step profiles rescale the window themselves"
+assert_eq "--filter-tcp=443 --ipset-ip=74.125.0.0/16,173.194.0.0/16 --out-range=a --payload=all --lua-desync=nz_first2:ramp" \
+  "$(printf '%s\n' "$profs" | tail -n 1)" "and a last profile catches names no profile takes"
+assert_eq "" "$(printf '%s\n' "$profs" | grep -- '--filter-udp=' | grep 'nz_first2:ramp')" "UDP profiles are left alone"
+conf_reset
+printf 'YT_RAMP=1\n' >> "$CONFFILE"
+reload_conf
+assert_not_contains "$(_startup_args)" "nz_first2" "a strategy without the video step is not touched"
+conf_reset
+reload_conf
+
 section "port_list_add"
 assert_eq "443,5349,19294:19344,49152:65535,590:1400,3478:3482" \
   "$(port_list_add 443,590:600,1400,3478:3481,5349,19294:19344,49152:65535 590:1400 3478:3482)" \

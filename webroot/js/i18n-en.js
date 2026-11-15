@@ -814,6 +814,7 @@ EN = {
  "Список обновлён: доменов {0}": "List updated: {0} domains",
  "Сервисы с геоблоком — для умного режима DNS": "Geo-blocked services — for the smart DNS mode",
  "Вылечить уведомления (пульс Google в мобильной сети)": "Fix notifications (Google heartbeat on mobile data)",
+ "YouTube: широкое окно (больше нагрузки)": "YouTube: wide window (more CPU load)",
  "Проходит по тому же соединению": "Goes through on the same connection",
  "Адрес сайта не находится — дело в DNS, а не в обходе": "The site's address is not found — it's DNS, not the bypass",
  "Обход мешает этому сайту: без обхода он открывается. Добавьте домен в exclude.list": "The bypass gets in this site's way: it opens without it. Add the domain to exclude.list",
