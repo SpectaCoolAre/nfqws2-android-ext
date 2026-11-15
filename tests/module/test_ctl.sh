@@ -157,6 +157,16 @@ ctl set YT_RAMP 2
 assert_rc 1 "$ctl_rc" "YT_RAMP rejects 2"
 ctl set YT_RAMP 0
 
+# идёт запуск службы (возобновление после паузы): экран — «Запуск…», а не
+# «Остановлена»; отметка, брошенная убитым запуском, через 2 минуты не в счёт
+: > "$STARTING_FILE"
+ctl json-status
+assert_contains "$ctl_out" '"starting":1' "a start in progress is reported to the WebUI"
+touch -d '@1' "$STARTING_FILE"
+ctl json-status
+assert_contains "$ctl_out" '"starting":0' "a stale mark of a killed start is not"
+rm -f "$STARTING_FILE"
+
 ctl set NFQWS_ARGS "--lua-desync=fake"
 assert_rc 1 "$ctl_rc" "set refuses parameters outside the allow-list"
 

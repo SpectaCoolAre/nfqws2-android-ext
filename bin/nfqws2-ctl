@@ -277,6 +277,9 @@ cmd_json_status() {
   local ver cur_strat paused
   ver=$(sed -n '/^version=/{s/^version=//p;q;}' "$MODDIR/module.prop")
   paused=$(cat "$HOME_PAUSED_FILE" 2>/dev/null)
+  # идёт запуск: отметка свежая (запуск, убитый на полпути, её не снял бы)
+  local starting=0
+  [ -f "$STARTING_FILE" ] && ! older_than "$STARTING_FILE" 120 && starting=1
   cur_strat=$(get_current_strategy)
   local qdrop
   qdrop=$(awk -v q="$NFQUEUE_NUM" '$1 == q { print $6 + $7; f = 1 } END { if (!f) print 0 }' /proc/net/netfilter/nfnetlink_queue 2>/dev/null)
@@ -307,7 +310,7 @@ cmd_json_status() {
 {"running":$run,"pid":"$pid","uptime":$uptime,"uptime_ms":$upms,"strategy":"$(json_str "$cur_strat")","version":"$(json_str "$ver")","mode":"$(json_str "$(current_mode)")",
 "pkt_limit_out":$PKT_LIMIT_OUT,"pkt_limit_in":$PKT_LIMIT_IN,"block_quic":$BLOCK_QUIC,"app_mode":"$(json_str "$APP_MODE")","autostart":$AUTOSTART,
 "ipv6":$IPV6_ENABLED,"log_level":$LOG_LEVEL,"qdrop":$qdrop,"queue":$NFQUEUE_NUM,"app_uids":$appn,
-"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"meta_quic":$META_QUIC_REJECT,"dns_smart":$DNS_SMART,"dns_geo":$DNS_GEO,"extra_rkn":$EXTRA_RKN,"extra_flowseal":$EXTRA_FLOWSEAL,"wl_pause":$WL_PAUSE,"smart_pool":$SMART_POOL,"push_fix":$PUSH_FIX,"yt_ramp":$YT_RAMP,"dns_paused":"$dnspause","dns_home_pause":$([ -f "$DNS_HOME_FILE" ] && echo 1 || echo 0),"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")",
+"home_wifi":$HOME_WIFI,"vpn_pause":$VPN_PAUSE,"enable_hotspot":$ENABLE_HOTSPOT,"dns_available":$dnsav,"dns_enabled":$dnson,"meta_quic":$META_QUIC_REJECT,"dns_smart":$DNS_SMART,"dns_geo":$DNS_GEO,"extra_rkn":$EXTRA_RKN,"extra_flowseal":$EXTRA_FLOWSEAL,"wl_pause":$WL_PAUSE,"smart_pool":$SMART_POOL,"push_fix":$PUSH_FIX,"yt_ramp":$YT_RAMP,"dns_paused":"$dnspause","dns_home_pause":$([ -f "$DNS_HOME_FILE" ] && echo 1 || echo 0),"home_override":"$(json_str "$override")","paused":"$(json_str "$paused")","starting":$starting,
 "counts":{"user":$cnt_user,"auto":$cnt_auto,"exclude":$cnt_excl,"ipset":$cnt_ipset,"ipset_exclude":$cnt_ipset_excl,"apps":$cnt_apps,"rkn":$cnt_rkn,"flowseal":$cnt_flowseal,"geoblock":$cnt_geo}}
 JSON
 }
@@ -663,7 +666,13 @@ export_collect() { # <папка> <ключ>
         echo "== ip6tables -t mangle -L $IPT_GROUP_POST -v -n"; ip6tables -w -t mangle -L $IPT_GROUP_POST -v -n -x 2>&1
         echo "== /proc/net/netfilter/nfnetlink_queue"; cat /proc/net/netfilter/nfnetlink_queue 2>&1
         echo "== ip route"; ip route 2>&1; ip -6 route 2>&1 | head -n 20
-      } > "$1/counters.txt" 2>&1 ;;
+      } > "$1/counters.txt" 2>&1
+      # Сети Android: какая основная, прошла ли проверку интернета, и журнал
+      # самих проверок (NetworkMonitor: DNS, HTTP и HTTPS к Google) — без него
+      # «Wi‑Fi без доступа в интернет» не разобрать
+      { echo "== dumpsys connectivity"; dumpsys connectivity 2>&1 | head -n 400
+        echo "== dumpsys network_stack"; dumpsys network_stack 2>&1 | head -n 3000
+      } > "$1/networks.txt" 2>&1 ;;
     *) f=$(export_log_file "$2"); [ -n "$f" ] && [ -f "$f" ] && cp -f "$f" "$1"/ 2>/dev/null ;;
   esac
 }

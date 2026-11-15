@@ -32,6 +32,7 @@ FIRST_STRATEGY=hardcorp74      # стратегия при первой уста
 # Home Wi-Fi: bypass pauses on these networks (HOME_WIFI=1)
 HOME_FILE="$CONFDIR/home_wifi.list"
 HOME_PAUSED_FILE="$STATE_DIR/home_paused"      # paused by home network; holds SSID
+STARTING_FILE="$STATE_DIR/starting"             # идёт запуск службы (для экрана «Состояние»)
 HOME_AT_FILE="$STATE_DIR/home_at"              # телефон в домашнем Wi‑Fi; SSID (для паузы DNS)
 SMART_DIR="$CONFDIR/smart"                     # умный режим: выученное по сетям (<сеть>.tsv)
 SMART_NET_FILE="$STATE_DIR/smart_net"          # id текущей сети для умного режима или offline

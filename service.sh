@@ -53,10 +53,13 @@ watchers_wanted() {
 # остаток убитого процесса.
 start() {
   if is_running; then
+    rm -f "$STARTING_FILE"
     echo "Служба nfqws2 уже запущена (PID $(cat "$PIDFILE"))"
     return 0
   fi
   local lock="$STATE_DIR/start.lock" own=0 i=0 rc=0
+  # идёт запуск — для экрана «Состояние» (json-status: starting)
+  : > "$STARTING_FILE"
   [ -d "$lock" ] && older_than "$lock" 120 && rmdir "$lock" 2>/dev/null
   while [ "$i" -lt 50 ]; do
     mkdir "$lock" 2>/dev/null && { own=1; break; }
@@ -71,6 +74,7 @@ start() {
     rc=1
   fi
   [ "$own" = 1 ] && rmdir "$lock" 2>/dev/null
+  rm -f "$STARTING_FILE"
   return "$rc"
 }
 
@@ -84,7 +88,10 @@ _start() {
 
   # DNS — первым (если включён): обход геоблока DNS-профилями должен работать
   # раньше, чем пойдёт трафик через обход. Повторный вызов ничего не меняет
-  dns_start "запуск службы"
+  # dnsproxy уже работает (возобновление после паузы, смена сети) — его
+  # перезапуск под новую сеть идёт в фоне: подмена без пропуска DNS, а обход
+  # не ждёт её 5–15 с
+  if dns_pid >/dev/null; then dns_apply_bg; else dns_start "запуск службы"; fi
   log_msg "Запуск nfqws2..."
   kernel_modules
   rotate_logs start
@@ -758,8 +765,9 @@ home_check() {
         @wl)  log_msg "У оператора включены белые списки — обход приостановлен" ;;
         *)    log_msg "Домашний Wi-Fi «$want» — обход приостановлен" ;;
       esac
-      stop >/dev/null 2>&1
+      # отметка паузы — до остановки: иначе экран успевал показать «Остановлена»
       printf '%s' "$want" > "$HOME_PAUSED_FILE"
+      stop >/dev/null 2>&1
       update_description paused "$want"
     elif [ -f "$HOME_PAUSED_FILE" ] && [ "$(cat "$HOME_PAUSED_FILE" 2>/dev/null)" != "$want" ]; then
       # причина паузы сменилась (VPN выключили дома) — пауза остаётся
@@ -770,8 +778,17 @@ home_check() {
     case "$(cat "$HOME_PAUSED_FILE" 2>/dev/null)" in
       @vpn) log_msg "VPN выключен — обход возобновлён" ;;
       @wl)  log_msg "Белые списки выключены — обход возобновлён" ;;
-      *)    log_msg "Домашний Wi-Fi больше не активен — обход возобновлён" ;;
+      *)
+        # Wi‑Fi на месте, но трафик не через неё: Android не считает её
+        # основной (его проверка интернета не прошла) — это видно отдельно
+        if [ "$(current_ssid 2>/dev/null)" = "$(cat "$HOME_PAUSED_FILE" 2>/dev/null)" ]; then
+          log_msg "Домашний Wi-Fi подключён, но Android не считает его основной сетью (нет интернета по его проверке) — обход возобновлён"
+        else
+          log_msg "Домашний Wi-Fi больше не активен — обход возобновлён"
+        fi ;;
     esac
+    # запуск занимает секунды: экран показывает «Запуск», а не «Остановлена»
+    : > "$STARTING_FILE"
     rm -f "$HOME_PAUSED_FILE"
     start >/dev/null 2>&1 || log_msg "Не удалось возобновить обход после паузы"
   fi

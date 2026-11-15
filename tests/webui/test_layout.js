@@ -620,6 +620,10 @@ const VIEWPORTS = [
     await page.evaluate(st => { window.__st = Object.assign({}, st, { paused: '@vpn', running: false }); window.__sig = 'p:@vpn'; }, base);
     await page.waitForFunction(() => $('sub').textContent.startsWith('Включён VPN'), null, { timeout: 4000 }).catch(() => {});
     eq('Включён VPN', await page.evaluate(() => $('sub').textContent), 'a VPN pause reads short too');
+    // 15.11: возобновление — отметка паузы снята, а запуск ещё идёт: «Запуск…», не «Остановлена»
+    await page.evaluate(st => { window.__st = Object.assign({}, st, { running: false, pid: '', uptime: 0, paused: '', starting: 1 }); window.__sig = 'p:\nstart'; }, base);
+    await page.waitForFunction(() => $('st').textContent === 'Запуск…', null, { timeout: 4000 }).catch(() => {});
+    eq('Запуск…', await page.evaluate(() => $('st').textContent), 'a start in progress reads «Starting…», not «Stopped»');
     const t1 = Date.now();
     await page.evaluate(st => { window.__st = st; window.__sig = 'run 4711'; }, base);
     await page.waitForFunction(() => $('st').textContent === 'Работает', null, { timeout: 4000 }).catch(() => {});

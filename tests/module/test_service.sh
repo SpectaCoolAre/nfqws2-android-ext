@@ -635,6 +635,7 @@ rm -rf "$NFQWS_SYSNET/tun0"
 svc home_check >/dev/null 2>&1
 assert_file "$PIDFILE" "the VPN going away resumes the bypass"
 assert_no_file "$HOME_PAUSED_FILE" "and clears the pause"
+assert_no_file "$STARTING_FILE" "the start is over: the screen no longer says «Starting»"
 # 14.11: звонки по Wi‑Fi (VoWiFi) поднимают ipsec-туннель к оператору — это не
 # VPN: правила ip rule с uidrange (приложения в интерфейс) у него нет
 mkdir -p "$NFQWS_SYSNET/ipsec1"; printf '0x1091\n' > "$NFQWS_SYSNET/ipsec1/flags"

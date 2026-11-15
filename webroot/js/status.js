@@ -363,12 +363,14 @@ function renderStatus(){
   const j = S;
   if(!j || j.running == null){ renderHeroActions(); renderParams({}); return; }
   const paused = !j.running && !!j.paused;
+  // запуск идёт (возобновление после паузы, смена сети) — не «Остановлена»
+  const starting = !j.running && !paused && j.starting == 1;
   if(j.strategy) currentStrategy = j.strategy;
-  $('hero-status').className = 'hero' + (j.running ? ' running' : (paused ? ' paused' : ''));
-  heroIcon(j.running ? 'shield' : (paused ? 'pause' : 'stop'));
+  $('hero-status').className = 'hero' + (j.running || starting ? ' running' : (paused ? ' paused' : ''));
+  heroIcon(j.running || starting ? 'shield' : (paused ? 'pause' : 'stop'));
   // Время работы — только у работающей службы
   $('hero-stats').hidden = !j.running;
-  $('st').textContent = j.running ? t('Работает') : (paused ? t('Пауза') : t('Остановлена'));
+  $('st').textContent = j.running ? t('Работает') : (paused ? t('Пауза') : starting ? t('Запуск…') : t('Остановлена'));
   // «Домашний Wi‑Fi» в подписи открывает его настройки долгим нажатием;
   // DNS — своя плитка ниже. Подпись — одна строка; подробности паузы — в title.
   const part = (text, go) => '<span data-go="' + go + '">' + esc(text) + '</span>';
@@ -436,6 +438,7 @@ async function stat(quiet){
 const POLL_PAGES = {control: 1, lists: 1};
 const SIG_CMD = 'd=/data/adb/nfqws2; p=$(cat "$d/state/nfqws2.pid" 2>/dev/null); ' +
   'kill -0 "$p" 2>/dev/null && echo "run $p"; echo "p:$(cat "$d/state/home_paused" 2>/dev/null)"; ' +
+  '[ -f "$d/state/starting" ] && echo start; ' +
   'echo "o:$(cat "$d/state/home_override" 2>/dev/null)"; [ -f "$d/dns/enabled" ] && echo dns; true';
 let statSig = null, sigBusy = false, lastFull = 0;
 function pollIdle(){
