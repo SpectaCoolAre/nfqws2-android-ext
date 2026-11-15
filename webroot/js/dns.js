@@ -130,9 +130,53 @@ const dnsSerialize = p => ['NAME=' + p.name.replace(/[\r\n]/g, ' ')]
 const dnsMax = (k, def) => +dnsSt.status['max_' + k] || def;
 const dnsProfile = id => dnsSt.profiles.find(p => p.id === id);
 
+/* Правки экрана DNS — сразу на экране, сохранение следом. Раньше каждое
+   действие ждало команду модуля и затем полное состояние DNS (dns-state, на
+   телефоне ~1 с и больше), и новый профиль появлялся через 2–3 секунды.
+   Теперь: правка — в данные экрана и перерисовка, команда — потом; не вышло —
+   данные возвращаются как были, и тост говорит почему. Пока команды идут,
+   опрос не подменяет экран прежним состоянием; после — тихое обновление */
+let dnsPending = 0;
+const dnsSortProfiles = () => dnsSt.profiles.sort((a, b) => a.name.localeCompare(b.name, LANG));
+function dnsRerender(){
+  if(DNS_PAGES.includes(currentPage)) renderDns();
+  else if(currentPage === 'dnsprof') renderDnsProfile();
+}
+async function dnsMutate(local, args, fail){
+  const before = JSON.stringify(dnsSt);
+  if(local) local();
+  dnsSortProfiles();
+  dnsRerender();
+  dnsPending++;
+  let r;
+  try { r = await withBusy(args, 40000); }
+  finally { dnsPending--; }
+  if(r.code){
+    dnsSt = JSON.parse(before);
+    dnsRerender();
+    toast(errText(r, fail));
+  }
+  dnsRefreshSoon();
+  return !r.code;
+}
+/* Тихое обновление после правок; пока DNS применяется — чаще, чтобы
+   «Применяется» сменилось на итог без ожидания трёхсекундного опроса */
+let dnsRefreshT = 0;
+function dnsRefreshSoon(ms){
+  clearTimeout(dnsRefreshT);
+  dnsRefreshT = setTimeout(async () => {
+    if(dnsPending) return dnsRefreshSoon(400);
+    if(!DNS_PAGES.includes(currentPage) && currentPage !== 'dnsprof') return;
+    if(await loadDnsState() && !dnsPending && !dnsSel) dnsRerender();
+    if(dnsSt.status.applying === '1') dnsRefreshSoon(1000);
+  }, ms == null ? 300 : ms);
+}
+
 async function loadDnsState(){
   const r = await ctlx(['dns-state'], 20000);
   if(r.code && !r.out){ toast(errText(r, 'Не удалось прочитать настройки DNS')); return false; }
+  // правка с экрана ещё сохраняется — прочитанное уже устарело
+  if(dnsPending) return false;
   dnsSt = parseDnsState(r.out);
   dnsSt.profiles.sort((a, b) => a.name.localeCompare(b.name, LANG));
   dnsLoaded = true;
@@ -186,11 +230,11 @@ function dnsPollArm(){
   clearTimeout(dnsPollT);
   dnsPollT = setTimeout(async () => {
     if(!DNS_PAGES.includes(currentPage)) return;
-    if(!document.hidden && !dnsSel && !openSheetId && !openMenuEntry && !$('dialog-wrap').classList.contains('open')){
+    if(!document.hidden && !dnsSel && !dnsPending && !openSheetId && !openMenuEntry && !$('dialog-wrap').classList.contains('open')){
       if(await loadDnsState() && DNS_PAGES.includes(currentPage) && !dnsSel) renderDns();
     }
     dnsPollArm();
-  }, 3000);
+  }, dnsSt.status.applying === '1' ? 1000 : 3000);
 }
 
 /* Части экрана DNS, которые не зависят от состояния dnsproxy */
@@ -545,6 +589,8 @@ function dnsStateRow(){
     sub = t('Перехвачено запросов: {0}', fmtCount(+s.hits || 0));
   } else if(!dnsSt.profiles.some(p => p.enabled && p.servers.length && p.domains.length) && (s.default_used || s.default || 'net') === 'net')
     title = t('Не активно: нет включённых профилей с доменами');
+  // DNS как раз перезапускается (правка, смена сети): это не сбой
+  else if(s.applying === '1' || dnsPending || dnsSwitching) title = t('Применяется…');
   else title = t('Не работает — см. журнал DNS');
   // Куда сейчас уходит всё, что не попало в профили: выбранный профиль или
   // DNS сети. Адреса сети — только когда они и правда используются.
@@ -645,11 +691,13 @@ async function dnsSelDelete(){
         : t('Будут удалены со всеми серверами и доменами: {0}.', ps.map(p => '«' + p.name + '»').join(', ')),
     {ok: t('Удалить'), danger: true});
   if(!yes) return;
-  const r = await withBusy(['dns-delete'].concat(ps.map(p => p.id)), 40000);
-  if(r.code){ toast(errText(r, 'Не удалось удалить')); return; }
-  await loadDnsState();
+  const ids = ps.map(p => p.id);
   dnsSelExit();
-  toast(one ? t('Профиль «{0}» удалён', ps[0].name) : t('Удалено профилей: {0}', ps.length));
+  const ok = await dnsMutate(() => {
+    dnsSt.profiles = dnsSt.profiles.filter(p => !ids.includes(p.id));
+    if(ids.includes(dnsSt.status.default)) dnsSt.status.default = 'net';
+  }, ['dns-delete'].concat(ids), 'Не удалось удалить');
+  if(ok) toast(one ? t('Профиль «{0}» удалён', ps[0].name) : t('Удалено профилей: {0}', ps.length));
 }
 /* Долгое нажатие: 500 мс без сдвига пальца; click после него гасится */
 let dnsLongFired = false, dnsLongCancel = () => {};
@@ -700,9 +748,9 @@ async function setDnsEnabled(on){
   try {
     const r = await withBusy(['dns-set-enabled', on ? '1' : '0'], 40000);
     if(r.code){ toast(errText(r, 'Не удалось сохранить')); dnsSt.status.enabled = was; renderDns(); return; }
-    await loadDnsState();
-    renderDns();
   } finally { dnsSwitching = false; $('dns-main').classList.remove('switching'); }
+  // перехват применяется в фоне: экран уже показывает включённое, итог — следом
+  dnsRefreshSoon(0);
 }
 
 function pickDnsDefault(anchor){
@@ -714,11 +762,7 @@ function pickDnsDefault(anchor){
   openMenu(anchor, items);
 }
 async function setDnsDefault(id){
-  const r = await withBusy(['dns-set-default', id], 40000);
-  if(r.code){ toast(errText(r, 'Не удалось сохранить')); return; }
-  dnsSt.status.default = id;
-  await loadDnsState();
-  if(DNS_PAGES.includes(currentPage)) renderDns(); else if(currentPage === 'dnsprof') renderDnsProfile();
+  await dnsMutate(() => { dnsSt.status.default = id; }, ['dns-set-default', id], 'Не удалось сохранить');
 }
 
 async function toggleDnsProfile(id, on, el){
@@ -729,13 +773,10 @@ async function toggleDnsProfile(id, on, el){
     if(el) el.checked = false;
     return;
   }
-  const r = await withBusy(['dns-profile-enable', id, on ? '1' : '0'], 40000);
-  if(r.code){ toast(errText(r, 'Не удалось сохранить')); if(el) el.checked = !on; return; }
-  p.enabled = on;
   if(on && !p.domains.length && dnsSt.status.default !== id)
     toast(t('В профиле нет доменов: он работает, только если выбран DNS по умолчанию'));
-  await loadDnsState();
-  if(DNS_PAGES.includes(currentPage)) renderDns(); else renderDnsProfile();
+  if(!await dnsMutate(() => { const x = dnsProfile(id); if(x) x.enabled = on; }, ['dns-profile-enable', id, on ? '1' : '0'], 'Не удалось сохранить') && el)
+    el.checked = !on;
 }
 
 /* Свободный идентификатор профиля: из названия латиницей, иначе p1, p2… */
@@ -757,7 +798,10 @@ async function createDnsProfile(){
   const name = await mdPrompt(t('Новый профиль'), t('Например: Instagram, ИИ-сервисы, Игры.'), '', t('Название'), {ok: t('Создать')});
   if(!name) return;
   const p = {id: dnsNewId(name), name, desc: '', enabled: false, servers: [], domains: []};
-  if(await saveDnsProfile(p)) openDnsProfile(p.id);
+  // профиль — на экране сразу и открывается, не дожидаясь сохранения
+  const saving = saveDnsProfile(p);
+  openDnsProfile(p.id);
+  await saving;
 }
 
 function openDnsPresets(){
@@ -777,18 +821,16 @@ async function addDnsPreset(id){
   closeSheet();
   const p = Object.assign({}, pre, {id: dnsNewId(pre.id), name: t(pre.name), desc: t(pre.desc),
     servers: pre.servers.slice(), domains: pre.domains.slice(), enabled: pre.domains.length > 0});
-  if(await saveDnsProfile(p)){
-    toast(t('Профиль «{0}» добавлен', p.name));
-    if(DNS_PAGES.includes(currentPage)) renderDns();
-  }
+  if(await saveDnsProfile(p)) toast(t('Профиль «{0}» добавлен', p.name));
 }
 
 /* Сохранение профиля целиком; модуль применяет его сразу, если служба запущена */
 async function saveDnsProfile(p){
-  const r = await withBusy(['dns-save-b64', p.id, b64(dnsSerialize(p))], 40000);
-  if(r.code){ toast(errText(r, 'Не удалось сохранить')); return false; }
-  await loadDnsState();
-  return true;
+  return dnsMutate(() => {
+    const i = dnsSt.profiles.findIndex(x => x.id === p.id);
+    const copy = Object.assign({}, p, {servers: p.servers.slice(), domains: p.domains.slice()});
+    if(i >= 0) dnsSt.profiles[i] = copy; else dnsSt.profiles.push(copy);
+  }, ['dns-save-b64', p.id, b64(dnsSerialize(p))], 'Не удалось сохранить');
 }
 
 
@@ -961,9 +1003,9 @@ async function deleteDnsProfile(){
   const yes = await mdConfirm(t('Удалить профиль?'), t('Профиль «{0}» со всеми серверами и доменами будет удалён.', p.name),
     {ok: t('Удалить'), danger: true});
   if(!yes) return;
-  const r = await withBusy(['dns-delete', p.id], 40000);
-  if(r.code){ toast(errText(r, 'Не удалось удалить')); return; }
-  await loadDnsState();
-  toast(t('Профиль «{0}» удалён', p.name));
   goBack();
+  if(await dnsMutate(() => {
+    dnsSt.profiles = dnsSt.profiles.filter(x => x.id !== p.id);
+    if(dnsSt.status.default === p.id) dnsSt.status.default = 'net';
+  }, ['dns-delete', p.id], 'Не удалось удалить')) toast(t('Профиль «{0}» удалён', p.name));
 }

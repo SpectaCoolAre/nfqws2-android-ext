@@ -33,9 +33,14 @@ function uptTick(){
   $('upt').textContent = fmtUptime(ms / 1000);
   uptTimer = setTimeout(uptTick, 1000 - (ms % 1000) + 10);
 }
+/* После нажатия «Запустить» отсчёт идёт сразу (см. act); служба отвечает
+   временем от своего старта — на секунды меньше. Это время с нажатия, и
+   отсчёт назад не прыгает */
+let uptKeepUntil = 0;
 function startUptTimer(ms){
   ms = Math.max(0, ms);
   if(uptAnchor && Math.abs(uptElapsedMs() - ms) < 2000) return;
+  if(uptAnchor && performance.now() < uptKeepUntil && ms <= uptElapsedMs() && uptElapsedMs() - ms < 30000) return;
   uptAnchor = {ms, t: performance.now()};
   if(uptTimer) clearTimeout(uptTimer);
   uptTick();
@@ -370,7 +375,14 @@ function renderStatus(){
   heroIcon(j.running || starting ? 'shield' : (paused ? 'pause' : 'stop'));
   // Время работы — только у работающей службы
   $('hero-stats').hidden = !j.running;
-  $('st').textContent = j.running ? t('Работает') : (paused ? t('Пауза') : starting ? t('Запуск…') : t('Остановлена'));
+  const stText = j.running ? t('Работает') : (paused ? t('Пауза') : starting ? t('Запуск…') : t('Остановлена'));
+  // смена состояния — мягко: цвет карточки и значок уже переходят (CSS), текст
+  // проявляется следом, а не подменяется рывком
+  if($('st').textContent !== stText){
+    $('st').textContent = stText;
+    if(window.matchMedia && !matchMedia('(prefers-reduced-motion: reduce)').matches)
+      $('st').animate([{opacity: 0.2, transform: 'translateY(4px)'}, {opacity: 1, transform: 'none'}], {duration: 260, easing: 'cubic-bezier(.2,0,0,1)'});
+  }
   // «Домашний Wi‑Fi» в подписи открывает его настройки долгим нажатием;
   // DNS — своя плитка ниже. Подпись — одна строка; подробности паузы — в title.
   const part = (text, go) => '<span data-go="' + go + '">' + esc(text) + '</span>';
@@ -401,6 +413,7 @@ async function stat(quiet){
   if(statPending) return statPending;
   statPending = (async () => {
     const bq = quiet ? null : busy(true);
+    const asked = performance.now();
     const raw = await ctl(['json-status']);
     if(!quiet) busy(false, bq);
     let j = null, a = raw.indexOf('{'), b = raw.lastIndexOf('}');
@@ -417,8 +430,11 @@ async function stat(quiet){
       setHTML('warn', banner('danger', 'error', 'json-status: ' + (raw.trim() || t('(пустой ответ)')).slice(0, 200)), false);
       return;
     }
+    if(asked < sigStamp && S) SIG_FIELDS.forEach(k => { if(k in S) j[k] = S[k]; });
     S = j;
     renderStatus();
+    // слепок для следующего открытия (см. init.js)
+    try { snapSet('status', JSON.stringify(Object.assign({saved_at: Date.now()}, j))); } catch(e) {}
     if(currentPage === 'lists'){ renderMode(); renderListFiles(); }
     // строки настроек зависят от состояния (DNS профили — только при dnsproxy):
     // открытые раньше первого ответа, они иначе остались бы без них
@@ -439,8 +455,38 @@ const POLL_PAGES = {control: 1, lists: 1};
 const SIG_CMD = 'd=/data/adb/nfqws2; p=$(cat "$d/state/nfqws2.pid" 2>/dev/null); ' +
   'kill -0 "$p" 2>/dev/null && echo "run $p"; echo "p:$(cat "$d/state/home_paused" 2>/dev/null)"; ' +
   '[ -f "$d/state/starting" ] && echo start; ' +
-  'echo "o:$(cat "$d/state/home_override" 2>/dev/null)"; [ -f "$d/dns/enabled" ] && echo dns; true';
+  'echo "o:$(cat "$d/state/home_override" 2>/dev/null)"; [ -f "$d/dns/enabled" ] && echo dns; ' +
+  // часы с загрузки и метка запуска: время работы — без полного статуса
+  'read u _ < /proc/uptime; echo "u:$u $(cat "$d/state/started_cs" 2>/dev/null)"; true';
 let statSig = null, sigBusy = false, lastFull = 0;
+/* Подпись без строки часов — её меняет каждый опрос */
+const sigKey = sig => sig == null ? null : sig.split('\n').filter(l => l.indexOf('u:') !== 0).join('\n');
+/* Карточка — сразу по подписи: работа, пауза, запуск и время работы видны в
+   тот же миг, что их увидела подпись, а не после полного json-status (на
+   телефоне — ещё полсекунды и больше). Остальное — из полного статуса следом */
+function applySig(sig){
+  if(!S || S.running == null || sig == null) return false;
+  const L = sig.split('\n'), get = pre => { const l = L.find(x => x.indexOf(pre) === 0); return l == null ? null : l.slice(pre.length); };
+  // не подпись (оборванный вывод, чужой ответ) — карточку не трогаем
+  if(get('p:') == null) return false;
+  const run = L.find(l => l.indexOf('run ') === 0);
+  const next = {running: !!run, pid: run ? run.slice(4) : '', paused: get('p:') || '', home_override: get('o:') || '',
+    starting: L.indexOf('start') >= 0 ? 1 : 0};
+  const u = (get('u:') || '').split(' '), up = Math.round(parseFloat(u[0]) * 100), st = parseInt(u[1], 10);
+  if(next.running && up > 0 && st > 0 && up >= st) next.uptime_ms = (up - st) * 10;
+  else if(!next.running) next.uptime_ms = 0;
+  const changed = next.running !== !!S.running || next.paused !== (S.paused || '') || next.starting != (S.starting || 0) ||
+    next.home_override !== (S.home_override || '');
+  if(!changed) return false;
+  S = Object.assign({}, S, next);
+  sigStamp = performance.now();
+  renderStatus();
+  return true;
+}
+/* Когда подпись последний раз поменяла карточку: полный статус, запрошенный
+   раньше, в этих полях уже устарел и карточку назад не возвращает */
+let sigStamp = 0;
+const SIG_FIELDS = ['running', 'pid', 'paused', 'starting', 'home_override', 'uptime_ms', 'uptime'];
 function pollIdle(){
   return document.visibilityState === 'visible' && POLL_PAGES[currentPage] &&
     !busyCount && !svcBusy && !editorCtx && !openSheetId;
@@ -453,7 +499,7 @@ async function readSig(){
 async function fullStat(){
   lastFull = Date.now();
   // не прочиталась — пустая: иначе полный статус шёл бы на каждом тике
-  if(currentPage === 'control') statSig = (await readSig()) || '';
+  if(currentPage === 'control'){ const sig = await readSig(); statSig = sigKey(sig) || ''; applySig(sig); }
   await stat(true);
 }
 async function statPoll(){
@@ -461,14 +507,16 @@ async function statPoll(){
   sigBusy = true;
   try {
     // «Списки» и счётчики меняются без смены подписи — раз в 5 с полный статус
+    // полный статус — без ожидания: медленный ответ (служба запускается) не
+    // должен останавливать опрос подписи — по ней карточка и меняется
     const due = Date.now() - lastFull >= 5000;
-    if(currentPage !== 'control'){ if(due) await fullStat(); return; }
-    if(statSig === null || due){ await fullStat(); return; }
+    if(currentPage !== 'control'){ if(due) fullStat(); return; }
+    if(statSig === null || due){ fullStat(); return; }
     const sig = await readSig();
-    if(sig !== null && sig !== statSig && pollIdle()){ await fullStat(); return; }
+    if(sig !== null && sigKey(sig) !== statSig && pollIdle()){ statSig = sigKey(sig); applySig(sig); fullStat(); return; }
   } finally { sigBusy = false; }
 }
-setInterval(statPoll, 1500);
+setInterval(statPoll, 1000);
 document.addEventListener('visibilitychange', () => {
   if(document.visibilityState === 'visible' && POLL_PAGES[currentPage]) fullStat();
 });
@@ -495,12 +543,34 @@ async function editLimit(key, title, cur){
   if(!(n >= 1 && n <= 15)){ toast(t('Нужно целое число от 1 до 15')); return; }
   if(n !== cur) setp(key, n);
 }
+/* Карточка меняется сразу, ответа службы не ждёт: запуск — это 3–15 с
+   (DNS, проверка параметров, правила), и всё это время экран стоял в прежнем
+   состоянии. Отсчёт времени работы идёт с нажатия. Запуск не удался —
+   карточка возвращается к тому, что есть на деле, и об этом говорит тост */
+function optimistic(a){
+  if(!S || S.running == null) return;
+  const o = {
+    start: {running: true, paused: '', starting: 0, uptime_ms: 0},
+    restart: {running: true, paused: '', starting: 0, uptime_ms: 0},
+    stop: {running: false, paused: '', starting: 0, home_override: ''},
+    'home-pause': {running: false, paused: S.home_override || S.paused || '-', home_override: '', starting: 0}
+  }[a];
+  if(!o) return;
+  if(a === 'start' || a === 'restart'){ stopUptTimer(); uptKeepUntil = performance.now() + 60000; }
+  S = Object.assign({}, S, o);
+  sigStamp = performance.now();   // статус, запрошенный до нажатия, карточку не вернёт
+  renderStatus();
+}
 async function act(a){
   svcBusy = a;
   if(a === 'stop') stopUptTimer();
+  const prev = S;
+  optimistic(a);
   renderHeroActions();
   const r = await withBusy([a], 40000);
   svcBusy = '';
+  // не вышло — сразу прежнее (полный статус следом покажет, что на деле)
+  if(r.code && prev){ S = prev; uptKeepUntil = 0; renderStatus(); }
   const ok = {start: 'Служба запущена', stop: 'Служба остановлена', restart: 'Служба перезапущена',
     'home-pause': 'Обход на паузе в домашнем Wi‑Fi'}[a];
   toast(r.code ? errText(r, 'Команда не выполнена') : t(ok));

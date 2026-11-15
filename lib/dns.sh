@@ -1745,8 +1745,28 @@ dns_private_mode() {
   else settings get global private_dns_mode 2>/dev/null; fi | tr -d '\r\n '
 }
 
+# Чтения для экрана — без ожидания замка iptables (-w): пока служба или DNS
+# меняют правила, замок занят секундами, и экран ждал бы вместе с ним (на
+# «Состоянии» опрос состояния вставал за таким чтением, и карточка отставала
+# от службы на 10 с и больше). Замок занят (код 4) — последнее прочитанное
 dns_hits() {
-  iptables -w -t nat -L $DNS_CHAIN -v -n -x 2>/dev/null | awk '/REDIRECT/ { s += $1 } END { print s + 0 }'
+  local out rc c="$DNS_RUN_DIR/hits.last"
+  out=$(iptables -t nat -L $DNS_CHAIN -v -n -x 2>/dev/null); rc=$?
+  if [ "$rc" = 4 ]; then cat "$c" 2>/dev/null || echo 0; return 0; fi
+  out=$(printf '%s\n' "$out" | awk '/REDIRECT/ { s += $1 } END { print s + 0 }')
+  [ -d "$DNS_RUN_DIR" ] && printf '%s\n' "$out" > "$c" 2>/dev/null
+  printf '%s\n' "$out"
+}
+dns_rules_peek() { # on | off
+  local v rc c="$DNS_RUN_DIR/rules.last"
+  iptables -t nat -C OUTPUT -j $DNS_CHAIN 2>/dev/null; rc=$?
+  case "$rc" in
+    0) v=on ;;
+    4) cat "$c" 2>/dev/null || echo off; return 0 ;;
+    *) v=off ;;
+  esac
+  [ -d "$DNS_RUN_DIR" ] && echo "$v" > "$c" 2>/dev/null
+  echo "$v"
 }
 
 # Ответ dns-state: секция #status (ключ=значение), затем #profile <id> и
@@ -1792,7 +1812,10 @@ dns_state() {
   echo "default=$(dns_default)"
   echo "default_used=$(dns_default_used)"
   echo "proxy=$proxy"
-  echo "rules=$(dns_rules_ok && echo on || echo off)"
+  echo "rules=$(dns_rules_peek)"
+  # DNS сейчас применяется (запуск, подмена dnsproxy, заявка из WebUI): экран
+  # пишет «Применяется», а не «не работает» по полусменённому состоянию
+  echo "applying=$({ [ -d "$DNS_LOCK" ] || [ -d "$DNS_RUN_DIR/apply.lock" ] || [ -f "$DNS_RUN_DIR/apply.pending" ]; } && echo 1 || echo 0)"
   echo "ipv6=$(cat "$DNS_RUN_DIR/ipv6" 2>/dev/null)"
   echo "private=$pm"
   echo "private_host=$ph"
@@ -1853,7 +1876,8 @@ dns_backup_restore() { # <каталог из архива>
 
 # ---------------------------------------------------------------- команды nfqws2-ctl
 dns_apply_now() { # применить сейчас: dns_start сам решит, запускать или снимать
-  dns_wanted || dns_pid >/dev/null || dns_rules_ok || return 0
+  # замок iptables не ждём (dns_rules_peek): заявка из WebUI не должна стоять
+  dns_wanted || dns_pid >/dev/null || [ "$(dns_rules_peek)" = on ] || return 0
   # Из WebUI (NFQWS_WEBUI=1) — в фоне: смена конфига — это новый dnsproxy и
   # подмена им прежнего без пропуска DNS, на телефоне 3–4 с, и экран DNS
   # ждал их на каждом действии. Изменение уже сохранено; правки подряд

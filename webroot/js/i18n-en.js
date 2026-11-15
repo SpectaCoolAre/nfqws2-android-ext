@@ -232,6 +232,7 @@ EN = {
  "Входящие пакеты": "Incoming packets",
  "Сколько первых ответных пакетов обрабатывать": "How many first reply packets to process",
  "Запуск…": "Starting…",
+ "Применяется…": "Applying…",
  "Остановка…": "Stopping…",
  "Перезапуск…": "Restarting…",
  "Остановить": "Stop",

@@ -59,7 +59,11 @@ window.ksu = { exec: function(cmd, opts, cb){
   else if (cmd.indexOf('list-apps') >= 0) out = 'com.termux\\ncom.example.one\\ncom.example.two\\ncom.other';
   else if (cmd.indexOf('list-imports') >= 0) out = ${JSON.stringify(HOSTILE_IMPORT)};
   else if (cmd.indexOf('get-conf') >= 0) out = 'A=1';
-  setTimeout(function(){ if (window[id]) window[id](0, out, ''); }, 0);
+  // __delay: {подстрока команды: мс} — медленный ответ; __fail — подстрока команды, что падает
+  var ms = 0, rc = 0, d = window.__delay || {};
+  for (var k in d) if (cmd.indexOf(k) >= 0) ms = d[k];
+  if (window.__fail && cmd.indexOf(window.__fail) >= 0) { rc = 1; out = ''; }
+  setTimeout(function(){ if (window[id]) window[id](rc, out, rc ? 'не вышло' : ''); }, ms);
   return 'job';
 }};
 `;
@@ -76,6 +80,7 @@ function eq(expected, actual, msg) {
   else fail(`${msg} -- expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
 }
 function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
+const secs = s => String(s).split(':').reduce((a, x) => a * 60 + Number(x), 0);
 
 const VIEWPORTS = [
   { w: 360, dpr: 2.75, label: '360px' },
@@ -630,11 +635,64 @@ const VIEWPORTS = [
     truthy(Date.now() - t1 < 2500, 'resuming shows up as fast: ' + (Date.now() - t1) + ' ms');
     eq('#i-shield', await page.evaluate(() => $('hero-ic').getAttribute('href')), 'running: the shield icon');
     truthy(await page.evaluate(() => !$('hero-stats').hidden), 'the uptime row is back');
+    // 16.11: подпись увидела смену раньше полного статуса (тот на телефоне идёт
+    // полсекунды и дольше) — карточка меняется по подписи, не дожидаясь его
+    await page.evaluate(st => { window.__delay = {'json-status': 4000}; window.__st = Object.assign({}, st, { running: false, pid: '', uptime: 0, uptime_ms: 0, paused: '@vpn' }); window.__sig = 'p:@vpn\no:'; }, base);
+    const t2 = Date.now();
+    await page.waitForFunction(() => $('st').textContent === 'Пауза', null, { timeout: 3500 }).catch(() => {});
+    truthy(Date.now() - t2 < 2500, 'the card follows the signature before the slow full status arrives: ' + (Date.now() - t2) + ' ms');
+    await page.evaluate(st => { window.__st = st; window.__sig = 'run 4712\np:\no:\nu:1000.00 99800'; }, base);
+    await page.waitForFunction(() => $('st').textContent === 'Работает', null, { timeout: 3500 }).catch(() => {});
+    eq('Работает', await page.evaluate(() => $('st').textContent), 'resuming too');
+    eq('00:02', await page.evaluate(() => $('upt').textContent), 'with the uptime from the signature (boot clock minus the start mark)');
+    await page.evaluate(() => { window.__delay = {}; });
+    await page.waitForTimeout(4500);
+    // кнопки службы: карточка меняется сразу, ответа службы не ждёт
+    await page.evaluate(st => { window.__st = Object.assign({}, st, { running: false, pid: '', uptime: 0, uptime_ms: 0, paused: '' }); window.__sig = 'p:\no:'; }, base);
+    await page.waitForFunction(() => $('st').textContent === 'Остановлена', null, { timeout: 4000 }).catch(() => {});
+    await page.evaluate(() => { window.__delay = {"'start'": 2500}; });
+    await page.click('#bt');
+    await page.waitForTimeout(200);
+    eq('Работает', await page.evaluate(() => $('st').textContent), '«Start»: the card says running at once, while the start is still going');
+    truthy(/^\d\d:\d\d/.test(await page.evaluate(() => $('upt').textContent)), 'and the uptime runs from the tap: ' + await page.evaluate(() => $('upt').textContent));
+    await page.evaluate(st => { window.__st = Object.assign({}, st, { uptime: 0, uptime_ms: 300 }); window.__sig = 'run 4713\np:\no:'; }, base);
+    await page.waitForTimeout(3000);
+    eq('Работает', await page.evaluate(() => $('st').textContent), 'the start went through: still running');
+    truthy(secs(await page.evaluate(() => $('upt').textContent)) >= 2, 'the uptime does not jump back to the service\'s own (counted from the tap)');
+    await page.evaluate(st => { window.__delay = {"'stop'": 1500}; window.__fail = "'stop'"; }, base);
+    await page.click('#bt');
+    await page.waitForTimeout(200);
+    eq('Остановлена', await page.evaluate(() => $('st').textContent), '«Stop»: the card says stopped at once');
+    await page.waitForTimeout(2500);
+    eq('Работает', await page.evaluate(() => $('st').textContent), 'the stop failed: the card goes back to running');
+    await page.evaluate(() => { window.__delay = {}; window.__fail = ''; });
     const n = await page.evaluate(() => window.__calls.filter(c => c.indexOf('json-status') >= 0).length);
     await page.waitForTimeout(3200);
     const n2 = await page.evaluate(() => window.__calls.filter(c => c.indexOf('json-status') >= 0).length);
     truthy(n2 - n <= 1, 'with nothing changing the full status is not re-read every tick: ' + (n2 - n));
     eq('', pageErrors.join(' | '), 'no script errors');
+    await ctx.close();
+  }
+
+  // ── 16.11: открытие — карточка из слепка сразу, подпись поправляет её ────
+  {
+    sect('opening: the last status at once, the signature corrects it');
+    const ctx = await browser.newContext({ viewport: { width: 360, height: 760 } });
+    const snap = Object.assign(JSON.parse(STATUS), { running: true, uptime_ms: 52000, saved_at: Date.now() - 10000, paused: '' });
+    await ctx.addInitScript(`try{localStorage.setItem('nfq_snap_status', ${JSON.stringify(JSON.stringify(snap))});}catch(e){}`);
+    // служба отвечает медленно, а за время без экрана телефон ушёл на паузу (VPN)
+    await ctx.addInitScript(`window.__delay = {'json-status': 3000, 'home_paused': 700}; window.__sig = 'p:@vpn\\no:'; window.__st = Object.assign(${STATUS}, {running: false, pid: '', uptime: 0, paused: '@vpn'});`);
+    await ctx.addInitScript(STUB);
+    const page = await ctx.newPage();
+    const t0 = Date.now();
+    await page.goto(INDEX, { waitUntil: 'load' });
+    await page.waitForTimeout(150);
+    eq('Работает', await page.evaluate(() => $('st').textContent), 'the card is drawn from the last status before any answer');
+    truthy(secs(await page.evaluate(() => $('upt').textContent)) >= 60, 'its uptime went on while the screen was closed: ' + await page.evaluate(() => $('upt').textContent));
+    await page.waitForFunction(() => $('st').textContent === 'Пауза', null, { timeout: 2500 }).catch(() => {});
+    eq('Пауза', await page.evaluate(() => $('st').textContent), 'the signature corrects it first');
+    truthy(Date.now() - t0 < 2900, 'well before the slow full status: ' + (Date.now() - t0) + ' ms');
+    truthy(!(await page.$('#splash')) || await page.evaluate(() => $('splash').classList.contains('out')), 'and the splash does not wait for the service');
     await ctx.close();
   }
 

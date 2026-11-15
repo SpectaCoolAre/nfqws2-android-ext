@@ -16,6 +16,14 @@
 STORE="${MOCK_IPT_STORE:?MOCK_IPT_STORE not set}/${0##*/}"
 FEATURES="${MOCK_IPT_FEATURES:-connbytes multiport owner connmark CONNMARK NFQUEUE MASQUERADE}"
 TABLE=mangle
+# MOCK_IPT_LOCKED=1: замок xtables занят (служба меняет правила) — вызов без
+# -w сразу отказывает с кодом 4, как настоящий iptables; с -w он бы ждал
+WAITS=0
+case " $* " in *" -w "*) WAITS=1 ;; esac
+if [ "${MOCK_IPT_LOCKED:-0}" = 1 ] && [ "$WAITS" = 0 ]; then
+  echo "Another app is currently holding the xtables lock. Perhaps you want to use the -w option?" >&2
+  exit 4
+fi
 
 while [ $# -gt 0 ]; do
   case "$1" in

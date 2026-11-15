@@ -1371,6 +1371,22 @@ assert_contains "$ctl_out" "private=off" "and the Private DNS mode"
 assert_contains "$ctl_out" "#profile insta" "profiles follow"
 assert_contains "$ctl_out" "#preset google" "and presets"
 
+# 16.11: замок iptables занят (служба или DNS меняют правила) — экран не ждёт
+# его, а берёт последнее прочитанное; DNS применяется — так и пишет
+mkdir -p "$DNS_RUN_DIR"; echo 42 > "$DNS_RUN_DIR/hits.last"; echo on > "$DNS_RUN_DIR/rules.last"
+MOCK_IPT_LOCKED=1; export MOCK_IPT_LOCKED
+ctl dns-state
+unset MOCK_IPT_LOCKED
+assert_contains "$ctl_out" "hits=42" "a held iptables lock: the last read counter, at once"
+assert_contains "$ctl_out" "rules=on" "and the last known state of the interception"
+assert_contains "$ctl_out" "applying=0" "nothing is being applied"
+: > "$DNS_RUN_DIR/apply.pending"
+ctl dns-state
+assert_contains "$ctl_out" "applying=1" "a pending apply from the WebUI is reported as «applying»"
+rm -f "$DNS_RUN_DIR/apply.pending" "$DNS_RUN_DIR/hits.last" "$DNS_RUN_DIR/rules.last"
+ctl dns-state
+assert_contains "$ctl_out" "rules=off" "a free lock: read for real"
+
 STUB_PRIVATE=hostname; STUB_PRIVATE_HOST=dns.google
 ctl dns-state
 assert_contains "$ctl_out" "private=hostname" "Private DNS with a host is detected"

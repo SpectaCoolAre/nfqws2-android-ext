@@ -110,7 +110,10 @@ window.__presets = ${JSON.stringify(PRESETS)};
     else if (cmd.indexOf("'dns-") >= 0) { const a = args(cmd); const r = dns(a.slice(a.findIndex(x => x.startsWith('dns-'))));
       rc = r[0]; out = r[1] || ''; err = r[2] || ''; }
     // __dnsSlow: медленный ответ dns-state — проверка слепка экрана
-    var slow = (cmd.indexOf("'dns-state'") >= 0 && window.__dnsSlow) || (cmd.indexOf("'dns-set-enabled'") >= 0 && window.__dnsSetSlow);
+    var slow = (cmd.indexOf("'dns-state'") >= 0 && window.__dnsSlow) || (cmd.indexOf("'dns-set-enabled'") >= 0 && window.__dnsSetSlow) ||
+      (window.__dnsSaveSlow && /'dns-(save-b64|delete|profile-enable)'/.test(cmd));
+    // __dnsSaveFail: сохранение профиля не удаётся (проверка отката)
+    if (window.__dnsSaveFail && cmd.indexOf("'dns-save-b64'") >= 0) { rc = 1; out = ''; err = 'Неверный адрес сервера'; }
     setTimeout(function(){ if (window[id]) window[id](rc, out, err); }, slow ? 1500 : 0);
     return 'job';
   }};
@@ -367,6 +370,39 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
     await answer();
     eq('dnsprofiles', await page.evaluate(() => currentPage), 'deleting returns to the list');
     eq('net', await page.evaluate(() => window.__dns.def), 'the default falls back to the network DNS');
+
+    sect(`${mode}: changes show up at once`);
+    // 16.11: профиль появляется на экране сразу, сохранение идёт следом;
+    // не сохранилось — пропадает, и тост говорит почему
+    await page.evaluate(() => { window.__dnsSaveSlow = 1; });
+    await page.click('#dns-add'); await menuPick('Новый профиль');
+    await page.fill('#d-input', 'Быстрый'); await page.click('#d-ok');
+    await page.waitForTimeout(150);
+    eq('dnsprof', await page.evaluate(() => currentPage), 'a new profile opens at once, while it is still being saved');
+    await page.waitForFunction(() => $('app-title').textContent === 'Быстрый', null, { timeout: 1000 }).catch(() => {});
+    eq('Быстрый', await page.textContent('#app-title'), 'with its name, before the save is over');
+    eq(true, await page.evaluate(() => dnsPending > 0), '(the save is indeed still going)');
+    await page.waitForTimeout(1800);
+    truthy(Object.values(await page.evaluate(() => window.__dns.profiles)).some(v => v.includes('NAME=Быстрый')), 'and is saved in the background');
+    await page.evaluate(() => goBack()); await idle();
+    await page.evaluate(() => { window.__dnsSaveFail = 1; });
+    await page.click('#dns-add'); await menuPick('Новый профиль');
+    await page.fill('#d-input', 'Неудачный'); await page.click('#d-ok');
+    await page.waitForTimeout(150);
+    eq('dnsprof', await page.evaluate(() => currentPage), 'a profile that will fail also opens at once');
+    await page.waitForTimeout(1800);
+    eq('dnsprofiles', await page.evaluate(() => currentPage), 'the save failed: the profile is gone, the screen goes back');
+    truthy((await page.textContent('#prompt-msg')).includes('Неверный адрес'), 'and the reason is shown');
+    await page.evaluate(() => { window.__dnsSaveFail = 0; });
+    const fast = await page.evaluate(() => Object.keys(window.__dns.profiles).find(k => window.__dns.profiles[k].includes('NAME=Быстрый')));
+    await page.click('#dns-profiles .list-item:has-text("Быстрый")'); await idle();
+    await page.click('button:has-text("Удалить профиль")');
+    await page.waitForSelector('#dialog-wrap.open'); await page.click('#d-ok');
+    await page.waitForTimeout(150);
+    eq(0, await page.$$eval('#dns-profiles .list-item:has-text("Быстрый")', l => l.length), 'a deleted profile leaves the list at once');
+    await page.waitForTimeout(1800);
+    eq(undefined, await page.evaluate(id => window.__dns.profiles[id], fast), 'and is deleted in the background');
+    await page.evaluate(() => { window.__dnsSaveSlow = 0; });
 
     sect(`${mode}: selecting several profiles`);
     await page.evaluate(() => { Object.assign(window.__dns.profiles, { s1: 'NAME=Alpha\nENABLED=0', s2: 'NAME=Beta\nENABLED=0', s3: 'NAME=Gamma\nENABLED=0' }); });
