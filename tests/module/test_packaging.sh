@@ -128,7 +128,7 @@ section "no zapret 1 parameters in zapret2 strategies"
 # altorder=1 (порядок частей hostfakesplit) и fool=ts — из zapret 1; zapret2 их
 # молча игнорирует, и вариант шёл не так, как задуман. Теперь — hostfakesplit_alt
 assert_eq "" "$(grep -n -- "--lua-desync=[^ ]*:\(altorder\|fool\)=" "$REPO_DIR"/strategies/*.conf)" "no altorder= or fool= in lua-desync"
-assert_contains "$(grep -c 'hostfakesplit_alt:' "$REPO_DIR/strategies/smart.conf")" "2" "smart mode: Youtube_circular #8 and eduncey #4 use hostfakesplit_alt"
+assert_contains "$(grep -c 'hostfakesplit_alt:' "$REPO_DIR/strategies/smart.conf")" "1" "smart mode: Youtube_circular #8 uses hostfakesplit_alt (eduncey #4 is removed)"
 assert_contains "$(cat "$REPO_DIR/lua/zapret-smart.lua")" "function hostfakesplit_alt(ctx, desync)" "which lives in zapret-smart.lua, loaded with any strategy"
 
 harness_finish

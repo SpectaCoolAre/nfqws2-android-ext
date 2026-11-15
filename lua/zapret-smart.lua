@@ -431,6 +431,10 @@ local function make_mutant(slot, from, t)
 end
 -- вариант в наборе, который сейчас перебирается (основной или весь пул)
 local function allowed(slot, v)
+	-- номер, у которого в конфиге нет строк (вариант удалён, номера остальных
+	-- не сдвигаются — по ним хранится выученное), не выбирается никогда
+	local L = SM.layout[slot]
+	if L and v <= MUT_BASE and not L[v] then return false end
 	local a = SM.allow[slot]
 	return not a or a[v] ~= nil
 end

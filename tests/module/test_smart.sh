@@ -334,14 +334,17 @@ assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",21,3
 assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ":first=21" "and Google sites start on it"
 # 12.11, МТС: Youtube_circular перестал проходить, hardcorp74 проходил — а
 # перебор шёл к нему через десятки вариантов. Теперь он первый после стартового
-assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ":pri=1,47,48" "hardcorp74 (Google, wide-youtube, googlevideo) is tried right after the start variant"
+assert_contains "$(grep 'slot=google:' "$REPO_DIR/strategies/smart.conf")" ":first=21:pri=" "a priority list follows the start variant"
 assert_contains "$(grep 'strategy=21$' "$REPO_DIR/strategies/smart.conf")" "hostfakesplit:host=google.com:tcp_ts=-600000" "it is the hostfakesplit google.com variant"
 assert_not_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" "46" "Yv35 (3 of 5) waits in the extended pool"
 assert_eq "" "$(grep -o 'slot=tls[a-z_0-9]*:pass=14:base=[0-9,-]*' "$REPO_DIR/strategies/smart.conf" | grep -v 'base=1,4-6,8-9,')" "hardcorp74 #1 and #2 (96%, each opens sites no other does) are in the base set of every TLS slot"
 assert_contains "$(grep -o 'slot=tls:pass=14:base=[0-9,-]*:first=[0-9]*' "$REPO_DIR/strategies/smart.conf")" ":first=8" "ordinary TLS sites start on hardcorp74 #1: the most checks and its own sites in both benchmarks"
-# eduncey #4: fooling=ts из zapret 1 — порча и фейкового ClientHello, а не только
-# hostfakesplit; без неё фейк доходил до сервера — 16 сбросов из 16
-assert_contains "$(grep 'strategy=35' "$REPO_DIR/strategies/smart.conf" | grep 'fake:blob=tls_clienthello')" "tcp_ts=-600000" "eduncey #4: the fake ClientHello is fooled too"
+# 15.11: eduncey #4 удалён (автор давно не обновлял, на МТС 1 из 131): номер
+# пуст, а приоритет TLS — по замеру на МТС (8 63%, 55 62%, 15 61%, 23 и 39 57%)
+assert_eq "" "$(awk '/^SMART_TLS="/{f=1} f{print} f && /"$/ && !/^SMART_TLS="/{f=0}' "$REPO_DIR/strategies/smart.conf" | grep -v '^ *#' | grep 'strategy=35$')" "eduncey #4 (TLS 35) is gone"
+assert_not_contains "$(grep '^#@bench-tls' "$REPO_DIR/strategies/smart.conf")" ",35," "and out of the benchmark"
+assert_eq "" "$(grep -o 'slot=tls[a-z_0-9]*:pass=14:base=[^ ]*' "$REPO_DIR/strategies/smart.conf" | grep -v ':pri=8,55,15,23,39$')" "every TLS slot tries the best of the MTS benchmark first"
+assert_contains "$(grep 'slot=google:' "$REPO_DIR/strategies/smart.conf")" ":pri=50,6,43,44,45,15" "Google: what opened everything on MTS (hardcorp74 Google 0 of 5 there)"
 
 section "the active strategy says whether smart mode is on"
 ctl get-strategy

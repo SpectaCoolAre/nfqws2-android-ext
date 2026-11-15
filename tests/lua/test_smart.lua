@@ -684,6 +684,32 @@ do
 	os.remove(HOME .. "/state/smart_pool"); later(6)
 end
 
+section("a removed variant (its number left empty) is never picked")
+do
+	-- 15.11: eduncey #4 (TLS 35) удалён, номера остальных не сдвинуты — по ним
+	-- хранится выученное. Номер без строк в конфиге — не вариант
+	writefile(HOME .. "/state/smart_pool", "ext\n"); later(6)
+	local function gapplan()
+		local p = {}
+		for v = 1, 12 do if v ~= 7 then p[#p + 1] = { func = "tf", func_instance = "tf_" .. v, arg = { strategy = tostring(v) }, payload_filter = "all", range = {} } end end
+		p[#p + 1] = { func = "tf", func_instance = "tf_always", arg = {}, payload_filter = "all", range = {} }
+		return p
+	end
+	local G = { slot = "gap", plan = gapplan, pass = 12 }
+	local seen, got7 = {}, false
+	for i = 1, 40 do
+		later(); local c = conn("gap.example"); local v = packet(c, G)
+		if v then seen[v] = true end
+		if v == 7 then got7 = true end
+		for k = 1, 3 do packet(c, { retrans = true, slot = "gap", plan = gapplan, pass = 12 }) end
+		okconn("anchor2.example")
+	end
+	local n = 0; for _ in pairs(seen) do n = n + 1 end
+	check(not got7, "variant 7 has no lines and is never tried")
+	check(n >= 6, "while the others are (" .. n .. " different)")
+	os.remove(HOME .. "/state/smart_pool"); later(6)
+end
+
 section("debug benchmark: the variant is forced and nothing is learned")
 do
 	-- замер оборвался: файлы остались — сайт на обычном обучении
