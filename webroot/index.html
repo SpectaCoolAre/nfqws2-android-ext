@@ -48,17 +48,10 @@ html.sp-m3 #splash .sp-logo { fill: var(--sp-op, #fff); }
 #splash.out .sp-ic { transform: scale(1.18); transition: transform 260ms cubic-bezier(.3, 0, .8, .15); }
 @keyframes sp-in { from { opacity: 0; transform: scale(.62); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { #splash .sp-ic { animation: none; } }
-/* окно пересоздано поворотом (KernelSU Next) — без заставки, тот же экран */
-html.sp-skip #splash { display: none; }
 </style>
 <script>
 (function(){ try {
   var m = localStorage.getItem('m3_mode') || 'auto', h = document.documentElement;
-  // KernelSU Next не объявляет у окна WebUI configChanges, и поворот экрана
-  // пересоздаёт окно: страница грузится заново. Свежая отметка жизни (init.js)
-  // с другой ориентацией — это поворот: заставки нет, init.js вернёт экран
-  var a = JSON.parse(localStorage.getItem('nfq_alive') || 'null');
-  if(a && Date.now() - a.t < 5000 && a.o !== (innerWidth > innerHeight ? 'l' : 'p')){ window.NFQ_ROT = a; h.classList.add('sp-skip'); }
   var dark = m === 'dark' || (m === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
   if(dark) h.classList.add('sp-dark');
   if(localStorage.getItem('ui_design') !== 'miuix'){
