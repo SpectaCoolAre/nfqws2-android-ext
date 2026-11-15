@@ -42,12 +42,20 @@ api.magicinfo.art
 de.magicdns.ru
 # api.magicdns.ru (109.120.177.170, 45.88.163.92) — по 4pda (11.11)
 api.magicdns.ru
+# dns.magicdns.ru — новый адрес по Zapret-Manager 5.081 (15.11): DoH
+# отдаёт тот же прокси 217.144.190.216, что api.magicinfo.art
+dns.magicdns.ru
 
 [zapret.moe]
 # только DoH через Cloudflare: DoT и обычный DNS закрыты с 03.11 (адрес
 # сервера в России заблокирован). Прокси — вход в Москве, сервер в США;
 # хостингам и зарубежным адресам вход отказывает (dns.zapret.moe, 12.11)
 dns.zapret.moe
+
+[tamaev]
+# tamaev-gifts.xyz — по Zapret-Manager 5.081 (15.11); DoH отдаёт для
+# Gemini и ChatGPT прокси 2.26.80.94
+tamaev-gifts.xyz
 
 [wlrus]
 # 95.85.240.254, 138.124.254.134
