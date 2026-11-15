@@ -359,7 +359,7 @@ assert_contains "$(grep -o 'slot=tls:pass=14:base=[0-9,-]*:first=[0-9]*' "$REPO_
 assert_eq "" "$(awk '/^SMART_TLS="/{f=1} f{print} f && /"$/ && !/^SMART_TLS="/{f=0}' "$REPO_DIR/strategies/smart.conf" | grep -v '^ *#' | grep 'strategy=35$')" "eduncey #4 (TLS 35) is gone"
 assert_not_contains "$(grep '^#@bench-tls' "$REPO_DIR/strategies/smart.conf")" ",35," "and out of the benchmark"
 assert_eq "" "$(grep -o 'slot=tls[a-z_0-9]*:pass=14:base=[^ ]*' "$REPO_DIR/strategies/smart.conf" | grep -v ':pri=8,55,57,15,23,39,58$')" "every TLS slot tries the best of the MTS benchmark first, the new V13 right after the leaders"
-assert_contains "$(grep 'slot=google:' "$REPO_DIR/strategies/smart.conf")" ":pri=50,51,53,52,54,56,55,6,43,44,45,15" "Google: the leader, then the new NetZapret and Zapret GUI recipes, then what opened everything on MTS"
+assert_contains "$(grep 'slot=google:' "$REPO_DIR/strategies/smart.conf")" ":first=21:pri=52,43,44,45,15,50,6,55,51,53,54,56" "Google: by the MTS learning of 15.11 — 21 starts, 52 (the only one that opened googleapis.com) first, those that only failed there last"
 
 section "the active strategy says whether smart mode is on"
 ctl get-strategy
