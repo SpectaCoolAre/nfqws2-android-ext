@@ -59,7 +59,8 @@ function strategyGroup(s){
   if(s.kind === 'import' || s.kind === 'user') return 'user';
   if(s.name === 'default') return 'base';
   if(s.name === 'smart') return 'smart';
-  if(/^alt\d*(_|$)/i.test(s.name)) return 'alt';
+  // general.bat Flowseal — его базовая, рядом с ALT
+  if(/^alt\d*(_|$)/i.test(s.name) || s.name === 'general') return 'alt';
   if(/^fake_tls_auto/i.test(s.name)) return 'fake';
   if(/^simple_fake/i.test(s.name)) return 'simple';
   return 'authors';

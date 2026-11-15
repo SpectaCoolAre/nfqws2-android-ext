@@ -338,7 +338,7 @@ qi=$(printf '%s\n' "$prof" | grep -n 'filter-udp=443 --filter-l7=quic --hostlist
 # общий Universal V13 — TLS 57–58; сразу за лидером очереди
 assert_contains "$(grep 'strategy=51$' "$REPO_DIR/strategies/smart.conf")" "multidisorder:pos=1,host+2,sld+2,sld+5,sniext+1,sniext+2,endhost-2:seqovl=1" "Google 51 is the Universal V13 googlevideo recipe"
 assert_contains "$(grep 'strategy=53$' "$REPO_DIR/strategies/smart.conf")" "seqovl_pattern=tls7" "Google 53 is the Zapret GUI YouTube recipe"
-assert_contains "$(grep -A20 '^NFQWS_BASE_ARGS=' "$REPO_DIR/strategies/smart.conf")" "tls_clienthello_7.bin" "with its tls7 blob"
+assert_contains "$(grep -A30 '^NFQWS_BASE_ARGS=' "$REPO_DIR/strategies/smart.conf")" "tls_clienthello_7.bin" "with its tls7 blob"
 assert_contains "$(grep '^#@bench-google' "$REPO_DIR/strategies/smart.conf")" ",49-56" "the benchmark tries the new Google variants"
 assert_contains "$(grep '^#@bench-tls' "$REPO_DIR/strategies/smart.conf")" ",55-58" "and the new TLS ones"
 # с кэшем имён профиль с хостлистом и без --filter-l7 сработал бы уже на SYN
@@ -360,6 +360,19 @@ assert_eq "" "$(awk '/^SMART_TLS="/{f=1} f{print} f && /"$/ && !/^SMART_TLS="/{f
 assert_not_contains "$(grep '^#@bench-tls' "$REPO_DIR/strategies/smart.conf")" ",35," "and out of the benchmark"
 assert_eq "" "$(grep -o 'slot=tls[a-z_0-9]*:pass=14:base=[^ ]*' "$REPO_DIR/strategies/smart.conf" | grep -v ':pri=8,55,57,15,23,39,58$')" "every TLS slot tries the best of the MTS benchmark first, the new V13 right after the leaders"
 assert_contains "$(grep 'slot=google:' "$REPO_DIR/strategies/smart.conf")" ":first=21:pri=52,43,44,45,15,50,6,55,51,53,54,56" "Google: by the MTS learning of 15.11 — 21 starts, 52 (the only one that opened googleapis.com) first, those that only failed there last"
+
+# 16.11: варианты Flowseal умного режима — из пакета Flowseal 1.10.4 (nfqws-menu,
+# @Nare51), заменили прежние переводы под теми же номерами, а не встали рядом
+SC="$REPO_DIR/strategies/smart.conf"
+assert_contains "$(grep -A30 '^NFQWS_BASE_ARGS=' "$SC")" "flowseal-compat.lua" "Flowseal altorder=1 is loaded"
+assert_contains "$(grep 'strategy=20$' "$SC" | head -n 2 | tail -n 1)" "flowseal_hostfakesplit_alt1" "alt3 (TLS 20): host parts in the altorder=1 order, as in Flowseal 1.10.4"
+assert_contains "$(grep 'strategy=26$' "$SC" | sed -n 3p)" "multidisorder_legacy:pos=1,midsld" "FAKE TLS AUTO (TLS 26): multidisorder_legacy, as in the pack"
+assert_eq "" "$(grep -E 'multidisorder:pos=1,midsld:strategy=26$|hostfakesplit:host=ya.ru:tcp_ts=-600000:tcp_ts_up:strategy=20$' "$SC")" "the old recipes of those numbers are gone, not kept alongside"
+assert_eq "" "$(grep -E 'http_methodeol:badsum:strategy=(1[89]|2[0-9]|3[0-3])$' "$SC")" "HTTP of the Flowseal variants is Flowseal's own, not the generic methodeol"
+assert_contains "$(grep 'strategy=8$' "$SC" | grep 'fakedsplit:ip_id=zero')" "pattern=0x00" "alt: Google (Google 8) — ip_id=zero, as in the pack"
+assert_eq 1 "$(grep -c '^ *--lua-desync=.*:strategy=19$' "$SC" | awk '{print ($1 >= 1)}')" "and every replaced number still has its variant"
+assert_contains "$(head -n 12 "$REPO_DIR/strategies/alt.conf")" "Flowseal 1.10.4" "the Flowseal strategies themselves come from the 1.10.4 pack"
+assert_not_contains "$(cat "$REPO_DIR/strategies/alt.conf" | grep -v '^#')" "rkn.list" "without the router-only lists"
 
 section "the active strategy says whether smart mode is on"
 ctl get-strategy

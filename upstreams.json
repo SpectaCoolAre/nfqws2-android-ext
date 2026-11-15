@@ -1,6 +1,6 @@
 {
   "about": "Что взято из чужих проектов и до какой версии. Обновляется при каждом переносе изменений; читает модуль «трекер обновлений» (extras/update-tracker).",
-  "updated": "2026-11-15",
+  "updated": "2026-11-16",
   "module": "nfqws2-android-ext v2.4.0",
   "projects": [
     {
@@ -21,10 +21,10 @@
       "branch": "main",
       "path": "strategies",
       "track": "commits",
-      "ref": "b97fbcc79f6c5fe84af2cb21b321ab4e49ad7287",
-      "label": "b97fbcc",
-      "date": "2026-11-15T00:56:44+00:00",
-      "use": "Все стратегии (с IPv6 и без fastpath), списки lists/, блобы, hosts (пресет «nfqws-menu»); 11.11 — профиль hardcorp74 для wide-youtube.l.google.com (92685de); 12.11 — его профиль googlevideo.com: одиночный fake и multidisorder (fced8d1); Antiscan и warpscout — для роутеров, не берём; 13.11 — hardcorp74 #1, #2, HTTP, wide-youtube и хостинги по AS в новой редакции (b84df16, 5f22067): стратегия обновлена, в умном режиме — новыми вариантами TLS 55–56 и Google 50 рядом с прежними; его профиль googlevideo.com автор убрал; до 15.11 стратегии не менялись — только меню, awg, tgws-rs"
+      "ref": "ff286e4fec009d40623ab4e9420f68f580394a4c",
+      "label": "ff286e4",
+      "date": "2026-11-15T22:29:57+00:00",
+      "use": "Все стратегии (с IPv6 и без fastpath), списки lists/, блобы, hosts (пресет «nfqws-menu»); 11.11 — профиль hardcorp74 для wide-youtube.l.google.com (92685de); 12.11 — его профиль googlevideo.com: одиночный fake и multidisorder (fced8d1); Antiscan и warpscout — для роутеров, не берём; 13.11 — hardcorp74 #1, #2, HTTP, wide-youtube и хостинги по AS в новой редакции (b84df16, 5f22067): стратегия обновлена, в умном режиме — новыми вариантами TLS 55–56 и Google 50 рядом с прежними; его профиль googlevideo.com автор убрал; до 15.11 стратегии не менялись — только меню, awg, tgws-rs; 15.11 — пакет Flowseal 1.10.4 (@Nare51, ccce618): все alt, exp, FAKE TLS AUTO, SIMPLE FAKE и новая general — заменили прежние, в умном режиме варианты Flowseal (TLS 11–13, 18–33, Google 3–5, 8–20) — теми же номерами; lua/flowseal-compat.lua, блобы legacy_*"
     },
     {
       "id": "zapret-manager",
