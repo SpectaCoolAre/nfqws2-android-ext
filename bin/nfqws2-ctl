@@ -2014,12 +2014,21 @@ cmd_smart_import_b64() { # <base64 файла> -> число добавленн�
 #   connect tls ttfb total байт   (время — в секундах, как у curl)
 BENCH_W=6
 BENCH_TOP=8
+BENCH_UA='Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36'
+# DNS для helper — тот же, что у приложений: DNS модуля, если он перехватывает,
+# иначе DNS сети
+bench_dns() {
+  local a out=""
+  if dns_pid >/dev/null 2>&1 && dns_rules_ok 2>/dev/null; then echo "127.0.0.1:$(dns_port_now)"; return 0; fi
+  for a in $(dns_net_servers | tr ',' ' '); do out="$out${out:+,}$(dns_addr_port "$a")"; done
+  echo "${out:-77.88.8.8:53}"
+}
 # Одна попытка: <исполнитель> <сайт> <вариант> <этап>
 bench_one() {
   local w="$1" h="$2" v="$3" st="$4" out rc cls code tc ta tt tot=0 sz t0 t1 jar url hop=0 red rh ip
   # с временем: запись оборвавшегося замера через минуту перестаёт действовать
   printf '%s %s %s\n' "$h" "$v" "$(date +%s)" > "$STATE_DIR/smart_bench.$w"
-  if [ "$BENCH_KIND" = curl ]; then
+  if [ "$BENCH_KIND" = curl ] || [ "$BENCH_KIND" = helper ]; then
     jar="$BENCH_DIR/ck.$w"; rm -f "$jar"
     url="https://$BENCH_URL/"
     # переадресации — вручную и только в пределах сайта: соединение к другому
@@ -2027,11 +2036,17 @@ bench_one() {
     # выученном, и его удача — не удача варианта. Ответ сервера переадресацией
     # уже значит, что DPI соединение пропустил
     while :; do
-      out=$("$BENCH_BIN" -s -k --connect-timeout 5 -m 10 -o "$BENCH_DIR/body.$w" -A 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36' \
-        -b "$jar" -c "$jar" -w '%{http_code} %{time_connect} %{time_appconnect} %{time_starttransfer} %{time_total} %{size_download} %{remote_ip} %{redirect_url}' \
-        "$url" 2>/dev/null </dev/null); rc=$?
+      if [ "$BENCH_KIND" = curl ]; then
+        out=$("$BENCH_BIN" -s -k --connect-timeout 5 -m 10 -o "$BENCH_DIR/body.$w" -A "$BENCH_UA" \
+          -b "$jar" -c "$jar" -w '%{http_code} %{time_connect} %{time_appconnect} %{time_starttransfer} %{time_total} %{size_download} %{remote_ip} %{redirect_url}' \
+          "$url" 2>/dev/null </dev/null); rc=$?
+      else
+        # без curl (Pixel): helper — те же поля и коды, что у curl (helper/fetch.go)
+        out=$("$BENCH_BIN" -fetch "$url" -resolve "$BENCH_DNS" -o "$BENCH_DIR/body.$w" -ua "$BENCH_UA" 2>/dev/null </dev/null); rc=$?
+      fi
       set -f; set -- $out; set +f
       code=${1:-000} tc=${2:-0} ta=${3:-0} tt=${4:-0} sz=${6:-0} ip=${7:-} red=${8:-}
+      [ "$ip" = - ] && ip=""; [ "$red" = - ] && red=""
       tot=$(awk -v a="$tot" -v b="${5:-0}" 'BEGIN { printf "%.6f", a + b }')
       [ "$rc" = 0 ] && [ -n "$red" ] && [ "$hop" -lt 3 ] || break
       # заглушка провайдера или РКН (как в «Проверке доступности»)
@@ -2063,9 +2078,9 @@ bench_one() {
     52|56) cls=reset ;;
     6) cls=dns ;;
     7) cls=refused ;;
-    *) [ "$BENCH_KIND" = curl ] && cls="err$rc" || cls=fail ;;
+    *) [ "$BENCH_KIND" != wget ] && cls="err$rc" || cls=fail ;;
   esac
-  [ "$cls" = ok ] && [ "$code" = 000 ] && [ "$BENCH_KIND" = curl ] && cls=noanswer
+  [ "$cls" = ok ] && [ "$code" = 000 ] && [ "$BENCH_KIND" != wget ] && cls=noanswer
   # вместо сайта — страница-заглушка провайдера: это не удача
   [ "$cls" = ok ] && is_block_notice "$BENCH_DIR/body.$w" && cls=isp_redir
   rm -f "$BENCH_DIR/body.$w"
@@ -2079,7 +2094,11 @@ bench_tcp() {
   local ip="$1" u tc
   [ -n "$ip" ] || return 1
   case "$ip" in *:*) u="http://[$ip]:443/" ;; *) u="http://$ip:443/" ;; esac
-  tc=$("$BENCH_BIN" -s -o /dev/null --connect-timeout 3 -m 4 -w '%{time_connect}' "$u" 2>/dev/null </dev/null)
+  if [ "$BENCH_KIND" = helper ]; then
+    tc=$("$BENCH_BIN" -fetch "$u" 2>/dev/null </dev/null | cut -d' ' -f2)
+  else
+    tc=$("$BENCH_BIN" -s -o /dev/null --connect-timeout 3 -m 4 -w '%{time_connect}' "$u" 2>/dev/null </dev/null)
+  fi
   [ -n "$(printf '%s' "${tc:-0}" | tr -d '0.')" ]
 }
 # Имена, под которыми сайт бывает в списках: сам домен, www. и записи списков,
@@ -2237,6 +2256,12 @@ cmd_smart_bench_run() {
   local net f tool all
   net=$(cat "$SMART_NET_FILE" 2>/dev/null); f="$SMART_DIR/$net.tsv"
   tool=$(probe_tool); BENCH_KIND="${tool%% *}"; BENCH_BIN="${tool#* }"
+  # без curl — helper, а не wget busybox: тот не отдаёт ни времени TLS и
+  # ответа, ни причины неудачи, а его TLS с частью сайтов не договаривается при
+  # любом варианте (Pixel, 14.11: 0 мс и одинаковые 3 из 7 у всех)
+  if { [ "$BENCH_KIND" != curl ] || [ "${NFQWS_BENCH_TOOL:-}" = helper ]; } && [ -x "$HELPER_BIN" ]; then
+    BENCH_KIND=helper BENCH_BIN="$HELPER_BIN" BENCH_DNS=$(bench_dns)
+  fi
   echo $$ > "$BENCH_DIR/pid"
   printf 'net=%s\nstart=%s\nstage=1\ntool=%s\n' "$net" "$(date +%s)" "$BENCH_KIND" > "$BENCH_DIR/info"
   awk -F'\t' '!/^#/ && $2 ~ /\./ && !s[$2]++ { print $2 }' "$f" > "$BENCH_DIR/hosts"
@@ -2397,7 +2422,7 @@ cmd_smart_bench() {
       bench_running && { echo "$(M 'Замер уже идёт' 'Benchmark is already running')" >&2; exit 1; }
       is_running && [ "$(get_current_strategy)" = smart ] || { echo "$(M 'Нужен работающий умный режим' 'Smart mode must be running')" >&2; exit 1; }
       [ "$(cat "$SMART_NET_FILE" 2>/dev/null)" = offline ] && { echo "$(M 'Нет сети' 'No network')" >&2; exit 1; }
-      [ "$(probe_tool | cut -d' ' -f1)" = none ] && { echo "$(M 'Нет curl или wget' 'No curl or wget')" >&2; exit 1; }
+      [ "$(probe_tool | cut -d' ' -f1)" = none ] && [ ! -x "$HELPER_BIN" ] && { echo "$(M 'Нет curl или wget' 'No curl or wget')" >&2; exit 1; }
       [ -s "$SMART_DIR/$(cat "$SMART_NET_FILE" 2>/dev/null).tsv" ] || { echo "$(M 'В этой сети ещё ничего не выучено' 'Nothing learned on this network yet')" >&2; exit 1; }
       rm -rf "$BENCH_DIR"; mkdir -p "$BENCH_DIR"
       ( setsid sh "$0" smart-bench run >/dev/null 2>&1 & ) 2>/dev/null || ( sh "$0" smart-bench run >/dev/null 2>&1 & )

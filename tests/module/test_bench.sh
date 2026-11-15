@@ -218,4 +218,37 @@ assert_contains "$ctl_out" '"smart_pool":1' "and the WebUI sees it"
 ctl set SMART_POOL 0
 assert_no_file "$SMART_POOL_FILE" "off"
 
+section "without curl (Pixel): the helper measures like curl"
+# 14.11, Pixel: curl нет, замер шёл через wget busybox — 0 мс, без классов
+# ошибок, одинаковые итоги у всех вариантов. Теперь — nfqws2-helper -fetch с теми
+# же полями и кодами, что у curl (заглушка ниже переводит в заглушку curl)
+ctl smart-bench stop
+rm -rf "$BENCH_DIR"; mkdir -p "$BENCH_DIR"; rm -f "$STATE_DIR/late.n" "$STATE_DIR/pen.last" "$STATE_DIR/pen.block"
+ctl smart-bench run
+cp -f "$res" "$SANDBOX/res.curl"
+mv "$MODDIR/bin/nfqws2-helper" "$SANDBOX/helper.real" 2>/dev/null
+cat > "$MODDIR/bin/nfqws2-helper" <<X
+#!/bin/sh
+u=""; o=/dev/null
+while [ \$# -gt 0 ]; do case "\$1" in -fetch) u="\$2"; shift 2 ;; -o) o="\$2"; shift 2 ;; *) shift 2 ;; esac; done
+echo "\$u" >> "$STATE_DIR/helper.urls"
+out=\$("$MOCKBIN/curl" -o "\$o" "\$u"); rc=\$?
+set -- \$out
+case "\$u" in http://*) echo "000 \${1:-0} 0 0 0 0 - -"; exit \$rc ;; esac
+echo "\$1 \$2 \$3 \$4 \$5 \$6 \${7:--} \${8:--}"; exit \$rc
+X
+chmod 0755 "$MODDIR/bin/nfqws2-helper"
+rm -f "$STATE_DIR/late.n" "$STATE_DIR/pen.last" "$STATE_DIR/pen.block" "$SMART_BENCH_FILE"
+rm -rf "$BENCH_DIR"; mkdir -p "$BENCH_DIR"
+NFQWS_BENCH_TOOL=helper; export NFQWS_BENCH_TOOL
+ctl smart-bench run
+unset NFQWS_BENCH_TOOL
+assert_rc 0 "$ctl_rc" "a run without curl finishes"
+assert_contains "$(cat "$BENCH_DIR/info")" "tool=helper" "on the helper, not on wget"
+assert_contains "$(head -n 3 "$STATE_DIR/helper.urls")" "https://" "the helper fetches the sites"
+assert_eq "$(awk -F'\t' '$1 == 1 && $2 != "pen.example" { print $2, $4, $5 }' "$SANDBOX/res.curl" | sort)" "$(awk -F'\t' '$1 == 1 && $2 != "pen.example" { print $2, $4, $5 }' "$res" | sort)" "and gets the same verdicts as curl (16 KB, TLS, no connection, dropped ClientHello, redirects)"
+assert_eq "0.120" "$(awk -F'\t' '$1 == 1 && $2 == "blocked.example" && $4 == 2 { print $8 }' "$res")" "with the TLS time (wget gave 0)"
+mv "$SANDBOX/helper.real" "$MODDIR/bin/nfqws2-helper" 2>/dev/null
+cp -f "$SANDBOX/res.curl" "$res"
+
 harness_finish

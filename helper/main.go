@@ -5,6 +5,7 @@
 //	nfqws2-helper -alarm 5m -run "sh /путь/service.sh push_beat"
 //	nfqws2-helper -probe 127.0.0.1:15353[,127.0.0.1:15356]
 //	nfqws2-helper -sniprobe youtube.com -ip 142.250.74.14
+//	nfqws2-helper -fetch https://youtube.com/ -resolve 127.0.0.1:15353 [-o тело] [-ua …]
 //	nfqws2-helper -ttltrace -ip 142.250.74.14 -blocked quic_youtube.bin -open quic_google.bin
 //	nfqws2-helper -geoscan dns.comss.one,… -samples @geoblock.list -boot 213.87.142.94:53 [-asncache файл] [-shared файл] [-groups файл]
 package main
@@ -40,6 +41,10 @@ func main() {
 	boot := flag.String("boot", "", "DNS сети (адрес:53) для -geoscan: эталон ответов и адреса серверов")
 	groups := flag.String("groups", "", "-geoscan: файл групп сайтов — их доменам все кандидаты (см. planRoutes)")
 	ask := flag.String("ask", "", "сервер обхода (имя, имя/путь): что он отвечает на домены -samples (с -boot); строка «домен<TAB>адреса»")
+	fetchURL := flag.String("fetch", "", "одна попытка HTTPS для отладочного замера без curl: время и код как у curl (см. fetch.go)")
+	fetchDNS := flag.String("resolve", "", "-fetch: DNS (адрес:порт через запятую), как у приложений")
+	fetchUA := flag.String("ua", "", "-fetch: User-Agent")
+	fetchOut := flag.String("o", "", "-fetch: файл для тела ответа (начало)")
 	ref := flag.String("ref", "", "-geoscan: честные DNS для эталона ответов через запятую (адрес:53 или https://имя); DNS сети — запасной")
 	flag.Parse()
 	log.SetFlags(log.Ldate | log.Ltime)
@@ -67,6 +72,8 @@ func main() {
 		if bad {
 			os.Exit(1)
 		}
+	case *fetchURL != "":
+		runFetch(*fetchURL, *fetchDNS, *fetchUA, *fetchOut)
 	case *ttl:
 		runTTLTrace(*sniIP, *qBlocked, *qOpen, *wait)
 	case *sni != "":
