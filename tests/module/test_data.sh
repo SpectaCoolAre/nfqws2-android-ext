@@ -58,6 +58,11 @@ if [ "$(cat $files | od -An -c | grep -c '\\r')" != "0" ]; then
 fi
 assert_eq "" "$(printf '%s' "$crlf" | sed 's/^ *//')" \
   "every text file is LF-only ($nfiles files checked)"
+# …а блобы — байты пакетов как есть (16.11): HTTP-фейк Flowseal без нулевых
+# байтов git считал текстом и превращал его CRLF в LF — запрос портился.
+# .gitattributes: *.bin binary
+assert_contains "$(od -An -c "$REPO_DIR/blobs/legacy_default_http.bin" | head -n 1)" '\r  \n' "the HTTP fake blob keeps its CRLF line ends"
+assert_contains "$(cat "$REPO_DIR/.gitattributes")" "*.bin binary" "blobs are binary for git"
 
 # POSIX text files end with a newline. Without one, anything appended to the file
 # lands on the last line: `echo x >> conf` would produce `LOG_LEVEL=0x`. 26 of
