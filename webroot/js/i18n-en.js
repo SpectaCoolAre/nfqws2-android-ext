@@ -877,7 +877,7 @@ EN = {
  "Записи обхода": "Bypass entries",
  "Записей: {0}": "Entries: {0}",
  "Загрузить пресет": "Load a preset",
- "GeoHide или dns.malw.link — заменит записи обхода": "GeoHide or dns.malw.link — replaces the bypass entries",
+ "Готовый список — заменит записи обхода": "A ready list — replaces the bypass entries",
  "Заблокировано доменов": "Blocked domains",
  "Свои домены": "Own domains",
  "Доменов: {0}": "Domains: {0}",

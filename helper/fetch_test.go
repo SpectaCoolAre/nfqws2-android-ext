@@ -92,3 +92,37 @@ func TestFetchTLSHang(t *testing.T) {
 		t.Fatalf("hang in TLS (DPI ate the ClientHello): %+v", r)
 	}
 }
+
+func TestFetchFollowAndPin(t *testing.T) {
+	n := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			// кука ставится переадресацией на себя, как у защиты от ботов
+			if _, err := r.Cookie("ok"); err != nil {
+				http.SetCookie(w, &http.Cookie{Name: "ok", Value: "1", Path: "/"})
+				http.Redirect(w, r, "/", http.StatusFound)
+				return
+			}
+			w.Write([]byte("page"))
+		case "/loop":
+			n++
+			http.Redirect(w, r, "/loop", http.StatusFound)
+		}
+	}))
+	defer srv.Close()
+	r := fetchWith(srv.URL+"/", nil, "", "", fetchOpt{follow: 5})
+	if r.rc != 0 || r.code != 200 || r.size != 4 {
+		t.Fatalf("follow with a cookie: %+v", r)
+	}
+	r = fetchWith(srv.URL+"/loop", nil, "", "", fetchOpt{follow: 5})
+	if r.rc != 47 || r.redirect == "" {
+		t.Fatalf("too many redirects: %+v", r)
+	}
+	// pin: имя в адресе, подключение — к заданному адресу
+	u := strings.Replace(srv.URL, "127.0.0.1", "pinned.example", 1)
+	r = fetchWith(u+"/", nil, "", "", fetchOpt{follow: 5, pin: "127.0.0.1"})
+	if r.rc != 0 || r.code != 200 || r.ip != "127.0.0.1" {
+		t.Fatalf("pinned address: %+v", r)
+	}
+}

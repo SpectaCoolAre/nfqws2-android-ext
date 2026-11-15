@@ -131,6 +131,7 @@ hosts_init() {
   [ -f "$HOSTS_WHITELIST" ] || printf '# Домены, которые не блокировать, даже если они есть в источниках\n' > "$HOSTS_WHITELIST"
   [ -f "$HOSTS_SOURCES" ] || : > "$HOSTS_SOURCES"
   hosts_migrate
+  hosts_drop_removed
   [ -s "$HOSTS_BYPASS" ] && [ -f "$HOSTS_BLOCK_CUSTOM" ] && return 0
   local first=0
   [ -f "$HOSTS_BYPASS" ] || first=1
@@ -154,6 +155,28 @@ hosts_migrate() {
     echo "$src"
   done > "$HOSTS_SOURCES.tmp"
   mv -f "$HOSTS_SOURCES.tmp" "$HOSTS_SOURCES"
+}
+# Пресеты, убранные из модуля (15.11: GeoHide — RU-узлы заблокированы, автор
+# закрывает сервис; dns.malw.link — адреса прокси блокирует РКН, с МТС не
+# отвечает): их записи обхода вели бы на мёртвые адреса. Загруженный пресет
+# обхода — записи по умолчанию вместо его, источник блокировки — прочь. Записи,
+# поправленные руками (пресет уже забыт), не трогаем. Было что убрать —
+# отметка hosts.rebuild: подключённый hosts пересоберётся (hosts_boot, WebUI)
+HOSTS_REMOVED_PRESETS="geohide malw"
+hosts_drop_removed() {
+  local id ch=0
+  for id in $HOSTS_REMOVED_PRESETS; do
+    if [ "$(cat "$HOSTS_BYPASS_PRESET" 2>/dev/null)" = "$id" ]; then
+      { printf '# Обход ограничений: IP и домен, по одной записи на строку\n'; cat "$HOSTS_DEFAULT_BYPASS" 2>/dev/null; } > "$HOSTS_BYPASS"
+      rm -f "$HOSTS_BYPASS_PRESET"; ch=1
+    fi
+    if grep -qx "preset:$id" "$HOSTS_SOURCES" 2>/dev/null; then
+      grep -vx "preset:$id" "$HOSTS_SOURCES" > "$HOSTS_SOURCES.tmp"; mv -f "$HOSTS_SOURCES.tmp" "$HOSTS_SOURCES"; ch=1
+    fi
+    [ -f "$HOSTS_CACHE/$id.txt" ] && { rm -f "$HOSTS_CACHE/$id.txt"; ch=1; }
+  done
+  [ "$ch" = 1 ] && { rm -f "$HOSTS_BLOCK"; : > "$HOSTS_DIR/hosts.rebuild"; }
+  return 0
 }
 # Откуда брать текущий hosts: наш файл, если он подключён, иначе системный
 hosts_current() { if hosts_enabled && [ -s "$HOSTS_FILE" ]; then echo "$HOSTS_FILE"; else echo "$HOSTS_TARGET"; fi; }
@@ -336,7 +359,13 @@ hosts_umount() {
   if hosts_mounted; then return 1; fi
   hosts_flush_dns
 }
-hosts_boot() { hosts_enabled && hosts_mount; return 0; }
+hosts_boot() {
+  hosts_enabled || return 0
+  # убранные пресеты (hosts_drop_removed) — собрать hosts без их записей
+  hosts_init
+  if [ -f "$HOSTS_DIR/hosts.rebuild" ]; then rm -f "$HOSTS_DIR/hosts.rebuild"; hosts_write; fi
+  hosts_mount; return 0
+}
 
 # Обновить источники блокировки; строка на каждый: S <источник> <ok N|fail>
 hosts_update() {
@@ -381,6 +410,7 @@ hosts_bypass_preset() { # <id>
 hosts_state() {
   local f id c
   hosts_init
+  if [ -f "$HOSTS_DIR/hosts.rebuild" ] && hosts_enabled; then rm -f "$HOSTS_DIR/hosts.rebuild"; hosts_write; fi
   echo "#status"
   echo "enabled=$(hosts_enabled && echo 1 || echo 0)"
   echo "mounted=$(hosts_mounted && echo 1 || echo 0)"

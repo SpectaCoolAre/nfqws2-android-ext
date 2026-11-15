@@ -138,6 +138,17 @@ set_defaults() {
   : "${PUSH_FIX:=0}"
 }
 
+# Старше ли файл (каталог) <секунд>. По stat -c %Y, а не find -mmin: find из
+# busybox округляет возраст вниз (замок 90 с для него — «1 минута», не
+# «больше минуты»), toybox и GNU — нет, и один и тот же замок снимался на
+# разных телефонах через разное время. Нет stat -c — find
+older_than() { # <путь> <секунд>
+  local m now
+  m=$(stat -c %Y "$1" 2>/dev/null)
+  case "$m" in ''|*[!0-9]*) [ -n "$(find "$1" -maxdepth 0 -mmin +$(( $2 / 60 )) 2>/dev/null)" ]; return ;; esac
+  now=$(date +%s)
+  [ $(( now - m )) -gt "$2" ]
+}
 log_msg() {
   local line="[$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)] $*"
   echo "$line"

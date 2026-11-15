@@ -67,7 +67,7 @@ function renderHosts(){
   setHTML('hosts-bypass',
     settingsRow({icon: 'edit', title: 'Записи обхода',
       sub: t('Записей: {0}', fmt(s.bypass)) + (bp ? ' · ' + bp.name : ''), on: "editHostsFile('bypass')", chevron: true}) +
-    settingsRow({icon: 'download', title: 'Загрузить пресет', sub: t('GeoHide или dns.malw.link — заменит записи обхода'),
+    settingsRow({icon: 'download', title: 'Загрузить пресет', sub: t('Готовый список — заменит записи обхода'),
       on: 'hostsBypassMenu(this)', menu: true}) +
     hostsFileRow('bypass.txt'), false);
 

@@ -13,6 +13,11 @@ REPO_DIR=$(cd "$TESTS_DIR/.." && pwd)
 
 sandbox_init
 load_common
+# пресеты для проверки логики — свои: «смешанный» (обход и блокировка в одном
+# файле, как был dns.malw.link) и «только обход» (как был GeoHide). Настоящие
+# GeoHide и malw убраны из модуля 15.11
+printf 'NAME=Mixed\nDESC=обход и реклама\nBLOCK_DESC=рекламная часть\nURL=https://raw.githubusercontent.com/test/mixed/master/hosts\nBYPASS=1\nBLOCK=1\n' > "$MODDIR/defaults/hosts-presets/tmixed.conf"
+printf 'NAME=Bypass only\nDESC=только обход\nURL=https://example.org/bypass/hosts\nBYPASS=1\n' > "$MODDIR/defaults/hosts-presets/tbypass.conf"
 conf_reset
 HOSTS_MODULES_DIR="$SANDBOX/modules"; export HOSTS_MODULES_DIR
 mkdir -p "$HOSTS_MODULES_DIR" "$MOCK_DIR/web"
@@ -79,19 +84,19 @@ ctl hosts-block-add "#"
 assert_rc 1 "$ctl_rc" "an empty batch is refused"
 
 section "bypass presets: one at a time"
-printf '1.1.1.1 chatgpt.com\n1.1.1.2 api.chatgpt.com # comment\n0.0.0.0 junk.malw.example\nnot a line\n' > "$WEB/raw.githubusercontent.com_ImMALWARE_dns.malw.link_master_hosts"
-printf '2.2.2.2 youtube.com\n' > "$WEB/raw.githubusercontent.com_Internet-Helper_GeoHideDNS_main_hosts_eu_hosts"
-ctl hosts-bypass-preset malw
-assert_rc 0 "$ctl_rc" "dns.malw.link is loaded into the bypass"
+printf '1.1.1.1 chatgpt.com\n1.1.1.2 api.chatgpt.com # comment\n0.0.0.0 junk.malw.example\nnot a line\n' > "$WEB/raw.githubusercontent.com_test_mixed_master_hosts"
+printf '2.2.2.2 youtube.com\n' > "$WEB/example.org_bypass_hosts"
+ctl hosts-bypass-preset tmixed
+assert_rc 0 "$ctl_rc" "a mixed preset is loaded into the bypass"
 b=$(cat "$H/bypass.txt")
 assert_contains "$b" "1.1.1.2 api.chatgpt.com" "with its bypass entries"
 assert_not_contains "$b" "junk.malw.example" "but not its ad entries"
 assert_not_contains "$b" "9.9.9.9" "it replaces the previous bypass"
 assert_not_contains "$(cat "$HOSTS_TARGET")" "not a line" "garbage lines are dropped"
 ctl hosts-state
-assert_contains "$ctl_out" "bypass_preset=malw" "the state names the loaded preset"
-ctl hosts-bypass-preset geohide
-assert_rc 0 "$ctl_rc" "GeoHide replaces it"
+assert_contains "$ctl_out" "bypass_preset=tmixed" "the state names the loaded preset"
+ctl hosts-bypass-preset tbypass
+assert_rc 0 "$ctl_rc" "another bypass preset replaces it"
 assert_contains "$(cat "$H/bypass.txt")" "2.2.2.2 youtube.com" "with its entries"
 assert_not_contains "$(cat "$H/bypass.txt")" "chatgpt.com" "and nothing of the other preset"
 ctl hosts-bypass-preset adaway
@@ -99,14 +104,14 @@ assert_rc 1 "$ctl_rc" "a block-only preset is not a bypass"
 ctl hosts-save-b64 bypass "$(b64 '9.9.9.9 new.example')"
 ctl hosts-state
 assert_contains "$ctl_out" "bypass_preset=" "editing the bypass by hand forgets the preset"
-assert_not_contains "$ctl_out" "bypass_preset=geohide" "for good"
+assert_not_contains "$ctl_out" "bypass_preset=tbypass" "for good"
 
 # raw.githubusercontent.com недоступен — пресет берётся с зеркала jsDelivr
-mv "$WEB/raw.githubusercontent.com_ImMALWARE_dns.malw.link_master_hosts" "$WEB/cdn.jsdelivr.net_gh_ImMALWARE_dns.malw.link@master_hosts"
-ctl hosts-bypass-preset malw
+mv "$WEB/raw.githubusercontent.com_test_mixed_master_hosts" "$WEB/cdn.jsdelivr.net_gh_test_mixed@master_hosts"
+ctl hosts-bypass-preset tmixed
 assert_rc 0 "$ctl_rc" "a preset on raw.githubusercontent.com comes from the jsDelivr mirror"
 assert_contains "$(cat "$H/bypass.txt")" "1.1.1.2 api.chatgpt.com" "with the same entries"
-mv "$WEB/cdn.jsdelivr.net_gh_ImMALWARE_dns.malw.link@master_hosts" "$WEB/raw.githubusercontent.com_ImMALWARE_dns.malw.link_master_hosts"
+mv "$WEB/cdn.jsdelivr.net_gh_test_mixed@master_hosts" "$WEB/raw.githubusercontent.com_test_mixed_master_hosts"
 ctl hosts-save-b64 bypass "$(b64 '9.9.9.9 new.example')"
 
 section "ad blocking sources"
@@ -122,12 +127,12 @@ ctl hosts-save-b64 whitelist "$(b64 'ads.example')"
 h=$(cat "$HOSTS_TARGET")
 assert_not_contains "$h" "ads.example" "the whitelist removes a domain and its subdomains"
 assert_contains "$h" "keep.example" "other entries stay"
-ctl hosts-preset malw 1
-assert_rc 0 "$ctl_rc" "the ad part of dns.malw.link is a block source"
+ctl hosts-preset tmixed 1
+assert_rc 0 "$ctl_rc" "the ad part of a mixed preset is a block source"
 h=$(cat "$HOSTS_TARGET")
 assert_contains "$h" "0.0.0.0 junk.malw.example" "its ad entries are blocked"
 assert_not_contains "$h" "chatgpt.com" "its bypass entries stay out of the block part"
-ctl hosts-preset geohide 1
+ctl hosts-preset tbypass 1
 assert_rc 1 "$ctl_rc" "a bypass-only preset is not a block source"
 ctl hosts-state
 assert_match "$ctl_out" "blocked=[1-9]" "the state counts blocked domains"
@@ -204,9 +209,25 @@ assert_eq "$orig" "$(cat "$HOSTS_TARGET")" "and the system hosts is back"
 ctl hosts-get block_custom
 assert_contains "$ctl_out" "hand.junk.example" "the parts are kept for next time"
 
+section "GeoHide and dns.malw.link are gone from the module"
+# 15.11: убраны (RU-узлы GeoHide заблокированы, адреса malw блокирует РКН) —
+# у кого их записи загружены, обход и источник блокировки чистятся
+assert_no_file "$REPO_DIR/defaults/hosts-presets/geohide.conf" "no GeoHide hosts preset"
+assert_no_file "$REPO_DIR/defaults/hosts-presets/malw.conf" "no dns.malw.link hosts preset"
+printf '# Обход ограничений: GeoHide\n6.6.6.6 dead.example\n' > "$H/bypass.txt"; printf 'geohide' > "$H/bypass_preset"
+printf 'preset:malw\npreset:adaway\n' > "$H/sources.txt"; printf '0.0.0.0 junk.malw.example\n' > "$H/cache/malw.txt"
+ctl hosts-state
+assert_not_contains "$(cat "$H/bypass.txt")" "dead.example" "the loaded GeoHide entries are dropped"
+assert_no_file "$H/bypass_preset" "and the preset is forgotten"
+assert_eq "preset:adaway" "$(cat "$H/sources.txt")" "dns.malw.link leaves the block sources"
+assert_no_file "$H/cache/malw.txt" "with its cache"
+printf '# свои\n7.7.7.7 mine.example\n' > "$H/bypass.txt"
+ctl hosts-state
+assert_contains "$(cat "$H/bypass.txt")" "mine.example" "entries edited by hand (the preset already forgotten) stay"
+
 section "the one-part format of earlier test builds is migrated"
 printf '1.1.1.1 old.example\n' > "$H/custom.txt"
-printf 'preset:geohide\npreset:adaway\n' > "$H/sources.txt"
+printf 'preset:tbypass\npreset:adaway\n' > "$H/sources.txt"
 printf '5.5.5.5 redirect.example\n' > "$H/cache/adaway.txt"
 ctl hosts-state
 assert_rc 0 "$ctl_rc" "the state still loads"

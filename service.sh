@@ -57,7 +57,7 @@ start() {
     return 0
   fi
   local lock="$STATE_DIR/start.lock" own=0 i=0 rc=0
-  [ -n "$(find "$lock" -maxdepth 0 -mmin +2 2>/dev/null)" ] && rmdir "$lock" 2>/dev/null
+  [ -d "$lock" ] && older_than "$lock" 120 && rmdir "$lock" 2>/dev/null
   while [ "$i" -lt 50 ]; do
     mkdir "$lock" 2>/dev/null && { own=1; break; }
     sleep 0.2; i=$((i + 1))
@@ -721,7 +721,7 @@ watchdog() {
 home_check() {
   # the lock dir keeps the two watchers from stop/starting twice; a lock older
   # than two minutes is residue from a killed process
-  [ -n "$(find "$STATE_DIR/home.lock" -maxdepth 0 -mmin +2 2>/dev/null)" ] && rmdir "$STATE_DIR/home.lock" 2>/dev/null
+  [ -d "$STATE_DIR/home.lock" ] && older_than "$STATE_DIR/home.lock" 120 && rmdir "$STATE_DIR/home.lock" 2>/dev/null
   mkdir "$STATE_DIR/home.lock" 2>/dev/null || return 0
   # Пауза — домашний Wi‑Fi (в файле SSID) или VPN (метка @vpn). Ручной запуск
   # оставляет то же значение в override: оно действует, пока причина не уйдёт.

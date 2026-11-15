@@ -398,7 +398,7 @@ dns_geo_scan() { # [full|hot]
   [ -x "$HELPER_BIN" ] && [ -f "$DNS_GEO_CAND" ] || return 1
   mkdir -p "$DNS_GEO_SCAN_DIR" "$DNS_RUN_DIR"
   # прошлая проверка оборвалась — её метка старше двух минут
-  [ -d "$lock" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +2 2>/dev/null)" ] && rmdir "$lock" 2>/dev/null
+  [ -d "$lock" ] && older_than "$lock" 120 && rmdir "$lock" 2>/dev/null
   mkdir "$lock" 2>/dev/null || return 3   # идёт другая проверка
   boot=$(dns_net_servers | tr ',' '\n' | awk '/^[0-9]+(\.[0-9]+)(\.[0-9]+)(\.[0-9]+)$/ { print; exit }')
   boot="${boot:-77.88.8.8}:53"
@@ -1027,7 +1027,7 @@ dns_lock() { # [0 — не ждать]
     # владелец жив, но держит дольше минуты — завис (11.11: запуск висел 11
     # минут, и все перезапуски, даже при смене сети, пропускались — dnsproxy
     # остался с DNS прежней сети). Запуск DNS занимает секунды: снимаем
-    if [ -n "$owner" ] && [ -n "$(find "$DNS_LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+    if [ -n "$owner" ] && older_than "$DNS_LOCK" 60; then
       dns_log "прежний запуск DNS (PID $owner) завис больше чем на минуту — снимаю его"
       kill -TERM "$owner" 2>/dev/null; sleep 0.3; [ -d "/proc/$owner" ] && kill -KILL "$owner" 2>/dev/null
       rm -rf "$DNS_LOCK"; continue
@@ -1868,7 +1868,7 @@ dns_apply_now() { # применить сейчас: dns_start сам решит
 dns_apply_bg() {
   local p="$DNS_RUN_DIR/apply.pending" l="$DNS_RUN_DIR/apply.lock"
   mkdir -p "$DNS_RUN_DIR"; : > "$p"
-  [ -n "$(find "$l" -maxdepth 0 -mmin +2 2>/dev/null)" ] && rmdir "$l" 2>/dev/null
+  [ -d "$l" ] && older_than "$l" 120 && rmdir "$l" 2>/dev/null
   mkdir "$l" 2>/dev/null || return 0
   # своя сессия (setsid): менеджер снимает группу процессов команды WebUI, как
   # только она ответила (см. dns_geo_scan_req)

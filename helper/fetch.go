@@ -24,6 +24,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptrace"
 	"net/url"
 	"os"
@@ -89,7 +90,20 @@ func isReset(err error) bool {
 		strings.Contains(err.Error(), "connection reset")
 }
 
+// fetchOpt — для проверки доступности (как curl -L --max-redirs N и --resolve):
+// follow — сколько переадресаций пройти (с куками, как у браузера: сайты с
+// защитой от ботов ставят куку переадресацией на себя), pin — адрес первого
+// узла вместо DNS (проверка без обхода идёт к тому же адресу)
+type fetchOpt struct {
+	follow int
+	pin    string
+}
+
 func fetch(raw string, servers []string, ua, bodyFile string) (r fetchResult) {
+	return fetchWith(raw, servers, ua, bodyFile, fetchOpt{})
+}
+
+func fetchWith(raw string, servers []string, ua, bodyFile string, o fetchOpt) (r fetchResult) {
 	start := time.Now()
 	since := func() float64 { return time.Since(start).Seconds() }
 	defer func() { r.tot = since() }()
@@ -103,24 +117,50 @@ func fetch(raw string, servers []string, ua, bodyFile string) (r fetchResult) {
 	if port == "" {
 		port = "443"
 	}
-	ip, err := fetchResolve(host, servers)
-	if err != nil {
-		r.rc = 6
-		return r
+	ip := o.pin
+	if ip == "" {
+		var err error
+		if ip, err = fetchResolve(host, servers); err != nil {
+			r.rc = 6
+			return r
+		}
 	}
 	r.ip = ip
 	ctx, cancel := context.WithTimeout(context.Background(), fetchTotalTO)
 	defer cancel()
+	// адрес — свой у каждого узла (переадресация бывает на другой домен)
+	dial := func(ctx context.Context, _, addr string) (net.Conn, error) {
+		h, p, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		a := ip
+		if h != host {
+			if a, err = fetchResolve(h, servers); err != nil {
+				return nil, &net.DNSError{Err: err.Error(), Name: h, IsNotFound: true}
+			}
+		}
+		d := net.Dialer{Timeout: fetchConnectTO}
+		return d.DialContext(ctx, "tcp", net.JoinHostPort(a, p))
+	}
+	_ = port
 	tr := &http.Transport{
-		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			d := net.Dialer{Timeout: fetchConnectTO}
-			return d.DialContext(ctx, "tcp", net.JoinHostPort(ip, port))
-		},
-		TLSClientConfig:   &tls.Config{ServerName: host, InsecureSkipVerify: true},
+		DialContext:       dial,
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
 		ForceAttemptHTTP2: true,
 		DisableKeepAlives: true,
 	}
-	cl := &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	jar, _ := cookiejar.New(nil)
+	cl := &http.Client{Transport: tr, Jar: jar, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) > o.follow {
+			if o.follow > 0 {
+				r.redirect = req.URL.String()
+				r.rc = 47 // как curl: переадресаций больше разрешённого
+			}
+			return http.ErrUseLastResponse
+		}
+		return nil
+	}}
 	// отметки времени пишут горутины транспорта (и после тайм-аута тоже) —
 	// атомарно, в наносекундах от начала
 	var atc, ata, att atomic.Int64
@@ -167,7 +207,7 @@ func fetch(raw string, servers []string, ua, bodyFile string) (r fetchResult) {
 	}
 	defer resp.Body.Close()
 	r.code = resp.StatusCode
-	if loc := resp.Header.Get("Location"); loc != "" && resp.StatusCode >= 300 && resp.StatusCode < 400 {
+	if loc := resp.Header.Get("Location"); o.follow == 0 && loc != "" && resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		if lu, err := u.Parse(loc); err == nil {
 			r.redirect = lu.String()
 		}
@@ -196,6 +236,9 @@ func fetch(raw string, servers []string, ua, bodyFile string) (r fetchResult) {
 		if err == io.EOF {
 			break
 		}
+		if r.rc == 47 {
+			break
+		}
 		if err != nil {
 			if isTimeout(err) {
 				r.rc = 28
@@ -208,8 +251,8 @@ func fetch(raw string, servers []string, ua, bodyFile string) (r fetchResult) {
 	return r
 }
 
-func runFetch(raw, resolvers, ua, bodyFile string) {
-	r := fetch(raw, splitList(resolvers), ua, bodyFile)
+func runFetch(raw, resolvers, ua, bodyFile string, follow int, pin string) {
+	r := fetchWith(raw, splitList(resolvers), ua, bodyFile, fetchOpt{follow: follow, pin: pin})
 	fmt.Println(r.line())
 	os.Exit(r.rc)
 }

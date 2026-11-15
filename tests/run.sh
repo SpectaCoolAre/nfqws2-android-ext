@@ -168,6 +168,20 @@ else
   queue_suite "module: service and firewall" sh "$HERE/module/test_service.sh"
 fi
 
+# Как на телефоне: утилиты busybox вместо GNU (см. README, «Like on a phone»),
+# и без curl, как на Pixel
+if command -v busybox >/dev/null 2>&1 && [ "${NFQWS_TEST_USERLAND:-}" != busybox ]; then
+  for t in data ctl dns hosts smart monet whitelist bench; do
+    [ "$t" = dns ] && [ ! -f "$REPO_DIR/lib/dns.sh" ] && continue
+    queue_suite "busybox userland: module/test_$t.sh" env NFQWS_TEST_USERLAND=busybox sh "$HERE/module/test_$t.sh"
+  done
+  for t in ctl bench; do
+    queue_suite "busybox userland, no curl (Pixel): module/test_$t.sh" env NFQWS_TEST_USERLAND=busybox NFQWS_TEST_CURL=0 sh "$HERE/module/test_$t.sh"
+  done
+else
+  queue_skip "busybox userland" "busybox is not installed"
+fi
+
 # ── webui ─────────────────────────────────────────────────────────────────────
 if [ -z "$NODE_BIN" ]; then
   queue_skip "webui: static invariants" "node not found"
@@ -208,6 +222,7 @@ else
     queue_suite "webui: HyperOS design (miuix)" "$NODE_BIN" "$HERE/webui/test_miuix.js"
     queue_suite "webui: uptime ticks evenly" "$NODE_BIN" "$HERE/webui/test_uptime.js"
     queue_suite "webui: easter egg game" "$NODE_BIN" "$HERE/webui/test_flappy.js"
+    queue_suite "webui: rotation recreates the window (KernelSU Next)" "$NODE_BIN" "$HERE/webui/test_rotate.js"
     queue_suite "webui: landscape layouts" "$NODE_BIN" "$HERE/webui/test_landscape.js"
     queue_suite "webui: landscape layouts (miuix)" env UI_DESIGN=miuix "$NODE_BIN" "$HERE/webui/test_landscape.js"
     queue_suite "webui: quick actions on tabs" "$NODE_BIN" "$HERE/webui/test_navquick.js"

@@ -989,7 +989,11 @@ cmd_backup_restore_b64() { # <base64 tar data> -> stdout: ui.json в base64 (е�
 # Здесь каждая попытка — новый процесс и новое TLS-соединение.
 probe_tool() {
   local b
-  if command -v curl >/dev/null 2>&1; then echo "curl $(command -v curl)"; return 0; fi
+  # NFQWS_PROBE_TOOL=helper — как без curl (тесты: curl есть в системе)
+  if [ "${NFQWS_PROBE_TOOL:-}" != helper ] && command -v curl >/dev/null 2>&1; then echo "curl $(command -v curl)"; return 0; fi
+  # без curl (Pixel) — helper модуля: времена и причины неудач как у curl, а не
+  # wget busybox (урезанный TLS, без причин)
+  [ -x "$HELPER_BIN" ] && [ "${NFQWS_PROBE_WGET:-0}" != 1 ] && { echo "helper $HELPER_BIN"; return 0; }
   for b in /data/adb/ksu/bin/busybox /data/adb/ap/bin/busybox /data/adb/magisk/busybox "$(command -v busybox 2>/dev/null)"; do
     [ -n "$b" ] && [ -x "$b" ] || continue
     "$b" wget --help 2>&1 | grep -q 'no-check-certificate' && { echo "wget $b"; return 0; }
@@ -1058,6 +1062,13 @@ probe_attempt() { # <вид> <путь к утилите> <host[/путь]>  -> 
         -b "$jar" -c "$jar" -w "\nREDIRECT_URL:%{redirect_url}\n" "$url" 2>&1); rc=$?
       rm -f "$jar"
     fi
+  elif [ "$kind" = helper ]; then
+    # как curl -L --max-redirs 5 (с куками) и --resolve: helper/fetch.go
+    local pinarg=""
+    [ -n "$PROBE_IP" ] && pinarg="-ip $PROBE_IP"
+    out=$($to "$bin" -fetch "$url" -follow 5 $pinarg -resolve "$(bench_dns)" -o "$body" -ua 'Mozilla/5.0' 2>/dev/null); rc=$?
+    [ "$rc" = 47 ] && out="$out
+REDIRECT_URL:$(printf '%s' "$out" | cut -d' ' -f8)"
   else
     out=$($to "$bin" wget -q -T 6 -O "$body" -U 'Mozilla/5.0' --no-check-certificate "$url" 2>&1); rc=$?
   fi
@@ -1077,7 +1088,21 @@ probe_attempt() { # <вид> <путь к утилите> <host[/путь]>  -> 
   if [ "$rc" = 0 ]; then echo "ok $(( (t1 - t0) * 10 ))"; return; fi
   # переадресаций больше пяти (сайт так и не принял куку) — но сервер отвечал
   # по HTTP раз за разом, значит, DPI соединение пропустил: сайт доступен
-  [ "$kind:$rc" = "curl:47" ] && { echo "ok $(( (t1 - t0) * 10 ))"; return; }
+  [ "$kind:$rc" = "curl:47" ] || [ "$kind:$rc" = "helper:47" ] && { echo "ok $(( (t1 - t0) * 10 ))"; return; }
+  # helper: причина — по коду и временам (поля как у curl -w), текста нет
+  if [ "$kind" = helper ]; then
+    case "$rc" in
+      35) echo "fail tls" ;;
+      52|56) echo "fail reset" ;;
+      28|124|143)
+        # не дошли до конца TLS — DPI уронил соединение или ClientHello
+        if [ -z "$(printf '%s' "$out" | cut -d' ' -f3 | tr -d '0.')" ]; then echo "fail drop"; else echo "fail timeout"; fi ;;
+      6) echo "fail dns_fail" ;;
+      7) echo "fail refused" ;;
+      *) echo "fail other" ;;
+    esac
+    return
+  fi
   case "$kind:$rc:$out" in
     wget:*"server returned error"*) echo "ok $(( (t1 - t0) * 10 ))" ;;
     curl:35:*)
@@ -1127,6 +1152,7 @@ probe_keepalive() { # <путь к curl> <host[/путь]>
     else print "ok" }'
 }
 
+probe_kind_of() { case "$1" in *nfqws2-helper) echo helper ;; *) echo curl ;; esac; }
 # Без обхода: тот же адрес, но мимо nfqws2 (RETURN первым правилом цепочки
 # для этого адреса от root). Открылся без обхода — сайт не заблокирован или
 # обход ему мешает; не открылся ни так, ни так — обход не помогает.
@@ -1136,7 +1162,7 @@ probe_nobypass() { # <путь к curl> <host[/путь]> <ip>
   is_running || { echo skip; return; }
   rule="-m owner --uid-owner 0 -d $ip -p tcp -j RETURN"
   iptables -w -t mangle -I $IPT_GROUP_POST 1 $rule 2>/dev/null || { echo skip; return; }
-  r=$(PROBE_IP="$ip" probe_attempt curl "$bin" "$2")
+  r=$(PROBE_IP="$ip" probe_attempt "$(probe_kind_of "$bin")" "$bin" "$2")
   iptables -w -t mangle -D $IPT_GROUP_POST $rule 2>/dev/null
   echo "$r"
 }
@@ -1250,11 +1276,11 @@ cmd_geo_ipcheck() { # [quick]
     [ -n "$(geo_ipcheck_quick_targets "$f" "$(date +%s)")" ] || return 0
   fi
   tool=$(probe_tool); bin="${tool#* }"
-  [ "${tool%% *}" = curl ] || { echo "Нужен curl" >&2; return 1; }
+  case "${tool%% *}" in curl|helper) ;; *) echo "Нужен curl или helper модуля" >&2; return 1 ;; esac
   # прерванная проверка (служба остановлена, телефон перезагружен) оставляла
   # метку навсегда, и все следующие молча отказывались: проверка идёт минуты,
   # метка старше 15 минут — от прерванной
-  [ -n "$(find "$STATE_DIR/geo-ipcheck.lock" -maxdepth 0 -mmin +15 2>/dev/null)" ] && rmdir "$STATE_DIR/geo-ipcheck.lock" 2>/dev/null
+  [ -d "$STATE_DIR/geo-ipcheck.lock" ] && older_than "$STATE_DIR/geo-ipcheck.lock" 900 && rmdir "$STATE_DIR/geo-ipcheck.lock" 2>/dev/null
   mkdir "$STATE_DIR/geo-ipcheck.lock" 2>/dev/null || { echo "Проверка адресов уже идёт" >&2; return 3; }
   trap 'rmdir "$STATE_DIR/geo-ipcheck.lock" 2>/dev/null; cleanup_probe_app_rule' EXIT INT TERM
   setup_probe_app_rule
@@ -1286,7 +1312,7 @@ cmd_geo_ipcheck() { # [quick]
   if [ -n "$added" ]; then reload_after_change >/dev/null 2>&1; sleep 2; fi
   awk -F'\t' '!/^#/' "$out.tmp" | while IFS="$(printf '\t')" read -r ip role srv dom nb cause via verdict; do
     if [ "$verdict" = listed ]; then
-      via=$(PROBE_IP="$ip" probe_attempt curl "$bin" "$dom")
+      via=$(PROBE_IP="$ip" probe_attempt "$(probe_kind_of "$bin")" "$bin" "$dom")
       case "$via" in ok*) verdict=bypass ;; *) verdict=nobypass ;; esac
       via=$(echo "$via" | tr ' ' '_')
     fi
@@ -1398,7 +1424,7 @@ GGC_FILE="$STATE_DIR/ggc_host"
 ggc_host() { # [путь к curl] -> имя видеосервера | пусто
   local bin="$1" net out n h u
   net=$(cat "$SMART_NET_FILE" 2>/dev/null); net=${net:-any}
-  if [ -s "$GGC_FILE" ] && [ -z "$(find "$GGC_FILE" -mmin +720 2>/dev/null)" ]; then
+  if [ -s "$GGC_FILE" ] && ! older_than "$GGC_FILE" 43200; then
     read -r n h < "$GGC_FILE"
     [ "$n" = "$net" ] && [ -n "$h" ] && { echo "$h"; return 0; }
   fi
@@ -1684,7 +1710,9 @@ ip_in_ipsets() { # <ip> <файл>... -> файлы, где есть подсе�
       sub(/[ \t\r].*$/, ""); net = $0; bits = 32
       if ((k = index(net, "/"))) { bits = substr(net, k + 1) + 0; net = substr(net, 1, k - 1) }
       if (net !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) next
-      size = 2 ^ (32 - bits); lo = int(n(net) / size) * size
+      # 2^(32-bits) без «^»: awk busybox без математики (Math support) его не знает
+      size = 1; for (i = bits; i < 32; i++) size *= 2
+      lo = int(n(net) / size) * size
       if (x >= lo && x < lo + size) { found = 1; print FILENAME "\t" $0 }
     }' "$@" 2>/dev/null
 }
@@ -2260,8 +2288,9 @@ cmd_smart_bench_run() {
   # ответа, ни причины неудачи, а его TLS с частью сайтов не договаривается при
   # любом варианте (Pixel, 14.11: 0 мс и одинаковые 3 из 7 у всех)
   if { [ "$BENCH_KIND" != curl ] || [ "${NFQWS_BENCH_TOOL:-}" = helper ]; } && [ -x "$HELPER_BIN" ]; then
-    BENCH_KIND=helper BENCH_BIN="$HELPER_BIN" BENCH_DNS=$(bench_dns)
+    BENCH_KIND=helper BENCH_BIN="$HELPER_BIN"
   fi
+  [ "$BENCH_KIND" = helper ] && BENCH_DNS=$(bench_dns)
   echo $$ > "$BENCH_DIR/pid"
   printf 'net=%s\nstart=%s\nstage=1\ntool=%s\n' "$net" "$(date +%s)" "$BENCH_KIND" > "$BENCH_DIR/info"
   awk -F'\t' '!/^#/ && $2 ~ /\./ && !s[$2]++ { print $2 }' "$f" > "$BENCH_DIR/hosts"
@@ -2341,6 +2370,12 @@ cmd_smart_bench_report() {
     END { for (k in c) { n = c[k]; m = (n % 2) ? v[k, (n + 1) / 2] : int((v[k, n / 2] + v[k, n / 2 + 1]) / 2); print "M\t" k "\t" m } }
   ' > "$BENCH_DIR/med" 2>/dev/null
   { printf '%s\n' "$names"; cat "$BENCH_DIR/med"; cat "$res"; } | awk -F'\t' -v mode="$1" -v net="$net" -v live="$live" -v info="$(tr '\n' ' ' < "$BENCH_DIR/info" 2>/dev/null)" '
+    function wsort(str,   a, n, i, j, t, out) {
+      n = split(str, a, " ")
+      for (i = 2; i <= n; i++) { t = a[i]; for (j = i - 1; j >= 1 && a[j] > t; j--) a[j + 1] = a[j]; a[j + 1] = t }
+      out = ""; for (i = 1; i <= n; i++) out = out (i > 1 ? " " : "") a[i]
+      return out
+    }
     function fam(s) { return s == "google" ? "google" : (s ~ /^quic/ ? "quic" : "tls") }
     function q(s) { gsub(/["\\]/, "", s); return s }
     $1 == "N" { nm[$2 "|" $3] = $4; next }
@@ -2380,6 +2415,9 @@ cmd_smart_bench_report() {
       # замер ещё идёт: «не соединился», «не открылся» — ещё не итог (сайт
       # повторят, варианты до него ещё дойдут), списков сайтов не показываем
       if (live) { nocg = ""; split("", uns); split("", noc) }
+      # списки сайтов — по алфавиту: порядок обхода массива у awk busybox и GNU
+      # разный, и один и тот же замер выглядел по-разному
+      nocg = wsort(nocg); for (f in uns) uns[f] = wsort(uns[f]); for (f in noc) noc[f] = wsort(noc[f])
       if (mode == "text") {
         printf "Отладочный замер умного режима · сеть %s\n%s\n", net, info
         printf "Сайтов: %d, вне профилей умного режима или без DNS: %d\n", nh, skipped + 0
@@ -2818,7 +2856,7 @@ case "$1" in
   upload)
     f=$(upload_file "@up:$2") || { echo "Неверная метка" >&2; exit 1; }
     mkdir -p "$UPLOAD_DIR" || exit 1
-    find "$UPLOAD_DIR" -type f -mmin +30 -exec rm -f {} + 2>/dev/null
+    for old in "$UPLOAD_DIR"/*; do [ -f "$old" ] && [ "$old" != "$f" ] && older_than "$old" 1800 && rm -f "$old"; done
     cat >> "$f" <<EOF
 $3
 EOF

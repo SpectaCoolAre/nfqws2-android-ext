@@ -5,7 +5,7 @@
 //	nfqws2-helper -alarm 5m -run "sh /путь/service.sh push_beat"
 //	nfqws2-helper -probe 127.0.0.1:15353[,127.0.0.1:15356]
 //	nfqws2-helper -sniprobe youtube.com -ip 142.250.74.14
-//	nfqws2-helper -fetch https://youtube.com/ -resolve 127.0.0.1:15353 [-o тело] [-ua …]
+//	nfqws2-helper -fetch https://youtube.com/ -resolve 127.0.0.1:15353 [-o тело] [-ua …] [-follow 5] [-ip адрес]
 //	nfqws2-helper -ttltrace -ip 142.250.74.14 -blocked quic_youtube.bin -open quic_google.bin
 //	nfqws2-helper -geoscan dns.comss.one,… -samples @geoblock.list -boot 213.87.142.94:53 [-asncache файл] [-shared файл] [-groups файл]
 package main
@@ -45,6 +45,7 @@ func main() {
 	fetchDNS := flag.String("resolve", "", "-fetch: DNS (адрес:порт через запятую), как у приложений")
 	fetchUA := flag.String("ua", "", "-fetch: User-Agent")
 	fetchOut := flag.String("o", "", "-fetch: файл для тела ответа (начало)")
+	fetchFollow := flag.Int("follow", 0, "-fetch: пройти столько переадресаций (как curl -L --max-redirs), с куками")
 	ref := flag.String("ref", "", "-geoscan: честные DNS для эталона ответов через запятую (адрес:53 или https://имя); DNS сети — запасной")
 	flag.Parse()
 	log.SetFlags(log.Ldate | log.Ltime)
@@ -73,7 +74,7 @@ func main() {
 			os.Exit(1)
 		}
 	case *fetchURL != "":
-		runFetch(*fetchURL, *fetchDNS, *fetchUA, *fetchOut)
+		runFetch(*fetchURL, *fetchDNS, *fetchUA, *fetchOut, *fetchFollow, *sniIP)
 	case *ttl:
 		runTTLTrace(*sniIP, *qBlocked, *qOpen, *wait)
 	case *sni != "":

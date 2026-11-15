@@ -28,7 +28,9 @@ for p in $paths; do
   [ -e "$p" ] || continue
   if [ -d "$p" ]; then
     if [ "$recursive" = 1 ]; then
-      find "$p" -delete 2>/dev/null || rc=1
+      # find из busybox бывает без -delete (NFQWS_TEST_USERLAND=busybox): тогда
+      # каталог оставался, и тесты видели прежние файлы
+      find "$p" -delete 2>/dev/null || [ ! -e "$p" ] || /bin/rm -rf "$p" 2>/dev/null || rc=1
     else
       rmdir "$p" 2>/dev/null || rc=1
     fi

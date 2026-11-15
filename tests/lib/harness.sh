@@ -151,7 +151,38 @@ sandbox_init() {
   export MOCK_IPT_STORE MOCK_NFQWS_ARGS_FILE MOCK_PM_FILE MOCK_IPT_FEATURES MOCK_DIR
   export MODDIR CONFDIR HOSTS_TARGET
   PATH="$MOCKBIN:$PATH"; export PATH
+  harness_userland
 }
+
+# Окружение как на телефоне (NFQWS_TEST_USERLAND=busybox): Magisk и KernelSU
+# запускают скрипты модуля в ash из busybox с его же утилитами, а не в dash/bash
+# с GNU. Здесь sh и все утилиты — апплеты busybox, из остального PATH — только
+# то, что нужно самим тестам (luajit, node, go). NFQWS_TEST_CURL=0 — без curl,
+# как на Pixel (14.11: там замер шёл через wget busybox, и ломался)
+harness_userland() {
+  [ "${NFQWS_TEST_USERLAND:-}" = busybox ] || return 0
+  local bb a t d="$SANDBOX/userland"
+  # под ash из busybox command -v отдаёт имя апплета, а не путь
+  bb=$(PATH="$HARNESS_PATH0" command -v busybox 2>/dev/null)
+  case "$bb" in /*) ;; *) for bb in /usr/bin/busybox /bin/busybox ""; do [ -x "$bb" ] && break; done ;; esac
+  [ -n "$bb" ] || { echo "NFQWS_TEST_USERLAND=busybox: нет busybox" >&2; return 1; }
+  mkdir -p "$d"
+  # оболочка — dash, утилиты — busybox: ash из этого busybox предпочитает свои
+  # апплеты PATH (как ash в Magisk), и заглушки тестов (sysctl, ip) обходились бы
+  for a in $("$bb" --list); do
+    case "$a" in sh|ash|hush|busybox) continue ;; esac
+    [ -e "$MOCKBIN/$a" ] || ln -sf "$bb" "$d/$a"
+  done
+  a=$(PATH="$HARNESS_PATH0" command -v dash 2>/dev/null) || a=/bin/sh
+  ln -sf "$a" "$d/sh"
+  for t in luajit node go python3 openssl; do
+    a=$(PATH="$HARNESS_PATH0" command -v "$t" 2>/dev/null) && [ ! -e "$d/$t" ] && ln -sf "$a" "$d/$t"
+  done
+  if [ "${NFQWS_TEST_CURL:-1}" = 0 ]; then rm -f "$MOCKBIN/curl" "$d/curl"
+  else a=$(PATH="$HARNESS_PATH0" command -v curl 2>/dev/null) && [ ! -e "$d/curl" ] && [ ! -e "$MOCKBIN/curl" ] && ln -sf "$a" "$d/curl"; fi
+  PATH="$MOCKBIN:$d"; export PATH
+}
+HARNESS_PATH0="${HARNESS_PATH0:-$PATH}"; export HARNESS_PATH0
 
 # NOTE: deliberately no EXIT trap. In dash (and POSIX sh generally) a command
 # substitution — `args=$(_startup_args)` — forks a subshell that *inherits* the

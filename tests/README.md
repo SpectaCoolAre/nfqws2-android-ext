@@ -71,9 +71,30 @@ NFQWS_TEST_SHELLS="sh" sh tests/run.sh
 | `NFQWS_TEST_NODE` | node binary for the WebUI suites |
 | `NFQWS_TEST_NODE_PATH` | alias for `NODE_PATH`, so `playwright` resolves |
 | `NFQWS_TEST_TMP` | parent directory for the sandboxes (default `/tmp`) |
+| `NFQWS_TEST_USERLAND=busybox` | run the module with busybox applets instead of GNU tools, as on a phone (see below) |
+| `NFQWS_TEST_CURL=0` | with the busybox userland: no curl at all, as on a Pixel |
 
 The browser suite prints `SKIP` and exits 0 when `playwright` cannot be
 resolved, so the rest of the suite still runs.
+
+## Like on a phone: busybox userland
+
+On the phone the module runs with busybox (Magisk, KernelSU) or toybox
+utilities, not GNU coreutils, and some phones have no curl at all (Pixel).
+Things that differed between a Snapdragon and a Tensor phone on 14–15.11:
+the benchmark and the proxy check without curl, a busybox awk built without
+math (`^` fails), `fold` limited to width 10000, `find` without `-delete`.
+
+```
+NFQWS_TEST_USERLAND=busybox sh tests/module/test_ctl.sh
+NFQWS_TEST_USERLAND=busybox NFQWS_TEST_CURL=0 sh tests/module/test_bench.sh
+```
+
+The shell stays dash (busybox ash prefers its applets to `PATH`, which would
+bypass the test stubs); every other tool is a busybox applet, and nothing
+else from the host is on `PATH` except what the tests themselves need
+(luajit, node, go). `run.sh` runs the module suites a second time this way
+when busybox is installed.
 
 ## Runtime
 

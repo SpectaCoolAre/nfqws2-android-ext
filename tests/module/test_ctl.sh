@@ -474,7 +474,8 @@ assert_match "$ctl_out" "nfqws2-backup-.*\.tar" "backup-list lists created archi
 if [ -n "$b64_bak" ]; then
   # Как WebUI: большой архив не влезает в один аргумент — кусками через upload
   assert_ge "${#b64_bak}" 131072 "the test archive is bigger than one argument may be"
-  printf '%s' "$b64_bak" | fold -w 48000 > "$SANDBOX/chunks"
+  # кусками по 48000 (fold в busybox не берёт ширину больше 10000)
+  printf '%s\n' "$b64_bak" | awk '{ for (i = 1; i <= length($0); i += 48000) print substr($0, i, 48000) }' > "$SANDBOX/chunks"
   up_ok=0
   while IFS= read -r chunk || [ -n "$chunk" ]; do ctl upload tk1 "$chunk"; [ "$ctl_rc" = 0 ] || up_ok=1; done < "$SANDBOX/chunks"
   assert_rc 0 "$up_ok" "the archive is uploaded in pieces"
@@ -819,6 +820,32 @@ kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; fakesvc=$(fake_daemon 
 ctl geo-ipcheck
 assert_rc 3 "$ctl_rc" "a fresh one still means a check is running"
 rmdir "$STATE_DIR/geo-ipcheck.lock"
+# Без curl (Pixel, 15.11): раньше проверка отказывалась («Нужен curl»), и
+# серверы с закрытым прокси не вставали на паузу. Теперь — nfqws2-helper -fetch
+cp "$HELPER_BIN" "$SANDBOX/helper.ask"
+cat > "$HELPER_BIN" <<X
+#!/bin/sh
+if [ "\$1" = -fetch ]; then
+  ip=""; for a; do [ "\$p" = -ip ] && ip="\$a"; p="\$a"; done
+  echo "\$ip" >> "$MOCK_DIR/fetch.ips"
+  rc=0
+  if [ -n "\$ip" ]; then
+    if iptables -w -t mangle -S nfqws_post 2>/dev/null | grep -q "uid-owner 0 -d \$ip "; then rc=\$(cat "$MOCK_DIR/nb.\$ip" 2>/dev/null || echo 28)
+    else rc=\$(cat "$MOCK_DIR/via.\$ip" 2>/dev/null || echo 0); fi
+  fi
+  echo "000 0.050000 0 0 1 0 \${ip:--} -"; exit \$rc
+fi
+exec "$SANDBOX/helper.ask" "\$@"
+X
+chmod 0755 "$HELPER_BIN"; rm -f "$IPSET_AUTO" "$MOCK_DIR/fetch.ips"
+NFQWS_PROBE_TOOL=helper; export NFQWS_PROBE_TOOL
+kill "$fakesvc" 2>/dev/null; wait "$fakesvc" 2>/dev/null; fakesvc=$(fake_daemon "$PIDFILE")
+ctl geo-ipcheck
+unset NFQWS_PROBE_TOOL
+assert_rc 0 "$ctl_rc" "without curl the check runs on the helper"
+assert_contains "$(cat "$MOCK_DIR/fetch.ips" 2>/dev/null)" "203.0.113.10" "which fetches through the proxy addresses"
+assert_eq "203.0.113.10" "$(cat "$IPSET_AUTO")" "with the same verdict: blocked, the bypass helps — into ipset_auto.list"
+mv -f "$SANDBOX/helper.ask" "$HELPER_BIN"; rm -f "$IPSET_AUTO"
 # Пауза: прокси сервера здесь не открывается и через обход — сервер на паузе
 # в этой сети (11.11: wlrus и bezmezhau в одном районе, дома открываются)
 echo 35 > "$MOCK_DIR/via.203.0.113.10"
