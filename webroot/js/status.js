@@ -68,17 +68,33 @@ const groupTitle = g => t((STRATEGY_GROUPS.find(x => x[0] === g) || ['', ''])[1]
 const strategyName = s => s === 'default' ? t('По умолчанию') : s === 'smart' ? t('Умный режим') : String(s).replace(/^imp:/, '');
 const findStrategy = n => strategies.find(s => s.name === n);
 
-async function loadStrategies(){
-  const r = await ctlx(['list-strategies']);
-  const list = r.code ? [] : r.out.split('\n').filter(Boolean).map(l => {
+function strategiesFrom(out){
+  const list = out.split('\n').filter(Boolean).map(l => {
     const p = l.split('\t');
     return {name: p[0], kind: p[1] || 'builtin', mod: p[2] === '1'};
   });
   strategies = [{name: 'default', kind: 'builtin', mod: false}].concat(list.filter(s => s.name !== 'default'));
 }
+async function loadStrategies(){
+  const r = await ctlx(['list-strategies']);
+  strategiesFrom(r.code ? '' : r.out);
+  if(!r.code) snapSet('strategies', r.out);
+}
+/* Стратегия — из статуса (там она уже есть), список стратегий — сначала из
+   слепка: на холодном старте каждая лишняя команда стоит в очереди перед
+   теми, что нужны открытому экрану */
+let strategyKnown = false;
 async function initStrategySelector(){
-  const r2 = await ctlx(['get-strategy']);
-  currentStrategy = (!r2.code && r2.out.trim()) || 'default';
+  // дальше стратегию знает сам экран (выбор, смена режима, статус)
+  if(strategyKnown) {}
+  else if(S && S.strategy) currentStrategy = S.strategy;
+  else {
+    const r2 = await ctlx(['get-strategy']);
+    currentStrategy = (!r2.code && r2.out.trim()) || 'default';
+  }
+  const snap = snapGet('strategies');
+  if(snap){ strategiesFrom(snap); renderStrategyRow(); }
+  strategyKnown = true;
   await loadStrategies();
   renderStrategyRow();
 }
@@ -116,7 +132,7 @@ let LIVE = null, liveT = 0;
 async function loadLive(){
   clearTimeout(liveT);
   const r = await ctlx(['live-status']);
-  try { LIVE = JSON.parse(r.out); } catch(e){}
+  try { LIVE = JSON.parse(r.out); snapSet('live', r.out.trim()); } catch(e){}
   renderLive();
   liveT = setTimeout(() => { if(currentPage === 'control' && !document.hidden) loadLive(); else liveT = 0; }, 5000);
 }
@@ -266,6 +282,8 @@ async function applyStrategy(val){
   const r = await withBusy(['set-strategy', val]);
   if(r.code){ toast(errText(r, 'Не удалось применить стратегию')); return; }
   currentStrategy = val;
+  // и в статус: «Состояние» рисует режим из него (в том числе из слепка)
+  if(S) S.strategy = val;
   renderStrategyRow();
   // «Обход» показывает новую стратегию сразу, а не после перезапуска:
   // карточка — из того, что известно, остальное — следом из bypass-info

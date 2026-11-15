@@ -489,9 +489,13 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
       const early = await p2.evaluate(() => ({ count: document.querySelectorAll('#dns-profiles .list-item[data-id]').length,
         on: $('dns-toggle').checked, locked: document.querySelector('.page[data-page="dnsprofiles"]').inert }));
       truthy(early.count > 0, 'before the answer the last seen profiles are already on screen: ' + early.count);
-      truthy(early.locked, 'the snapshot takes no taps until fresh data arrive');
+      // 16.11: слепок нажимается сразу — на холодном старте свежий ответ стоит
+      // в очереди за другими командами, и экран по 5 с не откликался
+      truthy(!early.locked, 'the snapshot takes taps at once, it does not wait for fresh data');
+      await p2.click('#dns-profiles .list-item[data-id]');
+      await p2.waitForTimeout(400);
+      eq('dnsprof', await p2.evaluate(() => currentPage), 'a profile opens from the snapshot before the answer');
       await p2.waitForTimeout(1600);
-      truthy(await p2.evaluate(() => !document.querySelector('.page[data-page="dnsprofiles"]').inert), 'fresh data unlock the screen');
       await p2.close();
     }
 

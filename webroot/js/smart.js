@@ -28,8 +28,9 @@ function smartLearnState(m){
 }
 
 async function smartLoad(){
-  const r = await ctlx(smartView ? ['smart-status', smartView] : ['smart-status']);
-  try { SMS = JSON.parse(r.out); } catch(e){ SMS = null; }
+  const view = smartView;
+  const r = await ctlx(view ? ['smart-status', view] : ['smart-status']);
+  try { SMS = JSON.parse(r.out); if(!view) snapSet('sms', r.out.trim()); } catch(e){ SMS = null; }
   // выбранной сети больше нет (забыли) — обратно на текущую
   if(SMS && smartView && !(SMS.nets || []).some(n => n.id === smartView)){ smartView = null; return smartLoad(); }
   renderSmart();

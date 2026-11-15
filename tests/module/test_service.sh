@@ -506,7 +506,10 @@ rm -f "$WD_PIDFILE"
 cat > "$MOCKBIN/ip" <<EOF
 #!/bin/sh
 case "\$1 \$2" in
-  "monitor "*) exec tail -n 0 -f "$MOCK_DIR/ipmon" ;;
+  "monitor "*) echo "\$*" >> "$MOCK_DIR/ipmon.args"
+    # MOCK_IP_NORULE: старый ip — rule в monitor не знает и сразу выходит
+    case " \$* " in *" rule "*) [ -f "$MOCK_DIR/ip_norule" ] && { echo "Argument rule is unknown" >&2; exit 255; } ;; esac
+    exec tail -n 0 -f "$MOCK_DIR/ipmon" ;;
   "route get") echo "1.1.1.1 via 10.0.0.1 dev wlan0 src 10.0.0.2 uid 0" ;;
 esac
 exit 0
@@ -520,6 +523,9 @@ svc stop >/dev/null 2>&1
 svc start >/dev/null 2>&1
 wait_for_file "$WN_PIDFILE" 8
 assert_file "$WN_PIDFILE" "with ip present netwatch is spawned alongside the watchdog"
+# 16.11: основную сеть Android меняет правилами ip rule — их netwatch тоже слушает
+i=0; while [ "$i" -lt 10 ] && [ ! -s "$MOCK_DIR/ipmon.args" ]; do sleep 0.2; i=$((i + 1)); done
+assert_eq "monitor route link rule" "$(head -n 1 "$MOCK_DIR/ipmon.args" 2>/dev/null)" "netwatch listens to ip rule changes too (the default network switch)"
 
 # Событие ip monitor будит netwatch сразу — без опроса раз в секунду
 sleep 1
@@ -536,6 +542,16 @@ kill "$nw" "$(cat "$WD_PIDFILE" 2>/dev/null)" 2>/dev/null
 sleep 0.5
 assert_eq "" "$(pgrep -f "tail -n 0 -f $MOCK_DIR/ipmon" 2>/dev/null)" "a stopped netwatch takes ip monitor with it"
 assert_no_file "$STATE_DIR/netwatch.fifo" "and removes its FIFO"
+# старый ip без rule в monitor: netwatch сразу переходит на route link
+: > "$MOCK_DIR/ip_norule"; : > "$MOCK_DIR/ipmon.args"; rm -f "$WN_PIDFILE"
+svc stop >/dev/null 2>&1; svc start >/dev/null 2>&1
+wait_for_file "$WN_PIDFILE" 8
+i=0; while [ "$i" -lt 20 ] && ! grep -qx "monitor route link" "$MOCK_DIR/ipmon.args" 2>/dev/null; do sleep 0.25; i=$((i + 1)); done
+grep -qx "monitor route link" "$MOCK_DIR/ipmon.args" 2>/dev/null
+assert_rc 0 $? "an ip without rule in monitor: netwatch falls back to route and link at once"
+assert_contains "$(cat "$SERVICE_LOG")" "ip monitor без rule" "and says so in the log"
+kill "$(cat "$WN_PIDFILE" 2>/dev/null)" "$(cat "$WD_PIDFILE" 2>/dev/null)" 2>/dev/null; sleep 0.5
+rm -f "$MOCK_DIR/ip_norule" "$MOCK_DIR/ipmon.args"
 rm -f "$MOCKBIN/ip" "$WN_PIDFILE" "$WD_PIDFILE"
 
 # ── network scenarios: loss and return of the connection ────────────────────

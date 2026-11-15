@@ -119,13 +119,14 @@ const scrollPos = () => scroller.scrollTop;
 const scrollToY = y => { scroller.scrollTop = y; };
 /* Слепок экрана: последний ответ *-state хранится и при следующем открытии
    показывается сразу, пока идёт свежий запрос, — без кадра «всё по нулям».
-   Пока на экране слепок, он не принимает нажатий (данные могли устареть). */
+   Нажатия на слепке работают (16.11): раньше он был inert до свежего ответа,
+   а на холодном старте тот стоит в очереди за статусом и прочим — экран DNS
+   и «Обход геоблока» по 5 секунд не нажимались. Переходы по слепку ничего не
+   портят, а правки уходят командами и сверяются с ответом (см. dnsMutate) */
 const snapGet = k => store.get('nfq_snap_' + k);
 const snapSet = (k, v) => store.set('nfq_snap_' + k, v);
-function snapLock(page, on){
-  const el = document.querySelector('.page[data-page="' + page + '"]');
-  if(el) el.inert = !!on;
-}
+const snapJSON = k => { try { return JSON.parse(snapGet(k) || 'null'); } catch(e){ return null; } };
+function snapLock(page, on){}
 
 /* ── Язык интерфейса ──────────────────────────────────────────────────────
    Ключ перевода — сама русская строка: разметка и код остаются читаемыми,

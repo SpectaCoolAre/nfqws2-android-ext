@@ -28,6 +28,8 @@ if(snapStatus && snapStatus.running != null){
   // время работы шло и без экрана
   if(snapStatus.running && snapStatus.saved_at > 0) snapStatus.uptime_ms = (+snapStatus.uptime_ms || 0) + Math.max(0, Date.now() - snapStatus.saved_at);
   S = snapStatus;
+  if(S.strategy) currentStrategy = S.strategy;
+  LIVE = snapJSON('live');
   renderStatus();
   splashOut();
 }
@@ -39,7 +41,9 @@ if(snapStatus && snapStatus.running != null){
   await stat();
   splashOut();
   initStrategySelector();
-  loadLive();
+  // плитки — из слепка уже на экране; свежие — чуть позже, чтобы на холодном
+  // старте не стоять в очереди перед командами открытого экрана
+  if(LIVE) setTimeout(() => { if(currentPage === 'control') loadLive(); }, 1500); else loadLive();
   checkWhatsNew();
 })();
 

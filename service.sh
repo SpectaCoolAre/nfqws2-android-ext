@@ -497,24 +497,15 @@ net_signature() {
 # Разбор смены сети: DNS, сеть умного режима, правила, пауза. Зовётся из
 # netwatch — по событию и по перепроверке (см. там)
 netwatch_apply() { # <причина для журнала>
-  local sig
-  # DNS — первым: пока он перезапускается, правила перехвата на месте, и
-  # запросы не уходят к DNS оператора. Сеть или VPN сменились — dnsproxy
-  # перезапускается целиком (или останавливается на время VPN), иначе —
-  # только сверка конфига (DNS сети)
+  local sig dnsforce=""
   sig=$(net_signature)
-  if dns_enabled; then
-    if [ "$sig" != "$netsig" ]; then dns_start "смена сети" force
-    else dns_start "смена сети"; fi
-  fi
+  [ "$sig" != "$netsig" ] && dnsforce=force
   # связь вернулась (маршрута наружу не было — появился): телефон точно не
   # спит — «спячка» снимается сразу, не дожидаясь трафика
   case "$netsig" in '|'*) case "$sig" in '|'*) ;; *)
     rm -f "$IDLE_FILE"
     log_msg "netwatch: связь вернулась ($1)" ;; esac ;; esac
   netsig="$sig"
-  # умный режим переключается на выученное для новой сети сам, без перезапуска
-  smart_net_update
   # Без ISP_INTERFACE и точки доступа правила от интерфейса не зависят:
   # пересобирать их нужно, только если система их сбросила (раньше —
   # при каждой смене сети, десятки раз в день)
@@ -526,7 +517,18 @@ netwatch_apply() { # <причина для журнала>
       log_msg "netwatch: сеть изменилась ($1) — правила на месте"
     fi
   fi
+  # Пауза и возобновление — сразу (16.11): раньше их решение ждало полный
+  # перезапуск DNS (5–15 с на телефоне), и переключение сети тянулось до 30 с
   home_check
+  # умный режим переключается на выученное для новой сети сам, без перезапуска
+  smart_net_update
+  # DNS под новую сеть — в фоне: перехват всё это время на месте, новый
+  # dnsproxy подменяет прежний без пропуска запросов (dns_proxy_swap), а
+  # обход и экран его не ждут. Сеть или VPN сменились — перезапуск целиком
+  # (или остановка на время VPN), иначе — сверка конфига (DNS сети)
+  if dns_enabled; then
+    ( dns_start "смена сети" $dnsforce </dev/null >/dev/null 2>&1 & ) 2>/dev/null
+  fi
 }
 
 netwatch() {
@@ -543,6 +545,7 @@ netwatch() {
   # внешних программ в секунду, 170 тысяч в сутки, и процессор не засыпал.
   local wake=0 mon="" reader="" sp="" netsig rq="" base=0 d backoff=2 started up me=$$
   local fifo="$STATE_DIR/netwatch.fifo"
+  NW_OBJS="route link rule"
   netsig=$(net_signature)
   trap 'wake=1' USR1
   # ip monitor и читатель — свои PID (через FIFO, не конвейер в подоболочке):
@@ -557,14 +560,22 @@ netwatch() {
       if [ -n "$mon" ]; then
         kill -TERM "$reader" 2>/dev/null
         read -r up _ < /proc/uptime
-        if [ $(( ${up%.*} - started )) -lt 10 ]; then
+        if [ $(( ${up%.*} - started )) -lt 10 ] && [ "$NW_OBJS" != "route link" ]; then
+          # сразу упал — этот ip не знает rule в monitor: как раньше, без него
+          NW_OBJS="route link"
+          log_msg "netwatch: ip monitor без rule — смена основной сети видна по перепроверке"
+        elif [ $(( ${up%.*} - started )) -lt 10 ]; then
           sleep "$backoff"; [ "$backoff" -lt 60 ] && backoff=$((backoff * 2))
         else backoff=2; fi
       fi
       rm -f "$fifo"; mkfifo "$fifo" 2>/dev/null || { sleep 60; continue; }
       while IFS= read -r _; do kill -USR1 "$me" 2>/dev/null || exit 0; done < "$fifo" &
       reader=$!
-      ip monitor route link > "$fifo" 2>/dev/null &
+      # rule: Android переключает основную сеть правилами ip rule (Wi‑Fi прошла
+      # проверку интернета — маршруты и интерфейсы при этом не меняются), и без
+      # них смену ловила только перепроверка через 3–30 с. Старый ip без rule в
+      # monitor — как раньше
+      ip monitor $NW_OBJS > "$fifo" 2>/dev/null &
       mon=$!
       read -r up _ < /proc/uptime; started=${up%.*}
     fi

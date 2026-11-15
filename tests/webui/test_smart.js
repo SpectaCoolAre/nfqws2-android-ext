@@ -55,7 +55,8 @@ window.ksu = { exec: function(cmd, o, cb){
   var id = [o, cb].reverse().find(function(x){ return typeof x === 'string'; });
   window.__calls.push(cmd);
   var out = 'OK', rc = 0;
-  if (cmd.indexOf('json-status') >= 0) out = ${JSON.stringify(STATUS)};
+  // стратегия в статусе — та, что сейчас выбрана, как у настоящего модуля
+  if (cmd.indexOf('json-status') >= 0) { var js = JSON.parse(${JSON.stringify(STATUS)}); js.strategy = window.__strat; out = JSON.stringify(js); }
   else if (cmd.indexOf('list-strategies') >= 0) out = 'smart\\tbuiltin\\t0\\nalt2\\tbuiltin\\t0\\nhardcorp74\\tbuiltin\\t0';
   else if (cmd.indexOf('get-strategy') >= 0) out = window.__strat;
   else if (cmd.indexOf("'set-strategy'") >= 0) { window.__strat = /'set-strategy' '([^']+)'/.exec(cmd)[1]; out = 'OK'; }
@@ -69,7 +70,8 @@ window.ksu = { exec: function(cmd, o, cb){
   else if (cmd.indexOf("'smart-bench' 'status'") >= 0) out = JSON.stringify(window.__bench || { running: 0, stage: 'done', hosts: 114, done1: 114, hosts2: 61, done2: 61, tests: 4710, start: 1700000000, end: 1700002400, stopped: 0 });
   else if (cmd.indexOf("'smart-bench' 'report'") >= 0) out = ${JSON.stringify(BENCH_REP)};
   else if (cmd.indexOf("'smart-bench' 'start'") >= 0) { window.__bench = { running: 1, stage: '1', hosts: 114, done1: 23, hosts2: 0, done2: 0, tests: 812, prep: 114, plan: 3300, planned: 640, start: Math.floor(Date.now() / 1000) - 420, end: 0, stopped: 0 }; }
-  setTimeout(function(){ if (window[id]) window[id](rc, out, ''); }, 0);
+  // __slow: подстрока команды → ответ через 3 с (слепок вкладки до ответа)
+  setTimeout(function(){ if (window[id]) window[id](rc, out, ''); }, window.__slow && cmd.indexOf(window.__slow) >= 0 ? 3000 : 0);
   return 'job';
 }};`;
 
@@ -225,6 +227,28 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   const prepTxt = await page.$eval('#smart-sheet-body', e => e.textContent);
   truthy(prepTxt.includes('Этап 1 из 2: подготовка сайтов 40 из 114') && prepTxt.includes('после окончания'), 'first the sites are prepared; lists of sites wait for the end');
   await page.evaluate(() => closeSheet()); await page.waitForTimeout(400);
+
+  sect('reopening «Bypass»: drawn from the last time, before any answer');
+  // 16.11: без слепка вкладка ждала bypass-info и состояние умного режима одно за другим
+  {
+    await page.evaluate(() => { window.__strat = 'smart'; S.strategy = 'smart'; currentStrategy = 'smart'; navigate('config'); });
+    await page.waitForTimeout(1200);
+    // слепки первой страницы — в свежий контекст (новое открытие WebUI)
+    const snaps = await page.evaluate(() => ['sms', 'byp', 'status', 'strategies'].map(k => [k, snapGet(k)]));
+    truthy(snaps.every(x => x[1]), 'the first visit left snapshots of the tab behind');
+    const ctx2 = await browser.newContext({ viewport: { width: 380, height: 800 } });
+    await ctx2.addInitScript('try{' + snaps.map(x => 'localStorage.setItem(' + JSON.stringify('nfq_snap_' + x[0]) + ',' + JSON.stringify(x[1]) + ');').join('') + '}catch(e){}');
+    // все команды модуля отвечают через 3 с
+    await ctx2.addInitScript("window.__slow = \"'\";");
+    await ctx2.addInitScript(STUB);
+    const p2 = await ctx2.newPage();
+    await p2.goto(INDEX, { waitUntil: 'load' });
+    await p2.evaluate(() => navigate('config'));
+    await p2.waitForTimeout(400);
+    const body = await p2.$eval('#smart-body', e => e.textContent).catch(() => '');
+    truthy(/Сайты/.test(body), 'the smart statistics are on screen before the module answered: ' + body.slice(0, 60));
+    await ctx2.close();
+  }
 
   sect('settings → module behaviour');
   await page.evaluate(() => navigate('settings')); await page.waitForTimeout(500);

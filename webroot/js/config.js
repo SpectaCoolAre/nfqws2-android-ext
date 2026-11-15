@@ -10,12 +10,22 @@
 const IMPORT_EXTS = ['.txt', '.conf', '.ini', '.cfg', '.list', '.bat'];
 let BYP = null;
 const isSmartMode = () => currentStrategy === 'smart';
+/* Вкладка рисуется сразу — из слепка прошлого открытия (16.11: без него она
+   ждала два запроса подряд, 3–4 с на телефоне), свежие данные — следом.
+   bypass-info (сравнение конфига со стратегией — самый долгий) и состояние
+   умного режима идут параллельно, а не один за другим */
 async function confInit(){
-  const r = await ctlx(['bypass-info']);
-  try { BYP = JSON.parse(r.out); } catch(e){ BYP = null; }
-  if(BYP && BYP.strategy) currentStrategy = BYP.strategy;
+  if(!BYP) BYP = snapJSON('byp');
+  if(!SMS && !smartView) SMS = snapJSON('sms');
   renderBypass();
-  if(isSmartMode()) await smartLoad();
+  if(isSmartMode() && SMS) renderSmart();
+  const smart = isSmartMode();
+  const ps = smart ? smartLoad() : null;
+  const r = await ctlx(['bypass-info']);
+  try { BYP = JSON.parse(r.out); snapSet('byp', r.out.trim()); } catch(e){ BYP = null; }
+  if(BYP && BYP.strategy){ currentStrategy = BYP.strategy; if(S) S.strategy = BYP.strategy; }
+  if(currentPage === 'config') renderBypass();
+  if(ps) await ps; else if(isSmartMode()) await smartLoad();
 }
 /* Значок вкладки, переключатель и строка на главной — по режиму */
 function updateModeUi(){
