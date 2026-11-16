@@ -1028,8 +1028,15 @@ dns_lock() { # [0 — не ждать]
     # минут, и все перезапуски, даже при смене сети, пропускались — dnsproxy
     # остался с DNS прежней сети). Запуск DNS занимает секунды: снимаем
     if [ -n "$owner" ] && older_than "$DNS_LOCK" 60; then
-      dns_log "прежний запуск DNS (PID $owner) завис больше чем на минуту — снимаю его"
-      kill -TERM "$owner" 2>/dev/null; sleep 0.3; [ -d "/proc/$owner" ] && kill -KILL "$owner" 2>/dev/null
+      # Сторож и netwatch зовут DNS сами — их не убивать: без них пауза дома,
+      # возобновление и проверки встают до ручного запуска (16.11: замок
+      # хранил PID сторожа, и «снятие» зависшего запуска убивало его самого)
+      if dns_lock_watcher "$owner"; then
+        dns_log "прежний запуск DNS (PID $owner, сторож службы) идёт больше минуты — замок снят, процесс не трогаю"
+      else
+        dns_log "прежний запуск DNS (PID $owner) завис больше чем на минуту — снимаю его"
+        kill -TERM "$owner" 2>/dev/null; sleep 0.3; [ -d "/proc/$owner" ] && kill -KILL "$owner" 2>/dev/null
+      fi
       rm -rf "$DNS_LOCK"; continue
     fi
     [ "$1" = 0 ] && return 1
@@ -1037,7 +1044,21 @@ dns_lock() { # [0 — не ждать]
     i=$((i + 1)); [ "$i" -ge 75 ] && return 1
     sleep 0.2
   done
-  echo $$ > "$DNS_LOCK/pid"
+  # PID именно этого процесса: $$ в подоболочке — PID главного скрипта
+  # (сторожа, netwatch), и «снятие» зависшего запуска убило бы его
+  local me=""
+  read -r me _ < /proc/self/stat 2>/dev/null
+  case "$me" in ''|*[!0-9]*) me=$$ ;; esac
+  echo "$me" > "$DNS_LOCK/pid"
+}
+# Владелец замка — сторож или netwatch службы (их PID-файлы)
+dns_lock_watcher() { # <pid>
+  local f p
+  for f in "$WD_PIDFILE" "$WN_PIDFILE"; do
+    p=""; [ -f "$f" ] && IFS= read -r p < "$f"
+    [ -n "$p" ] && [ "$p" = "$1" ] && return 0
+  done
+  return 1
 }
 dns_unlock() { rm -rf "$DNS_LOCK"; }
 _dns_locked() { # <0|1 ждать> <функция> [аргументы]

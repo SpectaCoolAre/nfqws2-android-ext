@@ -410,6 +410,21 @@ assert_rc 0 $? "a start takes over a lock held for over a minute by a hung proce
 kill -0 "$holder" 2>/dev/null; assert_rc 1 $? "and stops the hung one"
 assert_contains "$(tail -n 8 "$DNS_LOG")" "прежний запуск DNS (PID $holder) завис" "the DNS log says so"
 wait "$holder" 2>/dev/null
+# Владелец — сторож службы (16.11: замок хранил PID сторожа, и снятие
+# зависшего запуска убивало сторожа — пауза дома не снималась до ручного запуска)
+sleep 600 & holder=$!
+echo "$holder" > "$WD_PIDFILE"
+mkdir -p "$DNS_LOCK"; echo "$holder" > "$DNS_LOCK/pid"; touch -d '@'"$(( $(date +%s) - 90 ))" "$DNS_LOCK"
+dns_start "тест"
+assert_rc 0 $? "a start takes over a lock the watchdog holds for over a minute"
+kill -0 "$holder" 2>/dev/null; assert_rc 0 $? "but the watchdog itself is left alive"
+assert_contains "$(tail -n 8 "$DNS_LOG")" "сторож службы" "the DNS log says whose lock it was"
+kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null; rm -f "$WD_PIDFILE"
+# В замке — PID того процесса, что его взял, а не главного скрипта ($$)
+lock_pids() { local got me; dns_lock 0 && read -r got < "$DNS_LOCK/pid"; read -r me _ < /proc/self/stat; dns_unlock; echo "$got $me"; }
+sub=$(lock_pids)
+assert_eq "${sub##* }" "${sub%% *}" "a subshell records its own PID in the lock"
+[ "${sub%% *}" != "$$" ]; assert_rc 0 $? "not the PID of the main script"
 
 # Работающий dnsproxy этого модуля, а PID-файл указывает не на него (так
 # было после загрузки: watchdog счёл живой процесс упавшим) — не перезапуск

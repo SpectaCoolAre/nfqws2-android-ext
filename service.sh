@@ -479,6 +479,16 @@ ensure_netwatch() { # зовётся только из ensure_watchdog, посл
   ensure_helper "$WN_PIDFILE" netwatch command -v ip
   return 0
 }
+# Сторож и netwatch раз в минуту поднимают друг друга: упавший (убитый)
+# помощник иначе оставался мёртвым до ручного запуска — пауза дома и
+# возобновление при уходе из него не срабатывали (16.11)
+watcher_revive() { # <netwatch|watchdog>
+  case "$1" in
+    netwatch) ensure_helper "$WN_PIDFILE" netwatch command -v ip && log_msg "сторож: netwatch не работал — запущен заново" ;;
+    watchdog) ensure_helper "$WD_PIDFILE" watchdog && log_msg "netwatch: сторож не работал — запущен заново" ;;
+  esac
+  return 0
+}
 
 # Подпись сети: через какой интерфейс идёт трафик наружу и есть ли VPN. Смена —
 # повод сразу перезапустить dnsproxy: его соединения к DoH/DoT-серверам остались
@@ -594,6 +604,7 @@ netwatch() {
     fi
     conf_refresh
     watchers_wanted || break
+    watcher_revive watchdog
     if [ "$wake" = 1 ]; then
       # пачка событий одной смены сети: ждём секунду тишины
       while [ "$wake" = 1 ]; do wake=0; sleep 1; done
@@ -646,6 +657,8 @@ watchdog() {
     conf_refresh
     watchers_wanted || break
     tick=$((tick + 1))
+    # раз в минуту (в спячке — раз в 5): жив ли netwatch
+    [ $((tick % 3)) -eq 0 ] && watcher_revive netwatch
     # спячка (см. IDLE_FILE): трафик за тик меньше IDLE_KBPS КБ/с в среднем —
     # тишина; IDLE_AFTER секунд тишины — тик раз в минуту, редкие проверки —
     # раз в 5; первый же заметный трафик — обратно
