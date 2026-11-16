@@ -672,6 +672,11 @@ export_collect() { # <папка> <ключ>
       # «Wi‑Fi без доступа в интернет» не разобрать
       { echo "== dumpsys connectivity"; dumpsys connectivity 2>&1 | head -n 400
         echo "== dumpsys network_stack"; dumpsys network_stack 2>&1 | head -n 3000
+        # Резолвер Android: какие серверы сети он сейчас считает рабочими
+        # (успехи, ошибки, тайм-ауты по каждому) и что с «Частным DNS» — без
+        # этого «упал DNS» при живом dnsproxy не разобрать
+        echo "== private_dns_mode"; settings get global private_dns_mode 2>&1
+        echo "== dumpsys dnsresolver"; dumpsys dnsresolver 2>&1 | head -n 600
       } > "$1/networks.txt" 2>&1 ;;
     *) f=$(export_log_file "$2"); [ -n "$f" ] && [ -f "$f" ] && cp -f "$f" "$1"/ 2>/dev/null ;;
   esac
