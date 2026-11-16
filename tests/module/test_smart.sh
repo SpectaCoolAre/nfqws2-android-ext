@@ -291,7 +291,7 @@ assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",43-4
 # nfqws-menu 92685de (11.11): профиль hardcorp74 для wide-youtube.l.google.com —
 # с ним на роутере заработал YouTube
 assert_contains "$(grep '^#@google 47 ' "$REPO_DIR/strategies/smart.conf")" "hardcorp74: wide-youtube" "the new hardcorp74 YouTube profile is a Google variant"
-assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",47-56:" "and in the base set"
+assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",47-51,53-55:" "and in the base set (52 and 56 failed the benchmarks of 16.11)"
 # профиль hardcorp74 для googlevideo.com (стабильный поток видео) — тоже вариант;
 # nfqws-menu fced8d1 (11.11): одиночный fake и multidisorder вместо multisplit
 assert_contains "$(grep 'strategy=48' "$REPO_DIR/strategies/smart.conf")" "fake:blob=0x00000000:tcp_ack=-66000:tcp_ts_up:strategy=48" "the hardcorp74 googlevideo profile is a Google variant too"
@@ -308,7 +308,7 @@ assert_contains "$(grep 'strategy=55$' "$REPO_DIR/strategies/smart.conf" | head 
 assert_eq "" "$(grep -o 'slot=tls[a-z_0-9]*:pass=14:base=[0-9,-]*' "$REPO_DIR/strategies/smart.conf" | grep -v ',55-58$')" "both in the base set of every TLS slot"
 assert_contains "$(grep 'strategy=8$' "$REPO_DIR/strategies/smart.conf" | head -n 2 | tail -n 1)" "host=ya.ru" "the previous #1 stays variant 8"
 assert_contains "$(grep 'strategy=50$' "$REPO_DIR/strategies/smart.conf" | grep sni=www.google.com)" "fake:blob=tls_sochi:tcp_seq=-10000:repeats=6:tls_mod=rnd,dupsid,sni=www.google.com" "the new wide-youtube profile is Google variant 50"
-assert_contains "$(grep 'slot=google:' "$REPO_DIR/strategies/smart.conf")" ",47-56:" "in the Google base set"
+assert_contains "$(grep 'slot=google:' "$REPO_DIR/strategies/smart.conf")" ",47-51,53-55:" "in the Google base set"
 assert_contains "$(grep -A3 'hostlist-domains=wide-youtube' "$REPO_DIR/strategies/hardcorp74.conf")" "tls_clienthello_sochi_park:tcp_seq=-10000:repeats=6" "the hardcorp74 strategy is as in nfqws-menu 13.11"
 assert_not_contains "$(cat "$REPO_DIR/strategies/hardcorp74.conf")" "hostlist-domains=googlevideo.com" "its googlevideo profile is gone, as the author removed it"
 # 15.11: видео YouTube — шаг nz_first2 из NetZapret вместо постоянного wssize:
@@ -358,8 +358,8 @@ assert_contains "$(grep -o 'slot=tls:pass=14:base=[0-9,-]*:first=[0-9]*' "$REPO_
 # пуст, а приоритет TLS — по замеру на МТС (8 63%, 55 62%, 15 61%, 23 и 39 57%)
 assert_eq "" "$(awk '/^SMART_TLS="/{f=1} f{print} f && /"$/ && !/^SMART_TLS="/{f=0}' "$REPO_DIR/strategies/smart.conf" | grep -v '^ *#' | grep 'strategy=35$')" "eduncey #4 (TLS 35) is gone"
 assert_not_contains "$(grep '^#@bench-tls' "$REPO_DIR/strategies/smart.conf")" ",35," "and out of the benchmark"
-assert_eq "" "$(grep -o 'slot=tls[a-z_0-9]*:pass=14:base=[^ ]*' "$REPO_DIR/strategies/smart.conf" | grep -v ':pri=8,55,57,15,23,39,58$')" "every TLS slot tries the best of the MTS benchmark first, the new V13 right after the leaders"
-assert_contains "$(grep 'slot=google:' "$REPO_DIR/strategies/smart.conf")" ":first=21:pri=52,43,44,45,15,50,6,55,51,53,54,56" "Google: by the MTS learning of 15.11 — 21 starts, 52 (the only one that opened googleapis.com) first, those that only failed there last"
+assert_eq "" "$(grep -o 'slot=tls[a-z_0-9]*:pass=14:base=[^ ]*' "$REPO_DIR/strategies/smart.conf" | grep -v ':pri=8,57,58,23,55,15,1,39$')" "every TLS slot: hardcorp74 #1, then Universal V13 and its 4pda, alt7 (benchmarks of 16.11)"
+assert_contains "$(grep 'slot=google:' "$REPO_DIR/strategies/smart.conf")" ":first=21:pri=53,54,55,43,44,41,15,51,50,1,6" "Google, benchmarks of 16.11 (MTS and Wi‑Fi): what opened everything on both first; Default v3 (52, 0 of 6) is out of the queue"
 
 # 16.11: варианты Flowseal умного режима — из пакета Flowseal 1.10.4 (nfqws-menu,
 # @Nare51), заменили прежние переводы под теми же номерами, а не встали рядом
