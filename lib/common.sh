@@ -566,10 +566,31 @@ _startup_args() {
   args="$args $tcp $extra"
 
   if yt_ramp_on; then
-    printf '%s' "$args" | tr -s ' ' | stat_inject | ttl_inject | yt_ramp_inject
+    printf '%s' "$args" | tr -s ' ' | lists_dedup | stat_inject | ttl_inject | yt_ramp_inject
   else
-    printf '%s' "$args" | tr -s ' ' | stat_inject | ttl_inject
+    printf '%s' "$args" | tr -s ' ' | lists_dedup | stat_inject | ttl_inject
   fi
+}
+
+# Один и тот же список дважды в одном профиле (между --new) nfqws2 не принимает:
+# «failed to register hostlist» — и не запускается. Так выходит у импортов из
+# nfqws-menu (Flowseal 1.10.4): исключения у них и в MODE_LIST, и в MODE_ALL, а
+# MODE_AUTO = MODE_LIST + MODE_ALL; и rkn.list из «Дополнительных» к их
+# MODE_LIST, где он уже есть. Повтор просто убирается — смысл тот же
+lists_dedup() {
+  awk '{
+    out = ""
+    for (i = 1; i <= NF; i++) {
+      t = $i
+      if (t == "--new") { delete seen }
+      else if (t ~ /^--(hostlist|hostlist-exclude|hostlist-auto|ipset|ipset-exclude)=/) {
+        if (t in seen) continue
+        seen[t] = 1
+      }
+      out = out (out == "" ? "" : " ") t
+    }
+    printf "%s%s", (NR > 1 ? "\n" : ""), out
+  }'
 }
 
 # Тяжёлый режим YouTube (YT_RAMP=1, «Для разработчиков»): у главных сетей

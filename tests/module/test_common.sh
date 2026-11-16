@@ -325,6 +325,28 @@ assert_not_contains "$(_startup_args)" "nz_first2" "a strategy without the video
 conf_reset
 reload_conf
 
+# Один список дважды в профиле nfqws2 не принимает («failed to register
+# hostlist»). Импорт из nfqws-menu (Flowseal 1.10.4): исключения и в MODE_LIST,
+# и в MODE_ALL, rkn.list уже в MODE_LIST
+section "_startup_args: no list twice in one profile"
+assert_eq "--a=1 --hostlist-exclude=x.list --ipset=i.list --new --hostlist-exclude=x.list" \
+  "$(printf '%s' '--a=1 --hostlist-exclude=x.list --ipset=i.list --hostlist-exclude=x.list --ipset=i.list --new --hostlist-exclude=x.list' | lists_dedup)" \
+  "a repeat inside a profile is dropped, the next profile may list it again"
+printf 'rkn.example.com\n' > "$LISTS_DIR/rkn.list"
+{
+  printf 'MODE_LIST="--hostlist=%s/user.list --hostlist=%s/rkn.list --hostlist-exclude=%s/exclude.list --ipset-exclude=%s/ipset_exclude.list"\n' "$LISTS_DIR" "$LISTS_DIR" "$LISTS_DIR" "$LISTS_DIR"
+  printf 'MODE_ALL="--hostlist-exclude=%s/exclude.list --ipset-exclude=%s/ipset_exclude.list"\n' "$LISTS_DIR" "$LISTS_DIR"
+  printf 'MODE_AUTO="$MODE_LIST --hostlist-auto=%s/auto.list $MODE_ALL"\n' "$LISTS_DIR"
+  printf 'NFQWS_EXTRA_ARGS="$MODE_AUTO"\nEXTRA_RKN=1\n'
+} >> "$CONFFILE"
+reload_conf
+dups=$(_startup_args | tr ' ' '\n' | awk '/^--new$/ { delete s; next } /^--(hostlist|hostlist-exclude|hostlist-auto|ipset|ipset-exclude)=/ { if ($0 in s) print; s[$0] = 1 }')
+assert_eq "" "$dups" "a menu-style auto mode plus the extra rkn list: no list twice in a profile"
+assert_contains "$(_startup_args)" "--hostlist=$LISTS_DIR/rkn.list" "the rkn list itself stays"
+rm -f "$LISTS_DIR/rkn.list"
+conf_reset
+reload_conf
+
 section "port_list_add"
 assert_eq "443,5349,19294:19344,49152:65535,590:1400,3478:3482" \
   "$(port_list_add 443,590:600,1400,3478:3481,5349,19294:19344,49152:65535 590:1400 3478:3482)" \
