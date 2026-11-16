@@ -1792,24 +1792,40 @@ vpn_ip_rules() { if [ -n "$NFQWS_IPRULE" ]; then cat "$NFQWS_IPRULE" 2>/dev/null
 # Телефон подключён к Wi‑Fi: интерфейс wlan* в состоянии up (associated).
 # Без Wi‑Fi трафик (и VPN поверх него) идёт через мобильную сеть
 # Белые списки мобильного оператора: открываются только разрешённые
-# российские сервисы, а к остальным адресам нет даже TCP-соединения — обходу
-# DPI тут нечего делать, и умный режим учил бы одни ошибки. Признак: ни к
-# одному зарубежному адресу, который в обычном интернете в России открыт, не
-# установилось соединение (TCP, до TLS — его DPI не трогает), а к российским
-# сервисам — установилось. -> normal | whitelist | offline | partial | unknown
+# российские сервисы, а к остальным — ни соединения, ни TLS: обходу DPI тут
+# нечего делать, и умный режим учил бы одни ошибки. Признак: ни с одним
+# зарубежным сайтом, который в обычном интернете в России открыт (DPI его не
+# трогает), не прошло TLS-рукопожатие, а с российскими сервисами — прошло.
+# Считается TLS, а не TCP (16.11): у части операторов при белых списках TCP
+# соединяется с любым адресом, а режется TLS — по одному TCP модуль считал
+# интернет обычным. Без curl (Pixel) — helper модуля (раньше проверка без curl
+# не работала вовсе). -> normal | whitelist | offline | partial | unknown
 WL_FOREIGN="github.com www.microsoft.com www.apple.com www.wikipedia.org www.cloudflare.com"
 WL_ALLOWED="ya.ru vk.com www.gosuslugi.ru mail.ru"
+# DNS для helper: DNS модуля, если он работает, иначе DNS сети
+wl_probe_dns() {
+  local a out=""
+  if command -v dns_pid >/dev/null 2>&1 && dns_pid >/dev/null 2>&1 && dns_rules_ok 2>/dev/null; then
+    echo "127.0.0.1:$(dns_port_now)"; return 0
+  fi
+  if command -v dns_net_servers >/dev/null 2>&1; then
+    for a in $(dns_net_servers | tr ',' ' '); do out="$out${out:+,}$(dns_addr_port "$a")"; done
+  fi
+  echo "${out:-77.88.8.8:53}"
+}
 wl_probe() {
-  command -v curl >/dev/null 2>&1 || { echo unknown; return 0; }
-  local d="$STATE_DIR/wlprobe.$$" h f=0 w=0
+  local d h f=0 w=0 kind="${WL_KIND:-}" res=""
+  # WL_KIND — для тестов: проверить путь без curl там, где curl есть
+  if [ "$kind" = helper ]; then res=$(wl_probe_dns)
+  elif [ -z "$kind" ] && command -v curl >/dev/null 2>&1; then kind=curl
+  elif [ -x "$HELPER_BIN" ] || chmod 0755 "$HELPER_BIN" 2>/dev/null; then kind=helper; res=$(wl_probe_dns)
+  else echo unknown; return 0; fi
+  d="$STATE_DIR/wlprobe.$$"
   rm -rf "$d"; mkdir -p "$d" || { echo unknown; return 0; }
-  for h in $WL_FOREIGN; do
-    ( curl -s -k -o /dev/null -m 6 --connect-timeout 5 -w '%{time_connect}' "https://$h/" > "$d/f.$h" 2>/dev/null ) &
-  done
-  for h in $WL_ALLOWED; do
-    ( curl -s -k -o /dev/null -m 6 --connect-timeout 5 -w '%{time_connect}' "https://$h/" > "$d/w.$h" 2>/dev/null ) &
-  done
+  for h in $WL_FOREIGN; do wl_fetch "$kind" "$h" "$res" > "$d/f.$h" & done
+  for h in $WL_ALLOWED; do wl_fetch "$kind" "$h" "$res" > "$d/w.$h" & done
   wait
+  # время TLS-рукопожатия больше нуля — рукопожатие прошло
   for h in "$d"/f.*; do awk '{ exit !($1 + 0 > 0) }' "$h" 2>/dev/null && f=$((f + 1)); done
   for h in "$d"/w.*; do awk '{ exit !($1 + 0 > 0) }' "$h" 2>/dev/null && w=$((w + 1)); done
   rm -rf "$d"
@@ -1817,6 +1833,15 @@ wl_probe() {
   elif [ "$f" = 0 ] && [ "$w" -ge 2 ]; then echo whitelist
   elif [ "$f" = 0 ] && [ "$w" = 0 ]; then echo offline
   else echo partial; fi
+}
+# Время TLS-рукопожатия с сайтом (0 — не прошло): <curl|helper> <хост> [DNS для helper]
+wl_fetch() {
+  if [ "$1" = curl ]; then
+    curl -s -k -o /dev/null -m 8 --connect-timeout 5 -w '%{time_appconnect}' "https://$2/" 2>/dev/null </dev/null
+  else
+    "$HELPER_BIN" -fetch "https://$2/" -resolve "$3" -o /dev/null 2>/dev/null </dev/null | cut -d' ' -f3
+  fi
+  return 0
 }
 
 on_wifi() {

@@ -413,7 +413,7 @@ wlwatch() {
   echo $$ > "$WL_PIDFILE"
   protect_process
   trap 'wlwatch_exit; exit 0' TERM INT HUP
-  local up next=0 pend=0 net last="" res slept=0
+  local up next=0 pend=0 net last="" res slept=0 lastres=""
   while :; do
     sleep 5
     conf_refresh
@@ -431,6 +431,18 @@ wlwatch() {
       pend=0; next=$((up + 60)); continue
     fi
     res=$(wl_probe)
+    # итог проверки — в журнал, когда меняется (16.11: белые списки не
+    # определились, а по журналу не понять, что проверка видела)
+    if [ "$res" != "$lastres" ]; then
+      lastres="$res"
+      case "$res" in
+        normal)    log_msg "белые списки: проверка — обычный интернет (зарубежные сайты открываются)" ;;
+        whitelist) log_msg "белые списки: проверка — открываются только российские сервисы" ;;
+        offline)   log_msg "белые списки: проверка — не открылось ничего (нет сети)" ;;
+        partial)   log_msg "белые списки: проверка — открылся один зарубежный сайт, не ясно" ;;
+        *)         log_msg "белые списки: проверить нечем (нет ни curl, ни helper модуля)" ;;
+      esac
+    fi
     case "$res" in
       whitelist)
         if [ -f "$WL_FILE" ]; then next=$((up + 120))

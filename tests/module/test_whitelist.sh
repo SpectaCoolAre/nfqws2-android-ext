@@ -34,6 +34,34 @@ assert_eq offline "$(wl_probe)" "nothing connects: no network, not white lists"
 MOCK_WL=partial
 assert_eq partial "$(wl_probe)" "one foreign site: not sure, no pause"
 assert_eq "" "$(ls "$STATE_DIR" | grep wlprobe)" "it leaves no temporary files"
+# Без curl (Pixel) — helper: третье поле его ответа — время TLS
+cat > "$HELPER_BIN" <<'X'
+#!/bin/sh
+h=${2#https://}; h=${h%%/*}
+case "$MOCK_WL:$h" in
+  normal:*) echo "200 0.03 0.08 0.1 0.1 10 1.2.3.4 -" ;;
+  whitelist:ya.ru|whitelist:vk.com|whitelist:www.gosuslugi.ru|whitelist:mail.ru) echo "200 0.02 0.06 0.1 0.1 10 5.6.7.8 -" ;;
+  *) echo "000 0.04 0.000000 0 5 0 9.9.9.9 -"; exit 28 ;;
+esac
+X
+chmod 0755 "$HELPER_BIN"
+MOCK_WL=whitelist
+assert_eq whitelist "$(WL_KIND=helper wl_probe)" "without curl the helper tells white lists (it used to say nothing)"
+MOCK_WL=normal
+assert_eq normal "$(WL_KIND=helper wl_probe)" "and the normal internet"
+# TCP соединяется, а TLS режется — белые списки по имени (16.11)
+cat > "$MOCKBIN/curl" <<'X'
+#!/bin/sh
+w=""; prev=""
+for a; do [ "$prev" = -w ] && w="$a"; prev="$a"; u="$a"; done
+h=${u#https://}; h=${h%%/*}
+case "$h:$w" in
+  ya.ru:*|vk.com:*|www.gosuslugi.ru:*|mail.ru:*) echo 0.081 ;;
+  *:%{time_connect}) echo 0.035 ;;
+  *) echo 0.000000; exit 28 ;;
+esac
+X
+assert_eq whitelist "$(wl_probe)" "foreign TCP connects but TLS is cut: still white lists"
 
 section "white lists pause the bypass, like a VPN"
 NFQWS_SYSNET="$SANDBOX/sysnet"; export NFQWS_SYSNET
