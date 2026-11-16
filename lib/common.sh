@@ -1846,12 +1846,19 @@ wl_fetch() {
 
 on_wifi() {
   local d n="${NFQWS_SYSNET:-/sys/class/net}"
-  local s
+  local s up=0 dev
   for d in "$n"/wlan*; do
     [ -r "$d/operstate" ] || continue
     s=""; read -r s < "$d/operstate"
-    [ "$s" = up ] && return 0
+    [ "$s" = up ] && { up=1; break; }
   done
+  [ "$up" = 1 ] || return 1
+  # Точка доступа телефона — тоже wlan* в состоянии up: телефон, раздающий
+  # мобильный интернет, считался подключённым к Wi‑Fi, и проверка белых
+  # списков на нём не шла (16.11). Wi‑Fi — когда трафик наружу идёт через
+  # wlan; маршрута нет — как раньше, по интерфейсу
+  dev=$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
+  case "$dev" in ''|wlan*) return 0 ;; esac
   return 1
 }
 # ── Умный режим ──────────────────────────────────────────────────────────

@@ -80,6 +80,16 @@ MOCK_WIFI=Office
 [ "$id" != "$(smart_net_id)" ]; assert_rc 0 $? "another SSID is another network"
 MOCK_DEV=""
 assert_eq "offline	" "$(smart_net_id)" "no route at all — offline"
+# Раздача: точка доступа — тоже wlan* в состоянии up, а трафик идёт через
+# мобильную сеть (16.11: телефон-раздатчик считал себя в Wi‑Fi и не проверял
+# белые списки)
+MOCK_DEV=rmnet_data0 MOCK_OPERATOR=25001 MOCK_WIFI=""
+on_wifi; assert_rc 1 $? "a hotspot up while traffic goes mobile is not Wi‑Fi"
+assert_eq "mobile-25001	MTS" "$(smart_net_id)" "and the network is the mobile one"
+MOCK_DEV=wlan0
+on_wifi; assert_rc 0 $? "traffic through wlan is Wi‑Fi"
+MOCK_DEV=""
+on_wifi; assert_rc 0 $? "no route: Wi‑Fi up is still Wi‑Fi, as before"
 
 section "the module tells the orchestrator where it is"
 MOCK_DEV=rmnet_data0 MOCK_OPERATOR=25001 MOCK_WIFI=""
