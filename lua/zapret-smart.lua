@@ -1171,7 +1171,17 @@ function smart(ctx, desync)
 	local pass = tonumber(desync.arg.pass)
 	local r = SM.db[key]
 	if not r then
-		r = newrec(leader(slot, n, tonumber(desync.arg.first) or 1, pass))
+		-- probe (SMART_PROBE, «Для разработчиков»): в профилях по адресам (подсети
+		-- хостингов, CDN, Cloudflare, геоблок) новый сайт сначала идёт без обхода.
+		-- Адреса там меняются, и сервисы переезжают: обход сайту, который
+		-- открывается и так, только мешает (17.11: Clash of Clans на CloudFront —
+		-- минутные загрузки). Не открылся — дальше обычный перебор
+		local start = leader(slot, n, tonumber(desync.arg.first) or 1, pass)
+		if desync.arg.probe and pass then
+			start = pass
+			SJ(key .. ": новый сайт — сначала без обхода")
+		end
+		r = newrec(start)
 		SM.db[key] = r
 	end
 	-- сайт на варианте вне набора (пул выключили, набор сменился) — к стартовому

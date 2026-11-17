@@ -138,6 +138,7 @@ set_defaults() {
   : "${SMART_POOL:=0}"
   : "${PUSH_FIX:=0}"
   : "${YT_RAMP:=0}"
+  : "${SMART_PROBE:=0}"
 }
 
 # Старше ли файл (каталог) <секунд>. По stat -c %Y, а не find -mmin: find из
@@ -566,9 +567,22 @@ _startup_args() {
   args="$args $tcp $extra"
 
   if yt_ramp_on; then
-    printf '%s' "$args" | tr -s ' ' | lists_dedup | stat_inject | ttl_inject | yt_ramp_inject
+    printf '%s' "$args" | tr -s ' ' | lists_dedup | stat_inject | ttl_inject | yt_ramp_inject | smart_probe_inject
   else
-    printf '%s' "$args" | tr -s ' ' | lists_dedup | stat_inject | ttl_inject
+    printf '%s' "$args" | tr -s ' ' | lists_dedup | stat_inject | ttl_inject | smart_probe_inject
+  fi
+}
+
+# Сначала без обхода (SMART_PROBE=1, «Для разработчиков»): профилям умного
+# режима по адресам и меняющимся адресам — Cloudflare (tls_cf), хостинги и
+# сервисы с геоблоком с обрывом на 16 КБ (tls_16, quic_16), хостинги по AS
+# (tls_as) — аргумент probe: новый сайт там сначала пробуется без обхода
+smart_probe_inject() {
+  if [ "$SMART_PROBE" = "1" ]; then
+    sed -e 's/:slot=tls_cf:/:slot=tls_cf:probe:/g' -e 's/:slot=tls_16:/:slot=tls_16:probe:/g' \
+        -e 's/:slot=quic_16:/:slot=quic_16:probe:/g' -e 's/:slot=tls_as:/:slot=tls_as:probe:/g'
+  else
+    cat
   fi
 }
 
@@ -1674,7 +1688,7 @@ render_strategy() {
 
 # Module settings (same across strategies) are carried over whole from the live
 # config on strategy change/reset. NFQWS_EXTRA_ARGS only for standard $MODE_* refs.
-USER_KEYS="META_QUIC_REJECT IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL SMART_LEARN WL_PAUSE SMART_POOL PUSH_FIX YT_RAMP NFQWS_EXTRA_ARGS"
+USER_KEYS="META_QUIC_REJECT IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL SMART_LEARN WL_PAUSE SMART_POOL PUSH_FIX YT_RAMP SMART_PROBE NFQWS_EXTRA_ARGS"
 merge_user_keys() { # <generated config> <settings source config>  -> stdout
   awk -v keys=" $USER_KEYS " -v src="$2" '
     function quotes(str,   t) { t = str; return gsub(/"/, "", t) }

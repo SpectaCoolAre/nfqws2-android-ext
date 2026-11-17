@@ -54,7 +54,7 @@ local function packet(track, opts)
 	local desync = { target = {},
 		track = track, outgoing = not opts.incoming, l7payload = "tls_client_hello",
 		dis = { tcp = { th_flags = (opts.rst and TH_RST or 0) + (opts.fin and TH_FIN or 0), th_sport = track.port, th_dport = 443, th_ack = opts.ack }, payload = string.rep("x", opts.len or 100) },
-		arg = { slot = opts.slot or "tls", home = HOME, pass = tostring(opts.pass or N), first = opts.first, base = opts.base, pri = opts.pri },
+		arg = { slot = opts.slot or "tls", home = HOME, pass = tostring(opts.pass or N), first = opts.first, base = opts.base, pri = opts.pri, probe = opts.probe },
 		func_instance = "smart_" .. (opts.slot or "tls"), plan = (opts.plan or plan)()
 	}
 	if opts.outgoing then desync.outgoing = true end
@@ -898,6 +898,24 @@ do
 	check(v == VERDICT_DROP, "and the original packet is dropped")
 	rawsend_payload_segmented, resolve_range, rawsend_opts, rawsend_opts_base, reconstruct_opts,
 		direction_check, payload_check, replay_first, replay_drop_set, direction_cutoff_opposite, genhost = unpack(keep)
+end
+
+section("probe: a new site in an address profile starts without bypass (SMART_PROBE)")
+do
+	local function pconn(host, ok)
+		local c = conn(host)
+		local v = packet(c, { slot = "tls_16", probe = "" })
+		if ok then packet(c, { incoming = true, seq = 18000, slot = "tls_16", probe = "" })
+		else for i = 1, 3 do packet(c, { retrans = true, slot = "tls_16", probe = "" }) end end
+		return v
+	end
+	check(pconn("cdn-ok.example", true) == N, "the first connection goes without bypass")
+	check(rec("cdn-ok.example", "tls_16").cur == N and (rec("cdn-ok.example", "tls_16").ok[N] or 0) > 0, "it opened: the site stays without bypass")
+	later(); check(pconn("cdn-ok.example", true) == N, "and the next connection too")
+	later(); pconn("cdn-blocked.example", false)
+	later(); pconn("cdn-blocked.example", false)
+	check(rec("cdn-blocked.example", "tls_16").cur ~= N, "a site that does not open without bypass goes on to the variants")
+	check(okconn("plain.example", "tls_16") ~= N, "without probe a new site starts from a bypass variant, as before")
 end
 
 io.write("\n", failed == 0 and "PASS" or "FAIL", "  ", total - failed, " of ", total, " checks passed\n")

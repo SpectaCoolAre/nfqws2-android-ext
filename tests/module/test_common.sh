@@ -347,6 +347,23 @@ rm -f "$LISTS_DIR/rkn.list"
 conf_reset
 reload_conf
 
+# Сначала без обхода (SMART_PROBE): аргумент probe — только профилям умного
+# режима по адресам (Cloudflare, 16 КБ, AS), не обычным сайтам и не Google
+section "_startup_args: SMART_PROBE"
+cp -f "$REPO_DIR/strategies/smart.conf" "$CONFFILE"
+reload_conf
+assert_not_contains "$(_startup_args)" ":probe:" "off by default"
+printf 'SMART_PROBE=1\n' >> "$CONFFILE"
+reload_conf
+args=$(_startup_args)
+for sl in tls_cf tls_16 quic_16 tls_as; do
+  assert_contains "$args" "slot=$sl:probe:" "on: the $sl profiles start new sites without bypass"
+done
+assert_not_contains "$args" "slot=tls:probe" "ordinary sites are not touched"
+assert_not_contains "$args" "slot=google:probe" "nor Google"
+conf_reset
+reload_conf
+
 section "port_list_add"
 assert_eq "443,5349,19294:19344,49152:65535,590:1400,3478:3482" \
   "$(port_list_add 443,590:600,1400,3478:3481,5349,19294:19344,49152:65535 590:1400 3478:3482)" \
