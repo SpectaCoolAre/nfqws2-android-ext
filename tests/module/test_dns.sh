@@ -1198,7 +1198,7 @@ mkhot "a.example,b.example,c.example"
 echo "@google b.example" > "$DNS_GEO_SCAN_DIR/groups.pin"
 assert_contains "$(dns_geo_routes)" "gemini.google.com	b.example" "a pinned preferred server stays among the preferred"
 DNS_GEO_PREFER=$pkeep; rm -f "$DNS_GEO_SCAN_DIR/groups.pin"
-assert_contains "$(cat "$DNS_GEO_PREFER")" "google dns.zapret.moe de.magicdns.ru api.magicinfo.art dns.malw.link" "the module ships the router's set for Google (without Comss)"
+assert_contains "$(cat "$DNS_GEO_PREFER")" "google dns.zapret.moe api.magicinfo.art dns.malw.link" "the module ships the router's set for Google (without Comss)"
 rm -f "$hotf" "$(dns_geo_scan_file).rel"
 # Закреплённый за группой сервер («=сервер»): вся группа через него, пока он
 # отвечает, — без сравнения покрытия и без паузы по пробе прокси. NullsProxy

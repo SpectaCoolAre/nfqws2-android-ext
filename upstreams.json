@@ -1,6 +1,6 @@
 {
   "about": "Что взято из чужих проектов и до какой версии. Обновляется при каждом переносе изменений; читает модуль «трекер обновлений» (extras/update-tracker).",
-  "updated": "2026-11-16",
+  "updated": "2026-11-18",
   "module": "nfqws2-android-ext v2.4.2",
   "projects": [
     {
@@ -9,10 +9,10 @@
       "repo": "Dea1hwa1cher/nfqws2-android",
       "branch": "main",
       "track": "commits",
-      "ref": "9926471f2b74bca96485aa77cd3dbaac247957d8",
-      "label": "v3.0.3",
-      "date": "2026-11-15T19:46:23+03:00",
-      "use": "Основа модуля: служба, правила iptables, WebUI, сборка. Списки отсюда не берём; из v2.0.5–v2.1.0 — признаки проверки доступности из dpi-detector (переадресация без имени узла, ответ не по HTTP) и порты голоса Discord 50000–65535; из v2.1.1–v2.2.1 — проверка, что PID службы — наш nfqws2, возврат настроек ядра при остановке, серия автоперезапусков сторожа на диске, подъём netwatch при живом стороже; из v3.0.0 — заглушка установщика META-INF (0ab0c73) и защита таймера времени работы в WebUI (502e229); остальное v3.0.0 (новые пресеты, stealth, CPU affinity, zapret-sni, чистка lua) не взято, декодирование GGC у нас уже было; v3.0.1 — только показ режима скрытия (stealth) на главной, не взято; v3.0.2–v3.0.3 — в основном перенос из нашего v2.4.0 (умный режим v25, wssize googlevideo, VoWiFi); hostfakesplit_alt в antidpi не нужен — пресетам без умного режима zapret-smart.lua добавляет stat_inject; полная очистка /data/adb/nfqws2 при удалении не взята — настройки сохраняются намеренно; lua zapret2 из master не взята — у нас бинарники и lua релиза v1.0.7; 15.11 — его переносы стратегий universal_v12, universal_v13, anti_throttle, rostelecom, fake_disorder, z2r_rocket, z_attacker взяты в список (без лишнего custom_funcs.lua; у z2r_rocket исправлены порча и профили), турецкие и nzapret — нет"
+      "ref": "9cc2c7d0aebbc1cf2c69ce6a8a328fa800ed673d",
+      "label": "v3.0.3+5",
+      "date": "2026-11-17T19:02:13+03:00",
+      "use": "Основа модуля: служба, правила iptables, WebUI, сборка. Списки отсюда не берём; из v2.0.5–v2.1.0 — признаки проверки доступности из dpi-detector (переадресация без имени узла, ответ не по HTTP) и порты голоса Discord 50000–65535; из v2.1.1–v2.2.1 — проверка, что PID службы — наш nfqws2, возврат настроек ядра при остановке, серия автоперезапусков сторожа на диске, подъём netwatch при живом стороже; из v3.0.0 — заглушка установщика META-INF (0ab0c73) и защита таймера времени работы в WebUI (502e229); остальное v3.0.0 (новые пресеты, stealth, CPU affinity, zapret-sni, чистка lua) не взято, декодирование GGC у нас уже было; v3.0.1 — только показ режима скрытия (stealth) на главной, не взято; v3.0.2–v3.0.3 — в основном перенос из нашего v2.4.0 (умный режим v25, wssize googlevideo, VoWiFi); hostfakesplit_alt в antidpi не нужен — пресетам без умного режима zapret-smart.lua добавляет stat_inject; полная очистка /data/adb/nfqws2 при удалении не взята — настройки сохраняются намеренно; lua zapret2 из master не взята — у нас бинарники и lua релиза v1.0.7; 15.11 — его переносы стратегий universal_v12, universal_v13, anti_throttle, rostelecom, fake_disorder, z2r_rocket, z_attacker взяты в список (без лишнего custom_funcs.lua; у z2r_rocket исправлены порча и профили), турецкие и nzapret — нет; до 17.11 — перевод A && B || C в if-блоки (у нас эти места работают верно) и запасные wget/openssl в wl_probe (у нас — helper -fetch), не взято"
     },
     {
       "id": "nfqws-menu",
@@ -21,10 +21,10 @@
       "branch": "main",
       "path": "strategies",
       "track": "commits",
-      "ref": "ff286e4fec009d40623ab4e9420f68f580394a4c",
-      "label": "ff286e4",
-      "date": "2026-11-15T22:29:57+00:00",
-      "use": "Все стратегии (с IPv6 и без fastpath), списки lists/, блобы, hosts (пресет «nfqws-menu»); 11.11 — профиль hardcorp74 для wide-youtube.l.google.com (92685de); 12.11 — его профиль googlevideo.com: одиночный fake и multidisorder (fced8d1); Antiscan и warpscout — для роутеров, не берём; 13.11 — hardcorp74 #1, #2, HTTP, wide-youtube и хостинги по AS в новой редакции (b84df16, 5f22067): стратегия обновлена, в умном режиме — новыми вариантами TLS 55–56 и Google 50 рядом с прежними; его профиль googlevideo.com автор убрал; до 15.11 стратегии не менялись — только меню, awg, tgws-rs; 15.11 — пакет Flowseal 1.10.4 (@Nare51, ccce618): все alt, exp, FAKE TLS AUTO, SIMPLE FAKE и новая general — заменили прежние, в умном режиме варианты Flowseal (TLS 11–13, 18–33, Google 3–5, 8–20) — теми же номерами; lua/flowseal-compat.lua, блобы legacy_*"
+      "ref": "5c66c974a4bdc460bfa3931c96de1aca5ab49b51",
+      "label": "5c66c97",
+      "date": "2026-11-18T06:56:40+00:00",
+      "use": "Все стратегии (с IPv6 и без fastpath), списки lists/, блобы, hosts (пресет «nfqws-menu»); 11.11 — профиль hardcorp74 для wide-youtube.l.google.com (92685de); 12.11 — его профиль googlevideo.com: одиночный fake и multidisorder (fced8d1); Antiscan и warpscout — для роутеров, не берём; 13.11 — hardcorp74 #1, #2, HTTP, wide-youtube и хостинги по AS в новой редакции (b84df16, 5f22067): стратегия обновлена, в умном режиме — новыми вариантами TLS 55–56 и Google 50 рядом с прежними; его профиль googlevideo.com автор убрал; до 15.11 стратегии не менялись — только меню, awg, tgws-rs; 15.11 — пакет Flowseal 1.10.4 (@Nare51, ccce618): все alt, exp, FAKE TLS AUTO, SIMPLE FAKE и новая general — заменили прежние, в умном режиме варианты Flowseal (TLS 11–13, 18–33, Google 3–5, 8–20) — теми же номерами; lua/flowseal-compat.lua, блобы legacy_*; до 18.11 — переименование блобов ACTIVE_* (содержимое то же), проверка lua в меню, NFQWS_EXTRA_ARGS в conf — для роутера, не берём; три домена user.list уже есть"
     },
     {
       "id": "zapret-manager",
