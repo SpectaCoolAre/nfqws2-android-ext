@@ -685,6 +685,15 @@ do
 		if #order >= 6 then break end
 	end
 	local str = table.concat(order, ",")
+	-- ключевые сайты настройки — в выученное, файл после этого убирается
+	writefile(HOME .. "/smart/calib-" .. net .. ".sites", "cal\tkey.example\t3\t3:2.0,7:1.0\t1:1.0\t\t" .. clock .. "\te\ncal\tcal.example\t10\t10:9.0\t\t\t" .. clock .. "\te\n")
+	writefile(HOME .. "/state/smart_calib", "1b\n"); later(6)
+	local before = rec("cal.example", "cal") and rec("cal.example", "cal").cur
+	packet(conn("other-cal.example"), o())
+	local kr = rec("key.example", "cal")
+	check(kr and kr.cur == 3 and kr.ok[3] == 2 and kr.everok, "a key site of the setup is learned on its best variant, with its successes")
+	check((rec("cal.example", "cal") and rec("cal.example", "cal").cur) == before, "a site already learned is not overwritten by the setup")
+	check(readall(HOME .. "/smart/calib-" .. net .. ".sites") == nil, "and the file is gone: a site forgotten later does not come back")
 	check(order[1] == 7, "a new site starts on the best variant of the setup, not on first=1: " .. str)
 	check(order[2] == 3 and order[3] == 10, "then its working ones in its order (not the pri= one): " .. str)
 	check(order[4] == 1 or order[4] == 11, "then the variants it did not try: " .. str)

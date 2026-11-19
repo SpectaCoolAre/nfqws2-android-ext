@@ -41,7 +41,7 @@ func TestFetchOK(t *testing.T) {
 	}
 }
 
-// -max: дальше нужного ответ не читается, и это удача, а не обрыв
+// -limit: дальше нужного ответ не читается, и это удача, а не обрыв
 func TestFetchMax(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(strings.Repeat("x", 500000)))

@@ -46,7 +46,7 @@ func main() {
 	fetchUA := flag.String("ua", "", "-fetch: User-Agent")
 	fetchOut := flag.String("o", "", "-fetch: файл для тела ответа (начало)")
 	fetchFollow := flag.Int("follow", 0, "-fetch: пройти столько переадресаций (как curl -L --max-redirs), с куками")
-	fetchMaxB := flag.Int64("max", 0, "-fetch: читать ответ не дальше стольких байт (0 — до конца)")
+	fetchMaxB := flag.Int64("limit", 0, "-fetch: читать ответ не дальше стольких байт (0 — до конца)")
 	ref := flag.String("ref", "", "-geoscan: честные DNS для эталона ответов через запятую (адрес:53 или https://имя); DNS сети — запасной")
 	flag.Parse()
 	log.SetFlags(log.Ldate | log.Ltime)

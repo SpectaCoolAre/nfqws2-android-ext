@@ -583,6 +583,35 @@ local function calib(slot)
 	return nil
 end
 
+-- Ключевые сайты первичной настройки (smart/calib-<сеть>.sites, строки как в
+-- <сеть>.tsv) — в выученное текущей сети: у кого записи ещё нет. Файл после
+-- этого удаляется — сайт, который потом забыли, второй раз не вернётся
+local function calib_sites()
+	if not SM.net or SM.net == "offline" then return end
+	local path = SM.home .. "/smart/calib-" .. SM.net .. ".sites"
+	local f = io.open(path, "r")
+	if not f then return end
+	local n = 0
+	for line in f:lines() do
+		local slot, host, cur, ok, err, cool, seen =
+			line:match("^([^\t#]+)\t([^\t]+)\t(%d+)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t(%d+)")
+		if slot and not SM.db[slot .. "|" .. host] then
+			local r = newrec(tonumber(cur))
+			r.ok, r.err, r.seen = csv_parse(ok), csv_parse(err), tonumber(seen)
+			r.dt, r.everok = r.seen, next(r.ok) ~= nil
+			SM.db[slot .. "|" .. host] = r
+			n = n + 1
+		end
+	end
+	f:close()
+	os.remove(path)
+	if n > 0 then
+		SM.dirty = true
+		restat()
+		SJ("первичная настройка: ключевых сайтов в выученном — " .. n)
+	end
+end
+
 -- Сеть: модуль пишет её id в state/smart_net (или offline, если сети нет)
 local function check_net()
 	local t = now()
@@ -600,7 +629,10 @@ local function check_net()
 		SM.calrev, SM.calnet = cr, net
 		load_calib(net)
 	end
-	if SM.offline or net == SM.net then return end
+	if SM.offline or net == SM.net then
+		if not SM.offline then calib_sites() end
+		return
+	end
 	if SM.net then save() end
 	local prev = SM.net
 	SM.net = net
@@ -618,6 +650,7 @@ local function check_net()
 	end
 	restat()
 	SM.conns = {}
+	calib_sites()
 end
 
 -- Лучший вариант в сети: самая высокая доля удач среди тех, у кого их хотя бы

@@ -35,7 +35,7 @@ async function smartLoad(){
   if(SMS && smartView && !(SMS.nets || []).some(n => n.id === smartView)){ smartView = null; return smartLoad(); }
   renderSmart();
   if(openSheetId === 'smart-sheet' && smartSheetKind === 'learn') smartTrainSheet();
-  if(openSheetId === 'smart-sheet' && smartSheetKind === 'calib') calibSheet();
+  if(openSheetId === 'smart-sheet' && smartSheetKind === 'ring') smartRingSheet(true);
   clearTimeout(smartTimer);
   // пока экран открыт — раз в 20 секунд свежая статистика (фоновое обучение
   // идёт), во время первичной настройки — раз в 4 секунды: её ход
@@ -77,7 +77,7 @@ function smartProgress(m){
   const know = 0.5 * g.tls.conf + 0.3 * g.google.conf + 0.2 * g.quic.conf;
   const acc = m.acc && m.acc.ok + m.acc.err > 0 ? m.acc.ok / (m.acc.ok + m.acc.err) : 0;
   const cov = Math.min(1, (cur.sites || 0) / 50);
-  return {p: Math.round(100 * (0.45 * know + 0.35 * acc + 0.2 * cov)), g, acc, sites: cur.sites || 0};
+  return {p: Math.round(100 * (0.45 * know + 0.35 * acc + 0.2 * cov)), g, acc, know, cov, sites: cur.sites || 0};
 }
 function smartLevel(p){
   return p < 30 ? t('Только начинает') : p < 60 ? t('Учится') : p < 85 ? t('Хорошо знает сеть') : t('Знает сеть');
@@ -109,12 +109,26 @@ function renderSmart(){
   const pr = smartProgress(m);
   // шапка: кольцо обученности и сеть, чью статистику смотрим
   const netText = view ? smartNetLabel(view) : (m.offline == 1 ? t('Нет связи') : t('Сеть ещё не определена'));
-  parts.push('<div class="smart-hero">' +
-    '<div class="smart-ring-box">' + smartRing(pr.p) + '</div>' +
+  // Кольцо — кнопка (19.11): подробности обучения, первичная настройка и что
+  // идёт через обход. Сеть ещё не обучена — в шапке предложение первичной
+  // настройки, пока она идёт — её ход; потом — обычная обученность, а ключевые
+  // сайты уже среди выученных
+  const c = m.calib || {}, cs = calibState(m), curNet = !view || view.current == 1;
+  const fresh = curNet && pr.sites === 0 && !(c.done > 0) && !cs.run;
+  const ringP = cs.run && curNet ? calibProgress(c) : pr.p;
+  const level = cs.run && curNet ? t('Первичная настройка') : fresh ? t('Ещё не обучен') : smartLevel(pr.p);
+  const sub = cs.run && curNet ? cs.sub.replace(/^[^:]*: /, '') :
+    fresh ? t('Первичная настройка подберёт обход за 10–15 минут') :
+    view && view.home == 1 ? t('Домашняя сеть — профиль не активен') :
+    m.offline == 1 && view && view.current == 1 ? t('Нет связи — перебор на паузе') : t('Обученность в этой сети');
+  const canCalib = m.running == 1 && m.active == 1 && m.offline != 1;
+  parts.push('<div class="smart-hero' + (cs.run && curNet ? ' calib' : '') + '">' +
+    '<button type="button" class="smart-ring-box state" onclick="smartRingSheet()" aria-label="' + esc(t('Подробнее об обучении')) + '">' + smartRing(ringP) + '</button>' +
     '<div class="smart-hero-text">' +
-      '<span class="smart-hero-level">' + esc(smartLevel(pr.p)) + '</span>' +
-      '<span class="smart-hero-sub">' + esc(view && view.home == 1 ? t('Домашняя сеть — профиль не активен') :
-        m.offline == 1 && view && view.current == 1 ? t('Нет связи — перебор на паузе') : t('Обученность в этой сети')) + '</span>' +
+      '<span class="smart-hero-level">' + esc(level) + '</span>' +
+      '<span class="smart-hero-sub">' + esc(sub) + '</span>' +
+      (fresh ? '<span class="row strat-hero-acts"><button type="button" class="btn sm state" onclick="calibAct(\'start\')"' + (canCalib ? '' : ' disabled') + '>' +
+        esc(t('Пройти настройку')) + '</button></span>' : '') +
       (nets.length > 1
         ? '<button type="button" class="chip dropdown state" aria-haspopup="menu" onclick="smartPickNet(this)"><span>' + esc(netText) + '</span>' + icon('caret', 's18') + '</button>'
         : '<span class="smart-hero-net">' + icon(view && /^mobile/.test(view.id) ? 'globe' : 'wifi', 's18') + esc(netText) + '</span>') +
@@ -139,9 +153,7 @@ function renderSmart(){
   // действия: в альбомной ориентации — в левой колонке под шапкой (там
   // иначе пусто), в портретной — после плиток
   const acts = [];
-  const cs = calibState(m);
   acts.push('<div class="list">' +
-    settingsRow({icon: cs.icon, title: 'Первичная настройка', sub: cs.sub, on: 'calibSheet()', chevron: true}) +
     settingsRow({icon: 'share', title: 'Поделиться обучением', sub: t('Файл с выученным в этой сети'), on: 'smartExport()'}) +
     settingsRow({icon: 'upload', title: 'Загрузить обучение', sub: t('Добавить выученное из файла в текущую сеть'), on: "$('smart-imp').click()"}) +
     // отладочный замер вариантов — для разработчиков
@@ -181,10 +193,62 @@ function fmtWhen(sec){
   const d = new Date(sec * 1000);
   return d.toLocaleString(LANG === 'en' ? 'en-GB' : 'ru-RU', {day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit'});
 }
-function calibSheet(){
-  const m = SMS || {}, c = m.calib || {}, cs = calibState(m), parts = [];
+/* Ход первичной настройки, 0–100: проверка сети и сайты без обхода — 10%,
+   все варианты — 75%, лучшие ещё раз — 15% */
+function calibProgress(c){
+  if(c.stage === 'net') return 2;
+  if(c.stage === 'prep') return 2 + Math.round(8 * (c.hosts ? Math.min(1, c.prep / c.hosts) : 0));
+  if(c.stage === '1') return 10 + Math.round(75 * (c.plan ? Math.min(1, c.planned / c.plan) : 0));
+  if(c.stage === '2') return 85 + Math.round(15 * (c.hosts2 ? Math.min(1, c.done2 / c.hosts2) : 0));
+  return 0;
+}
+/* Лист кольца: из чего складывается обученность, первичная настройка и что
+   идёт через обход в этой сети. refresh — обновление открытого листа: доля
+   сервисов не перечитывается */
+let smartUsage = null;
+async function smartRingSheet(refresh){
+  const m = SMS || {}, pr = smartProgress(m), parts = [];
+  const pc = x => Math.round(100 * x) + '%';
+  parts.push('<h2 class="subhead">' + esc(t('Обученность: {0}%', pr.p)) + '</h2>');
+  parts.push('<div class="helper">' + esc(t('Складывается из того, знает ли умный режим рабочий вариант для каждого вида соединений, как часто соединения проходят и сколько сайтов он уже видел.')) + '</div>');
+  parts.push('<div class="list">' +
+    settingsRow({icon: 'globe', title: t('Знает варианты: {0}', pc(pr.know)), sub: SMART_GROUPS.map(([k, title]) => title + ' ' + pc(pr.g[k].conf)).join(' · ')}) +
+    settingsRow({icon: 'check', title: t('Соединения проходят: {0}', pc(pr.acc)), sub: t('доля удачных, без сайтов «не похоже на блокировку»')}) +
+    settingsRow({icon: 'list', title: t('Сайтов: {0}', pr.sites), sub: t('для полного охвата — 50 и больше')}) +
+  '</div>');
+  parts.push(calibHtml(m));
+  parts.push('<h2 class="subhead">' + esc(t('Что идёт через обход')) + '</h2><div id="smart-usage">' + usageHtml(smartUsage) + '</div>');
+  const html = parts.join('');
+  if(openSheetId === 'smart-sheet' && smartSheetKind === 'ring') $('smart-sheet-body').innerHTML = html;
+  else smartSheet(t('Обучение в этой сети'), html, 'ring');
+  if(refresh && smartUsage) return;
+  const r = await ctlx(['smart-usage', m.view || '']);
+  try { smartUsage = JSON.parse(r.out); } catch(e){ smartUsage = null; }
+  const box = $('smart-usage');
+  if(box && openSheetId === 'smart-sheet' && smartSheetKind === 'ring') box.innerHTML = usageHtml(smartUsage);
+}
+/* Доля сервисов по соединениям: удачи и ошибки выученного с затуханием —
+   последние часы работы. Восемь крупных, остальное — «Другие» */
+function usageHtml(u){
+  if(!u) return '<div class="helper">' + esc(t('Загрузка…')) + '</div>';
+  if(!u.total) return '<div class="empty"><span>' + esc(t('Пока нет данных')) + '</span></div>';
+  const named = u.groups.filter(g => g.name).sort((a, b) => b.w - a.w);
+  const top = named.slice(0, 8), rest = named.slice(8).concat(u.groups.filter(g => !g.name));
+  const other = rest.reduce((a, g) => ({w: a.w + g.w, sites: a.sites + g.sites}), {w: 0, sites: 0});
+  const rows = top.concat(other.w > 0 ? [{name: t('Другие'), w: other.w, sites: other.sites}] : []);
+  return '<div class="helper">' + esc(t('По соединениям через nfqws2 за последние часы: {0} сайтов, открывались хоть раз — {1}, вариантов проверено — {2}.', u.sites, u.everok, u.variants)) + '</div>' +
+    '<div class="list">' + rows.map(g => {
+      const p = Math.round(100 * g.w / u.total);
+      return '<div class="list-item two-line usage-row"><span class="li-text"><span class="li-primary">' + esc(g.name) + '</span>' +
+        '<span class="usage-bar" aria-hidden="true"><i style="width:' + Math.max(1, p) + '%"></i></span></span>' +
+        '<span class="li-trail li-value">' + (p < 1 ? '<1' : p) + '%</span></div>';
+    }).join('') + '</div>';
+}
+function calibHtml(m){
+  const c = m.calib || {}, cs = calibState(m), parts = [];
+  parts.push('<h2 class="subhead">' + esc(t('Первичная настройка')) + '</h2>');
   parts.push('<div class="helper">' + esc(t('Модуль открывает пятнадцать ключевых сайтов — заблокированных так, как блокирует ТСПУ, — на каждом варианте обхода, а лучшие проверяет ещё дважды. Так в новой сети сразу известно, с чего начинать и в каком порядке перебирать; дальше порядок уточняют удачи и ошибки по ходу работы. Занимает 10–15 минут и до 30 МБ трафика; не проводится без сети, на медленной сети и там, где блокировок нет.')) + '</div>');
-  parts.push('<div class="list">' + settingsRow({icon: cs.icon, title: cs.run ? t('Идёт настройка') : t('Состояние'), sub: cs.sub}) + '</div>');
+  parts.push('<div class="list">' + settingsRow({icon: cs.icon, title: cs.run ? t('Идёт настройка: {0}%', calibProgress(c)) : t('Состояние'), sub: cs.sub}) + '</div>');
   if(c.done > 0 && (c.slots || []).length){
     parts.push('<h2 class="subhead">' + esc(t('Лучшие варианты в этой сети')) + '</h2>');
     parts.push('<div class="list">' + c.slots.map(sl => settingsRow({icon: sl.good ? 'check' : 'warn',
@@ -198,14 +262,12 @@ function calibSheet(){
     esc(cs.done ? t('Настроить заново') : t('Настроить сейчас')) + '</button>');
   parts.push('<div class="row">' + btns.join('') + '</div>');
   if(!(m.running == 1 && m.active == 1) && !cs.run) parts.push('<div class="helper">' + esc(t('Нужен работающий умный режим.')) + '</div>');
-  const html = parts.join('');
-  if(openSheetId === 'smart-sheet' && smartSheetKind === 'calib') $('smart-sheet-body').innerHTML = html;
-  else smartSheet(t('Первичная настройка'), html, 'calib');
+  return parts.join('');
 }
 async function calibAct(what){
   const r = await withBusy(['smart-calib', what]);
   if(r.code){ toast(errText(r, what === 'stop' ? 'Не удалось остановить' : 'Не удалось начать')); return; }
-  if(what === 'start') toast(t('Первичная настройка началась'));
+  if(what === 'start') toast(t('Первичная настройка началась: ход — в кольце'));
   await smartLoad();
 }
 
@@ -275,7 +337,7 @@ async function smartProblems(){
 function smartTrainSheet(){
   const m = SMS, bg = m.bg || {}, ls = smartLearnState(m);
   smartSheet(t('Обучение'),
-    '<div class="helper">' + esc(t('Умный режим учится сам, по ходу работы. Фоновое обучение раз в две минуты открывает один сайт из списка популярных и ваших — так он заранее знает обход для каждого вида соединений. Оно идёт, пока работает служба: на паузе и без сети ждёт и продолжается само.')) + '</div>' +
+    '<div class="helper">' + esc(t('Умный режим учится сам, по ходу работы. Фоновое обучение раз в две минуты открывает один сайт из списков, которые и так идут в обход (ваш, YouTube, Discord, выученные автоматически и ключевые сайты), — так он заранее знает обход для каждого вида соединений. Оно идёт, пока работает служба: на паузе и без сети ждёт и продолжается само.')) + '</div>' +
     '<div class="list">' +
       settingsRow({icon: 'auto', title: 'Фоновое обучение', sub: bg.n ? t('Открыто сайтов: {0}, из них удачно {1}', bg.n, bg.ok || 0) + (bg.last ? ' · ' + bg.last : '') : t('Раз в две минуты, пока работает умный режим'),
         sw: true, checked: m.learn == 1, on: 'smartLearnToggle(this.checked)'}) +

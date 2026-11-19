@@ -231,7 +231,8 @@ assert_eq "2" "$(grep -c . "$MOCK_DIR/curl.urls" 2>/dev/null)" "one site per cal
 assert_contains "$(cat "$SMART_LEARN_FILE")" "n=2" "counted"
 assert_contains "$(cat "$SMART_LEARN_FILE")" "ok=2" "with successes"
 last=$(sed -n 's/^last=//p' "$SMART_LEARN_FILE")
-assert_contains "$(cat "$MODDIR/defaults/smart-learn.list" "$LISTS_DIR/probe_hosts.list" "$LISTS_DIR/user.list" "$LISTS_DIR/auto.list" 2>/dev/null)" "$last" "from the learning pool ($last)"
+assert_contains "$(cat "$LISTS_DIR/user.list" "$LISTS_DIR/google.list" "$LISTS_DIR/discord.list" "$LISTS_DIR/auto.list" "$MODDIR/defaults/smart-calib.list" 2>/dev/null)" "$last" "from the lists that go through the bypass anyway ($last)"
+assert_eq "" "$(grep -x "$last" "$MODDIR/defaults/smart-learn.list" "$LISTS_DIR/probe_hosts.list" 2>/dev/null | grep -vxF -f "$LISTS_DIR/user.list" 2>/dev/null)" "not from the old pool of mostly unblocked sites"
 printf 'offline\n' > "$SMART_NET_FILE"
 ctl smart-learn-once
 assert_eq "2" "$(grep -c . "$MOCK_DIR/curl.urls" 2>/dev/null)" "nothing without a network"

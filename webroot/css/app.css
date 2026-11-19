@@ -346,6 +346,13 @@ html[data-containers="true"] .settings-grid .list > .list-item:active {
 .smart-tile.warn .st-sub { color: inherit; opacity: .85; }
 
 /* Вкладка «Обход»: переключатель режимов — M3 segmented button */
+/* доля сервиса в листе обучения умного режима */
+.usage-row .li-text { gap: 6px; }
+.usage-bar { display: block; height: 6px; border-radius: 3px; overflow: hidden;
+  background: var(--md-sys-color-surface-container-highest); }
+.usage-bar > i { display: block; height: 100%; border-radius: inherit; background: var(--md-sys-color-primary); }
+/* кольцо — кнопка: подробности обучения */
+button.smart-ring-box { appearance: none; border: none; background: none; padding: 0; color: inherit; cursor: pointer; border-radius: 50%; }
 .seg-mode { display: flex; height: 48px; border: 1px solid var(--md-sys-color-outline); border-radius: var(--shape-full); overflow: hidden; }
 .seg-mode .seg { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   border: 0; background: none; color: var(--md-sys-color-on-surface); cursor: pointer; position: relative;

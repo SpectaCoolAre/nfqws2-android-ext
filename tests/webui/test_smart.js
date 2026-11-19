@@ -166,6 +166,29 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   const p2 = parseInt(await page.$eval('.smart-ring-val', e => e.textContent), 10);
   truthy(p2 < p, 'and the ring shows its own, lower score (' + p2 + ')');
 
+  sect('the ring: first setup and details');
+  // 19.11: кольцо — кнопка; не обученная сеть — предложение первичной
+  // настройки в шапке, во время неё — её ход в кольце
+  const ring = await page.evaluate(() => {
+    const keep = JSON.stringify(SMS), out = {};
+    const cur = SMS.nets.find(n => n.current == 1) || SMS.nets[0];
+    SMS.view = cur.id; const view = cur.id;
+    SMS.nets = SMS.nets.map(n => n.id === view ? Object.assign({}, n, {sites: 0}) : n);
+    SMS.calib = {running: 0, done: 0}; smartView = null; renderSmart();
+    out.fresh = [$('smart-lead').textContent, !!document.querySelector('.smart-hero .btn')];
+    SMS.calib = {running: 1, stage: '1', plan: 200, planned: 100}; renderSmart();
+    out.run = [document.querySelector('.smart-ring-val').textContent, $('smart-lead').textContent];
+    SMS = JSON.parse(keep); renderSmart();
+    return out;
+  });
+  truthy(ring.fresh[0].includes('Ещё не обучен') && ring.fresh[1], 'a network with nothing learned offers the first setup right in the hero: ' + ring.fresh[0]);
+  truthy(ring.run[0].startsWith('48') && ring.run[1].includes('Первичная настройка'), 'while it runs the ring shows its progress: ' + ring.run.join(' | '));
+  await page.click('.smart-hero .smart-ring-box');
+  await page.waitForTimeout(400);
+  const rs = await page.textContent('#smart-sheet');
+  truthy(rs.includes('Знает варианты') && rs.includes('Первичная настройка') && rs.includes('Что идёт через обход'), 'the ring opens the details: what the score is made of, the first setup, what goes through the bypass');
+  await page.evaluate(() => closeSheet()); await page.waitForTimeout(400);
+
   sect('switching to strategies');
   // 19.11: без «Включить выбор стратегий» в умном режиме переключателя нет
   truthy(await page.evaluate(() => $('mode-seg').hidden), 'without strategy choice (the default) smart mode shows no mode switch');

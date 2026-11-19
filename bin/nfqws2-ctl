@@ -2097,7 +2097,7 @@ bench_one() {
           "$url" 2>/dev/null </dev/null); rc=$?
       else
         # без curl (Pixel): helper — те же поля и коды, что у curl (helper/fetch.go)
-        out=$("$BENCH_BIN" -fetch "$url" -resolve "$BENCH_DNS" -o "$BENCH_DIR/body.$w" -ua "$BENCH_UA" ${BENCH_MAX:+-max "$BENCH_MAX"} 2>/dev/null </dev/null); rc=$?
+        out=$("$BENCH_BIN" -fetch "$url" -resolve "$BENCH_DNS" -o "$BENCH_DIR/body.$w" -ua "$BENCH_UA" ${BENCH_MAX:+-limit "$BENCH_MAX"} 2>/dev/null </dev/null); rc=$?
       fi
       set -f; set -- $out; set +f
       code=${1:-000} tc=${2:-0} ta=${3:-0} tt=${4:-0} sz=${6:-0} ip=${7:-} red=${8:-}
@@ -2526,7 +2526,7 @@ calib_net_check() {
   [ "$(cat "$SMART_NET_FILE" 2>/dev/null)" = offline ] && { echo offline; return 1; }
   offline_now && { echo offline; return 1; }
   for i in 1 2 3; do
-    tc=$("$HELPER_BIN" -fetch "https://${CALIB_PING:-ya.ru}/" -resolve "$BENCH_DNS" -o /dev/null -max 1 2>/dev/null </dev/null |
+    tc=$("$HELPER_BIN" -fetch "https://${CALIB_PING:-ya.ru}/" -resolve "$BENCH_DNS" -o /dev/null -limit 1 2>/dev/null </dev/null |
       awk '{ v = $2 * 1000; if (v > 0) printf "%d", v + 0.5 }')
     [ -n "$tc" ] || continue
     if [ -z "$best" ] || [ "$tc" -lt "$best" ]; then best=$tc; fi
@@ -2592,6 +2592,37 @@ calib_apply() { # <сеть>
       }
     }' > "$tmp" && mv -f "$tmp" "$f"
   rm -f "$tmp" "$(calib_skip_file "$1")"
+  # Ключевые сайты — в выученное сети (19.11): каждый на варианте, который
+  # открыл его чаще всех, с удачами и ошибками настройки, — в «Сайтах» они
+  # видны, как будто умный режим подобрал их сам. Пишутся строками формата
+  # <сеть>.tsv в calib-<сеть>.sites: оркестратор добавляет их себе (у кого
+  # записи ещё нет) и удаляет файл — служба не перезапускается
+  cat "$BENCH_DIR"/res.* 2>/dev/null | awk -F'\t' -v now="$(date +%s)" '
+    $1 != 1 && $1 != 2 { next }
+    $4 == 0 { if ($1 == 1 && base[$2] != "ok" && ($5 != "connect" || base[$2] == "")) base[$2] = $5; next }
+    $4 == "-" || $5 == "connect" || $3 == "-" || $3 == "" { next }
+    { L[++nl] = $0 }
+    END {
+      for (i = 1; i <= nl; i++) {
+        split(L[i], z, "\t"); h = z[2]; v = z[4] + 0
+        if (base[h] == "ok") continue
+        sl[h] = z[3]; k = h SUBSEP v
+        if (!(k in t)) vs[h] = vs[h] " " v
+        t[k]++; if (z[5] == "ok") o[k]++; else e[k]++
+      }
+      for (h in vs) {
+        n = split(substr(vs[h], 2), a, " "); best = ""; okl = ""; erl = ""
+        for (j = 1; j <= n; j++) {
+          k = h SUBSEP a[j]
+          if (o[k] > 0) okl = okl (okl != "" ? "," : "") a[j] ":" o[k] ".0"
+          if (e[k] > 0) erl = erl (erl != "" ? "," : "") a[j] ":" e[k] ".0"
+          if (o[k] > 0 && (best == "" || o[k] > o[h SUBSEP best] || (o[k] == o[h SUBSEP best] && e[k] + 0 < e[h SUBSEP best] + 0))) best = a[j]
+        }
+        if (best == "") continue
+        printf "%s\t%s\t%s\t%s\t%s\t\t%d\te\n", sl[h], h, best, okl, erl, now
+      }
+    }' > "$SMART_DIR/calib-$1.sites"
+  [ -s "$SMART_DIR/calib-$1.sites" ] || rm -f "$SMART_DIR/calib-$1.sites"
   # оркестратор перечитывает порядок, когда меняется эта метка
   date +%s > "$STATE_DIR/smart_calib"
 }
@@ -2676,7 +2707,9 @@ calib_json() { # <сеть> — для экрана умного режима
   f=$(calib_file "$net"); sk=$(calib_skip_file "$net")
   calib_running && run=1
   st=$(sed -n 's/^stage=//p' "$CALIB_DIR/info" 2>/dev/null)
-  printf '{"running":%s,"stage":"%s","tests":%d,"plan":%d,"planned":%d,"start":%d' "$run" "$(json_str "$st")" \
+  printf '{"running":%s,"stage":"%s","hosts":%d,"prep":%d,"hosts2":%d,"done2":%d,"tests":%d,"plan":%d,"planned":%d,"start":%d' "$run" "$(json_str "$st")" \
+    "$(grep -c . "$CALIB_DIR/hosts" 2>/dev/null)" "$(grep -c . "$CALIB_DIR/prep" 2>/dev/null)" \
+    "$(cat "$CALIB_DIR"/hosts.2.* 2>/dev/null | grep -c .)" "$(grep -c . "$CALIB_DIR/done.2" 2>/dev/null)" \
     "$(cat "$CALIB_DIR"/res.* 2>/dev/null | grep -c .)" \
     "$(cat "$CALIB_DIR"/plan.* 2>/dev/null | awk '{ s += $1 } END { print s + 0 }')" \
     "$(cat "$CALIB_DIR"/res.* 2>/dev/null | awk -F'\t' '$1 == 1 && $4 > 0 && $5 != "connect"' | grep -c .)" \
@@ -2697,6 +2730,52 @@ calib_json() { # <сеть> — для экрана умного режима
     printf ',"skip":"%s","skip_detail":"%s","skip_when":%d' "$(json_str "$why")" "$(json_str "$det")" "${ts:-0}"
   fi
   printf '}'
+}
+# Что идёт через обход в сети (19.11, для кольца умного режима): соединения
+# сайтов из выученного <сеть>.tsv — удачи и ошибки с затуханием (вес события
+# вдвое меньше за час), то есть последние часы работы, — по сервисам. Чего нет
+# среди известных — «Другие». Ещё: сайтов всего, открытых хоть раз, сколько
+# вариантов сеть уже проверила
+cmd_smart_usage() { # [сеть]
+  local net="${1:-$(cat "$SMART_NET_FILE" 2>/dev/null)}" f
+  smart_valid_net "$net" || net=$(cat "$SMART_NET_LAST" 2>/dev/null)
+  f="$SMART_DIR/$net.tsv"
+  [ -s "$f" ] || { echo '{"total":0,"sites":0,"everok":0,"variants":0,"groups":[]}'; return 0; }
+  awk -F'\t' '
+    function sum(s,   a, n, i, x, t) { t = 0; n = split(s, a, ","); for (i = 1; i <= n; i++) { split(a[i], x, ":"); t += x[2] } return t }
+    function svc(h) {
+      if (h ~ /(^|\.)(youtube\.com|youtu\.be|googlevideo\.com|ytimg\.com|ggpht\.com|youtube-nocookie\.com|youtubekids\.com|yt\.be)$/) return "YouTube"
+      if (h ~ /(^|\.)(instagram\.com|cdninstagram\.com)$/) return "Instagram"
+      if (h ~ /(^|\.)(facebook\.com|facebook\.net|fbcdn\.net|fbsbx\.com|messenger\.com)$/) return "Facebook"
+      if (h ~ /(^|\.)(whatsapp\.com|whatsapp\.net)$/) return "WhatsApp"
+      if (h ~ /(^|\.)(x\.com|twitter\.com|twimg\.com|t\.co|pscp\.tv|periscope\.tv)$/) return "X (Twitter)"
+      if (h ~ /(^|\.)(discord\.com|discord\.gg|discordapp\.com|discordapp\.net|discord\.media|discordcdn\.com)$/) return "Discord"
+      if (h ~ /(^|\.)(telegram\.org|t\.me|telegram\.me|telesco\.pe|cdn-telegram\.org)$/) return "Telegram"
+      if (h ~ /(^|\.)(tiktok\.com|tiktokcdn\.com|tiktokv\.com|byteoversea\.com|ibytedtos\.com)$/) return "TikTok"
+      if (h ~ /(^|\.)(spotify\.com|scdn\.co|spotifycdn\.com)$/) return "Spotify"
+      if (h ~ /(^|\.)(soundcloud\.com|sndcdn\.com)$/) return "SoundCloud"
+      if (h ~ /(^|\.)(twitch\.tv|jtvnw\.net|ttvnw\.net|live-video\.net)$/) return "Twitch"
+      if (h ~ /(^|\.)(reddit\.com|redd\.it|redditmedia\.com|redditstatic\.com)$/) return "Reddit"
+      if (h ~ /(^|\.)(openai\.com|chatgpt\.com|oaistatic\.com|oaiusercontent\.com)$/) return "ChatGPT"
+      if (h ~ /(^|\.)(claude\.ai|anthropic\.com)$/) return "Claude"
+      if (h ~ /(^|\.)(linkedin\.com|licdn\.com)$/) return "LinkedIn"
+      if (h ~ /(^|\.)(google\.com|google\.ru|googleapis\.com|gstatic\.com|googleusercontent\.com|gvt1\.com|gvt2\.com)$/) return "Google"
+      return ""
+    }
+    /^#/ || NF < 7 { next }
+    {
+      w = sum($4) + sum($5); sites++; if ($8 == "e") eo++
+      n = split($4 "," $5, a, ","); for (i = 1; i <= n; i++) { split(a[i], x, ":"); if (x[1] != "") vv[$1 SUBSEP x[1]] = 1 }
+      g = svc($2); if (g == "") g = "~"
+      gw[g] += w; gh[g]++; tot += w
+    }
+    END {
+      for (k in vv) nv++
+      printf "{\"total\":%.1f,\"sites\":%d,\"everok\":%d,\"variants\":%d,\"groups\":[", tot, sites, eo + 0, nv + 0
+      # сравнения — вне списка printf: awk прошивки их там не разбирает
+      for (g in gw) { nm = g; if (nm == "~") nm = ""; printf "%s{\"name\":\"%s\",\"w\":%.1f,\"sites\":%d}", (m++ ? "," : ""), nm, gw[g], gh[g] }
+      printf "]}\n"
+    }' "$f"
 }
 cmd_smart_calib() {
   case "$1" in
@@ -2773,9 +2852,13 @@ cmd_smart_learn_once() {
   [ "$(cat "$SMART_NET_FILE" 2>/dev/null)" = offline ] && return 0
   tool=$(probe_tool); kind="${tool%% *}"; bin="${tool#* }"
   [ "$kind" = none ] && return 0
-  # и видеосервер YouTube этой сети (если уже известен): учится вариант для него
-  h=$({ grep -hv -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$MODDIR/defaults/smart-learn.list" \
-        "$LISTS_DIR/probe_hosts.list" "$LISTS_DIR/user.list" "$LISTS_DIR/auto.list" 2>/dev/null; ggc_host; } |
+  # Сайты — из списков, которые и так идут в обход (19.11): свои, Google
+  # (YouTube), Discord, автосписок и ключевые сайты первичной настройки. Прежний
+  # набор (defaults/smart-learn.list и «Проверка доступности») был полон
+  # незаблокированных сайтов — их обучение ничего не давало. И видеосервер
+  # YouTube этой сети (если уже известен): учится вариант для него
+  h=$({ grep -hv -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$LISTS_DIR/user.list" "$LISTS_DIR/google.list" \
+        "$LISTS_DIR/discord.list" "$LISTS_DIR/auto.list" "$MODDIR/defaults/smart-calib.list" 2>/dev/null; ggc_host; } |
       tr -d '\r' | awk '$1 !~ /[*^$]/ && $1 ~ /\./ && !seen[$1]++ { print $1 }' |
       awk -v seed="$$$(date +%s)" 'BEGIN { srand(seed % 2147483647) } { a[NR] = $1 } END { if (NR) print a[int(rand() * NR) + 1] }')
   [ -n "$h" ] || return 0
@@ -3151,6 +3234,7 @@ EOF
   smart-learn-once) cmd_smart_learn_once ;;
   smart-bench) shift; cmd_smart_bench "$@" ;;
   smart-calib) shift; cmd_smart_calib "$@" ;;
+  smart-usage) cmd_smart_usage "$2" ;;
   # smart-turbo on|off — игра-пасхалка: фоновое обучение чаще (метка на 45 с)
   smart-turbo)
     case "$2" in
