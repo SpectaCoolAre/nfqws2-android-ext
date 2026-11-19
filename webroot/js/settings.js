@@ -56,9 +56,10 @@ function renderSettings(){
       {icon: 'info', tone: 'gray', title: 'nfqws2-android-ext', sub: t('Версия {0}', S.version || '—'), mxValue: S.version || '—', on: 'openUrl(' + jsArg(GITHUB_URL) + ')', chevron: true, long: 'ver'}
     ]]
   ];
-  // Для разработчиков — отдельным экраном внизу, пока включён режим разработчика
-  if(devMode) groups[groups.length - 1][1].push(
-    {icon: 'settings', tone: 'gray', title: 'Для разработчиков', sub: t('Контроль работы и лимиты пакетов'), on: "navigate('dev')", chevron: true});
+  // Для разработчиков — отдельным экраном внизу, всегда (19.11): важные пункты
+  // там спрашивают подтверждение с пояснением
+  groups[groups.length - 1][1].push(
+    {icon: 'settings', tone: 'gray', title: 'Для разработчиков', sub: t('Выбор стратегий, тонкая настройка обхода и лимиты пакетов'), on: "navigate('dev')", chevron: true});
   setHTML('settings-body', groups.map(([title, rows]) =>
     '<div class="stack"><h2 class="subhead">' + esc(t(title)) + '</h2><div class="list">' + rows.map(settingsRow).join('') + '</div></div>').join(''), false);
 }
@@ -231,7 +232,7 @@ async function setHomeWifi(on){
 }
 
 /* ══ РЕЗЕРВНАЯ КОПИЯ ═════════════════════════════════════════════════════ */
-const UI_KEYS = ['m3_seed', 'm3_mode', 'm3_amoled', 'm3_containers', 'm3_monochrome', 'ui_design', 'nfq_lang', 'nfq_dev'];
+const UI_KEYS = ['m3_seed', 'm3_mode', 'm3_amoled', 'm3_containers', 'm3_monochrome', 'ui_design', 'nfq_lang', 'nfq_dev', 'nfq_strat_pick'];
 async function createBackup(){
   const dir = SAVE_DIR_DEFAULT;
   const ui = {};
@@ -339,6 +340,8 @@ function renderWork(){
       (j.dns_available == 1 ? settingsRow({icon: 'dns', title: 'Отключать DNS на Wi‑Fi', sub: t('DNS модуля тоже на паузе в домашних сетях'), sw: true,
           checked: j.dns_home_pause == 1, disabled: !on, id: 'work-dns-home', on: 'setDnsHome(this.checked)'}) : '') +
       settingsRow({icon: 'shield', title: 'Отключать при VPN', sub: t('Пауза обхода, пока включён VPN'), sw: true, checked: j.vpn_pause == 1, on: 'toggleVpnPause(this.checked)'}) +
+      // белые списки оператора — из «Для разработчиков» (19.11): работает надёжно
+      settingsRow({icon: 'list', title: 'Отключать при белых списках', sub: t('Пауза обхода, пока мобильный оператор пускает только разрешённые сервисы'), sw: true, checked: j.wl_pause == 1, on: "setp('WL_PAUSE', this.checked ? 1 : 0)"}) +
     '</div></div>' +
     '<div class="stack"><h2 class="subhead">' + esc(t('Запуск и трафик')) + '</h2>' +
     '<div class="list" id="work-sws">' + SW.map(([k, label, jk]) => switchRow(k, label, j[jk] == 1)).join('') + '</div></div>', false);

@@ -59,6 +59,15 @@ html.sp-m3 #splash .sp-logo { fill: var(--sp-op, #fff); }
     var c = JSON.parse(localStorage.getItem('sp_m3_' + (dark ? 'dark' : 'light')) || 'null');
     if(c){ h.style.setProperty('--sp-p', c.p); h.style.setProperty('--sp-op', c.op); h.style.setProperty('--sp-bg', c.bg); }
   }
+  /* Цвет окна — сразу цвета заставки (19.11): тёмно-серый theme-color из
+     разметки менеджер мог отдать полосе навигации внизу экрана, пока тему
+     не применили скрипты, — серая полоса под заставкой. И фон страницы —
+     тот же: до загрузки стилей он белый по умолчанию */
+  var bg = getComputedStyle(h).getPropertyValue('--sp-bg').trim() ||
+    (h.classList.contains('sp-m3') ? (dark ? '#141218' : '#fdf8fd') : (dark ? '#000000' : '#f7f7f7'));
+  var tc = document.querySelector('meta[name="theme-color"]');
+  if(tc) tc.setAttribute('content', bg);
+  h.style.background = bg;
 } catch(e) {} })();
 </script>
 </head>
@@ -329,7 +338,7 @@ html.sp-m3 #splash .sp-logo { fill: var(--sp-op, #fff); }
 
   <!-- ═══ Для разработчиков: то, что обычному пользователю не нужно ═══════ -->
   <section class="page" data-page="dev" aria-label="Для разработчиков" data-ta="aria-label">
-    <div class="helper" data-t>Контроль работы и лимиты пакетов. Пункт виден, пока включён режим разработчика — долгое нажатие на название модуля.</div>
+    <div class="helper" data-t>Тонкая настройка для тех, кто разбирается в обходе. Важные пункты перед включением и выключением показывают, что они делают.</div>
     <div class="list" id="dev-sws"></div>
   </section>
 

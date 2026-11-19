@@ -30,6 +30,11 @@ async function confInit(){
 /* Значок вкладки, переключатель и строка на главной — по режиму */
 function updateModeUi(){
   const smart = isSmartMode();
+  // выбор между стратегиями и умным режимом — при включённом «Включить выбор
+  // стратегий» (для разработчиков); без него переключатель виден, только пока
+  // работает стратегия, — чтобы перейти в умный режим
+  const seg = $('mode-seg');
+  if(seg) seg.hidden = smart && !stratPickOn();
   const ic = $('nav-bypass-ic');
   if(ic) ic.setAttribute('href', smart ? '#i-auto' : '#i-config');
   document.querySelectorAll('#mode-seg .seg').forEach(b => {
@@ -57,7 +62,7 @@ function renderStrat(){
       '<span class="smart-hero-sub">' + esc(groupTitle(strategyGroup(s))) + '</span>' +
       '<span class="smart-hero-level">' + esc(strategyName(currentStrategy)) + '</span>' +
       '<span class="row strat-hero-acts">' +
-        '<button type="button" class="btn tonal sm state" onclick="openStrategySheet()">' + esc(t('Сменить')) + '</button>' +
+        (stratPickOn() ? '<button type="button" class="btn tonal sm state" onclick="openStrategySheet()">' + esc(t('Сменить')) + '</button>' : '') +
         (b.modified == 1 ? '<button type="button" class="btn text sm state danger" onclick="resetConf()">' + esc(t('Сбросить правки')) + '</button>' : '') +
       '</span>' +
     '</div></div>');

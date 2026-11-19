@@ -74,7 +74,7 @@ case "$key:$v" in page.example:1) printf '<title>Доступ к ресурсу 
 # адресе (time_connect 0), но TCP соединяется; открывает только 4
 case "$key:$v" in drop.example:4) ;; drop.example:*) R 000 0.000000 0.000000 0 5.0 0; exit 28 ;; esac
 case "$key:$v" in
-  open.example:*|pen.example:*|late.example:2|drop.example:4|listed.example:1|blocked.example:2|blocked.example:4|slow.example:3|yt.example:3)
+  open*.example:*|pen.example:*|late.example:2|drop.example:4|listed.example:1|blocked.example:2|blocked.example:4|slow.example:3|yt.example:3)
     R 200 0.050 0.120 0.300 0.400 30000; exit 0 ;;
   slow.example:1) R 200 0.050 0.120 0.300 10.0 16000; exit 28 ;;
   blocked.example:1) R 000 0.050 0 0 1 0; exit 35 ;;
@@ -210,13 +210,10 @@ assert_eq "0 3" "$(awk -F'\t' '$1 == 1 && $2 == "yt.example" { print $4 }' "$res
 assert_eq "" "$(awk -F'\t' '$1 == 2 && $4 != 2 && $4 != 4 && $4 != 3' "$res")" "stage 2 repeats only variants of the set"
 sed -i '/^#@bench-/d' "$MODDIR/strategies/smart.conf"
 
-section "the extended pool switch"
-ctl set SMART_POOL 1
-assert_eq "ext" "$(cat "$SMART_POOL_FILE" 2>/dev/null)" "on: the orchestrator is told at once"
-ctl json-status
-assert_contains "$ctl_out" '"smart_pool":1' "and the WebUI sees it"
-ctl set SMART_POOL 0
-assert_no_file "$SMART_POOL_FILE" "off"
+section "the extended pool switch is gone"
+echo ext > "$SMART_POOL_FILE"
+load_conf >/dev/null 2>&1; smart_pool_sync
+assert_no_file "$SMART_POOL_FILE" "a leftover state/smart_pool is removed: the whole pool is always searched"
 
 section "without curl (Pixel): the helper measures like curl"
 # 14.11, Pixel: curl нет, замер шёл через wget busybox — 0 мс, без классов
@@ -248,6 +245,61 @@ assert_contains "$(cat "$BENCH_DIR/info")" "tool=helper" "on the helper, not on 
 assert_contains "$(head -n 3 "$STATE_DIR/helper.urls")" "https://" "the helper fetches the sites"
 assert_eq "$(awk -F'\t' '$1 == 1 && $2 != "pen.example" { print $2, $4, $5 }' "$SANDBOX/res.curl" | sort)" "$(awk -F'\t' '$1 == 1 && $2 != "pen.example" { print $2, $4, $5 }' "$res" | sort)" "and gets the same verdicts as curl (16 KB, TLS, no connection, dropped ClientHello, redirects)"
 assert_eq "0.120" "$(awk -F'\t' '$1 == 1 && $2 == "blocked.example" && $4 == 2 { print $8 }' "$res")" "with the TLS time (wget gave 0)"
+
+# ── первичная настройка (19.11) — на той же заглушке helper ──────────────────
+section "first setup of the smart mode: key sites through every variant"
+printf '# ключевые\nblocked.example\nslow.example\nyt.example\ndead.example\ndrop.example\npage.example\n' > "$MODDIR/defaults/smart-calib.list"
+rm -f "$STATE_DIR/late.n" "$STATE_DIR/pen.last" "$STATE_DIR/pen.block" "$SMART_BENCH_FILE" "$STATE_DIR/smart_calib"
+CD="$STATE_DIR/calib"
+ctl smart-calib start
+assert_rc 1 "$ctl_rc" "it needs the smart mode running"
+rm -rf "$CD"; mkdir -p "$CD"
+ctl smart-calib run
+assert_rc 0 "$ctl_rc" "a run finishes"
+cf="$SMART_DIR/calib-mobile-25001.tsv"
+assert_file "$cf" "the order is kept per network"
+assert_eq "4" "$(awk -F'\t' '$1 == 1 && $2 == "blocked.example" && $4 != 0' "$CD"/res.* | grep -c .)" "a key site is tried on every variant of its profile (#@ lines of smart.conf, up to the profile's count)"
+assert_contains "$(cat "$STATE_DIR/helper.urls")" "https://blocked.example" "on the helper"
+assert_match "$(awk -F'\t' '$1 == "tls" { print $2 }' "$cf")" '^(2,4|4,2)' "tls: the variants that opened most key sites come first"
+assert_contains "$(awk -F'\t' '$1 == "tls" { print "," $3 "," }' "$cf")" ",1," "and the one that opened none is listed as such"
+assert_eq "3" "$(awk -F'\t' '$1 == "google" { print $2 }' "$cf")" "google: its own order"
+assert_file "$STATE_DIR/smart_calib" "the orchestrator is told to reread the order"
+assert_no_file "$SMART_BENCH_FILE" "and let go"
+assert_contains "$(cat "$SERVICE_LOG")" "Первичная настройка умного режима готова" "the log says so"
+ctl smart-status
+assert_match "$ctl_out" '"calib":\{"running":0,[^}]*"done":[0-9]' "the smart screen sees it"
+assert_contains "$ctl_out" '"slot":"google","best":3' "with the best variant of each profile"
+ctl smart-calib auto
+assert_rc 0 "$ctl_rc" "a network with an order is not set up again by itself"
+
+section "first setup: not on a network it would tell nothing about"
+rm -f "$cf"
+printf 'open.example\nopen2.example\nopen3.example\nopen4.example\nopen5.example\nblocked.example\n' > "$MODDIR/defaults/smart-calib.list"
+rm -rf "$CD"; mkdir -p "$CD"
+ctl smart-calib run
+assert_no_file "$cf" "most key sites open without bypass: no order"
+assert_contains "$(cat "$SMART_DIR/calib-mobile-25001.skip")" "nofilter" "the network is not filtered (or traffic already bypasses)"
+assert_eq "" "$(awk -F'\t' '$1 == 1 && $4 != 0 && $4 != "-"' "$CD"/res.* 2>/dev/null)" "and no variant was tried"
+ctl smart-calib auto
+assert_rc 0 "$ctl_rc" "it is not retried right away"
+sed -i 's/^[0-9]*/1/' "$SMART_DIR/calib-mobile-25001.skip"
+ctl smart-calib auto
+assert_rc 1 "$ctl_rc" "a day later it is due again (here: refused, the service is not running)"
+rm -rf "$CD"; mkdir -p "$CD"
+CALIB_SLOW_MS=10; export CALIB_SLOW_MS
+ctl smart-calib run
+unset CALIB_SLOW_MS
+assert_contains "$(cat "$SMART_DIR/calib-mobile-25001.skip")" "slow" "a slow network: not now"
+assert_eq "" "$(cat "$CD"/res.* 2>/dev/null)" "nothing is tried"
+ctl smart-calib status
+assert_contains "$ctl_out" '"skip":"slow"' "the screen knows why"
+printf 'dead.example\nnodns.example\n' > "$MODDIR/defaults/smart-calib.list"
+rm -rf "$CD"; mkdir -p "$CD"
+ctl smart-calib run
+assert_contains "$(cat "$SMART_DIR/calib-mobile-25001.skip")" "noconn" "too few key sites answer at all: not now"
+ctl smart-calib reset
+assert_no_file "$SMART_DIR/calib-mobile-25001.skip" "a reset forgets the network's setup"
+
 mv "$SANDBOX/helper.real" "$MODDIR/bin/nfqws2-helper" 2>/dev/null
 cp -f "$SANDBOX/res.curl" "$res"
 

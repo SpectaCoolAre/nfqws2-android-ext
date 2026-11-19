@@ -27,7 +27,7 @@ SERVICE_LOG="$LOG_DIR/service.log"
 NFQWS_LOG="$LOG_DIR/nfqws2.log"
 ACTIVE_FILE="$STATE_DIR/active_strategy"
 LAST_STRATEGY_FILE="$STATE_DIR/last_strategy"   # последняя не умная стратегия (режим «Стратегии»)
-FIRST_STRATEGY=hardcorp74      # стратегия при первой установке
+FIRST_STRATEGY=smart           # при первой установке — умный режим (19.11)
 
 # Home Wi-Fi: bypass pauses on these networks (HOME_WIFI=1)
 HOME_FILE="$CONFDIR/home_wifi.list"
@@ -40,7 +40,7 @@ SMART_NET_LAST="$STATE_DIR/smart_net_last"     # последняя настоя
 SMART_LEARN_FILE="$STATE_DIR/smart_learn"      # фоновое обучение: сколько открыто, последний сайт
 SMART_LEARN_EVERY=120                          # сек между сайтами фонового обучения
 SMART_TURBO_FILE="$STATE_DIR/smart_turbo"      # до какого времени обучение ускорено (игра)
-SMART_POOL_FILE="$STATE_DIR/smart_pool"        # ext — умный режим перебирает и расширенный пул
+SMART_POOL_FILE="$STATE_DIR/smart_pool"        # убранный расширенный пул: файл удаляется
 SMART_BENCH_FILE="$STATE_DIR/smart_bench"      # идёт отладочный замер: число его исполнителей
 BENCH_DIR="$STATE_DIR/bench"                   # рабочий каталог замера
 SMART_TURBO_EVERY=15
@@ -51,6 +51,7 @@ SMART_TURBO_EVERY=15
 # обхода геоблока и белых списков ждут пробуждения. Следит watchdog по
 # счётчикам /proc/net/dev, отметка — файл (пишется только при смене)
 IDLE_FILE="$STATE_DIR/idle"
+OFFLINE_FILE="$STATE_DIR/offline_since"   # с какого времени (uptime, с) нет маршрута наружу
 IDLE_AFTER=600
 IDLE_KBPS=5
 SK_PIDFILE="$STATE_DIR/smartkill.pid"          # обрыв застрявших соединений умного режима
@@ -135,7 +136,6 @@ set_defaults() {
   : "${EXTRA_FLOWSEAL:=0}"
   : "${SMART_LEARN:=1}"
   : "${WL_PAUSE:=1}"
-  : "${SMART_POOL:=0}"
   : "${PUSH_FIX:=0}"
   : "${YT_RAMP:=0}"
   : "${SMART_PROBE:=0}"
@@ -1633,6 +1633,7 @@ update_description() { # running | stopped | paused <ssid>
     paused) case "$2" in
               @vpn) d="⏸ Пауза: включён VPN" ;;
               @wl)  d="⏸ Пауза: белые списки у оператора" ;;
+              @offline) d="⏸ Пауза: нет сети" ;;
               *)    d="⏸ Пауза: домашний Wi-Fi «$2»" ;;
             esac ;;
     *)      d="⛔ Остановлено" ;;
@@ -1688,7 +1689,7 @@ render_strategy() {
 
 # Module settings (same across strategies) are carried over whole from the live
 # config on strategy change/reset. NFQWS_EXTRA_ARGS only for standard $MODE_* refs.
-USER_KEYS="META_QUIC_REJECT IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL SMART_LEARN WL_PAUSE SMART_POOL PUSH_FIX YT_RAMP SMART_PROBE NFQWS_EXTRA_ARGS"
+USER_KEYS="META_QUIC_REJECT IPV6_ENABLED TCP_PORTS UDP_PORTS NFQUEUE_NUM PKT_LIMIT_OUT PKT_LIMIT_IN BLOCK_QUIC NAT_FIX APP_MODE AUTOSTART WATCHDOG NFQWS_USER LOG_LEVEL LOG_MAX_KB HOME_WIFI VPN_PAUSE ENABLE_HOTSPOT DNS_PUSH DNS_SMART DNS_GEO EXTRA_RKN EXTRA_FLOWSEAL SMART_LEARN WL_PAUSE PUSH_FIX YT_RAMP SMART_PROBE NFQWS_EXTRA_ARGS"
 merge_user_keys() { # <generated config> <settings source config>  -> stdout
   awk -v keys=" $USER_KEYS " -v src="$2" '
     function quotes(str,   t) { t = str; return gsub(/"/, "", t) }
@@ -1858,6 +1859,13 @@ wl_fetch() {
   return 0
 }
 
+# Сети нет: маршрута наружу нет (ни Wi‑Fi, ни мобильной сети). Без ip — не
+# знаем, считаем, что сеть есть
+offline_now() {
+  command -v ip >/dev/null 2>&1 || return 1
+  [ -z "$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')" ]
+}
+
 on_wifi() {
   local d n="${NFQWS_SYSNET:-/sys/class/net}"
   local s up=0 dev
@@ -1946,11 +1954,10 @@ smart_net_update() {
   return 0
 }
 
-# Расширенный пул умного режима: оркестратор читает state/smart_pool сам, раз
-# в несколько секунд — перезапуск не нужен
+# Остатки убранных настроек: расширенный пул (state/smart_pool, 19.11 —
+# умный режим перебирает весь пул всегда) и настройки тестовых сборок
 smart_pool_sync() {
-  if [ "$SMART_POOL" = "1" ]; then echo ext > "$SMART_POOL_FILE"; else rm -f "$SMART_POOL_FILE"; fi
-  # остатки убранных настроек тестовых сборок
+  rm -f "$SMART_POOL_FILE"
   rm -f "$STATE_DIR/smart_noggc" "$STATE_DIR/smart_gvpick" "$STATE_DIR/smart_gvnat" "$STATE_DIR/smart_quicno" "$STATE_DIR/smart_ipstat"
 }
 

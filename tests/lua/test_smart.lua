@@ -628,37 +628,21 @@ do
 	check(sf:find("^alt2\t3\t2\t") ~= nil, "and saved per strategy (" .. sf:gsub("\n", " ") .. ")")
 end
 
-section("the extended pool joins the search only when enabled")
+section("the whole pool is searched: the base set first, then the rest")
 do
-	local function run(h)
-		local seen = {}
-		-- сайт хоть раз открылся — ошибки дальше не принимаются за «не DPI»
-		local c0 = conn(h); packet(c0, { slot = "pool", base = 2, pass = 9 }); packet(c0, { incoming = true, seq = 18000, slot = "pool", base = 2, pass = 9 })
-		for i = 1, 10 do
-			later(); local c = conn(h); local v = packet(c, { slot = "pool", base = 2, pass = 9 })
-			seen[v or 0] = true
-			for k = 1, 3 do packet(c, { retrans = true, slot = "pool", base = 2, pass = 9 }) end
-			okconn("anchor.example")   -- связь есть: ошибки — не от сети
-		end
-		return seen
-	end
-	local s1 = run("pool1.example")
-	check(s1[1] and s1[2] and not s1[3] and not s1[4], "off: only the base set (1–2) is tried")
-	writefile(HOME .. "/state/smart_pool", "ext\n"); later(6)
-	local s2 = run("pool2.example")
-	check(s2[3] or s2[4], "on: variants past the base set are tried too")
-	os.remove(HOME .. "/state/smart_pool"); later(6)
-	-- набор — список номеров: варианта 2 в нём нет, хотя он «внутри» диапазона
-	local seen = {}
-	local c0 = conn("pool3.example"); packet(c0, { slot = "pool3", base = "1,3-4", pass = 9 }); packet(c0, { incoming = true, seq = 18000, slot = "pool3", base = "1,3-4", pass = 9 })
+	-- 19.11: переключателя «расширенный пул» больше нет — перебор по всему
+	-- пулу, основной набор только раньше в очереди
+	local seen, order, last = {}, {}, nil
+	local c0 = conn("pool1.example"); packet(c0, { slot = "pool", base = 2, pass = 9 }); packet(c0, { incoming = true, seq = 18000, slot = "pool", base = 2, pass = 9 })
 	for i = 1, 10 do
-		later(); local c = conn("pool3.example"); local v = packet(c, { slot = "pool3", base = "1,3-4", pass = 9 }); seen[v or 0] = true
-		for k = 1, 3 do packet(c, { retrans = true, slot = "pool3", base = "1,3-4", pass = 9 }) end
-		okconn("anchor.example")
+		later(); local c = conn("pool1.example"); local v = packet(c, { slot = "pool", base = 2, pass = 9 })
+		seen[v or 0] = true
+		if v ~= last then order[#order + 1] = v; last = v end
+		for k = 1, 3 do packet(c, { retrans = true, slot = "pool", base = 2, pass = 9 }) end
+		okconn("anchor.example")   -- связь есть: ошибки — не от сети
 	end
-	check(seen[1] and seen[3] and not seen[2], "a list: only its numbers are tried (1, 3, 4 — not 2)")
-	later(); local v = packet(conn("pool2.example"), { slot = "pool", base = 2, pass = 9 })
-	check(v == 1 or v == 2, "off again: a site sitting on a pool variant goes back to the base set (" .. tostring(v) .. ")")
+	check(seen[1] and seen[2] and (seen[3] or seen[4]), "variants past the base set are tried too")
+	check(order[1] <= 2 and order[2] <= 2, "but only after the base set (" .. table.concat(order, ",") .. ")")
 end
 
 section("untried variants: the priority ones first, then the base set, the pool last")
@@ -666,7 +650,6 @@ do
 	-- 12.11: на МТС Youtube_circular перестал проходить; с первого (21) перебор
 	-- шёл по номерам 22, 23, 24… и до hardcorp74 (1), который проходил, не
 	-- доходил десятки минут
-	writefile(HOME .. "/state/smart_pool", "ext\n"); later(6)
 	local O = { slot = "order", plan = plan12, pass = 12, first = "5", base = "1,5-6,9", pri = "9" }
 	local function o(extra) local t = {}; for k, v in pairs(O) do t[k] = v end; for k, v in pairs(extra or {}) do t[k] = v end; return t end
 	local order, last = {}, nil
@@ -681,14 +664,41 @@ do
 	check(order[1] == 5 and order[2] == 9, "first the start variant, then the priority one (pri=9), not the next number: " .. str)
 	check(order[3] == 1 and order[4] == 6, "then the rest of the base set: " .. str)
 	check(order[5] and order[5] ~= 12 and not ({ [1] = 1, [5] = 1, [6] = 1, [9] = 1 })[order[5]], "the extended pool only after the whole base set: " .. str)
-	os.remove(HOME .. "/state/smart_pool"); later(6)
+end
+
+section("the order from the first setup (ctl smart-calib)")
+do
+	-- 19.11: первичная настройка прогнала ключевые сайты через все варианты —
+	-- в сети, где своих удач ещё нет, новый сайт начинает с её лучшего, а
+	-- перебор идёт по её порядку; не открывшие ничего — после непроверенных
+	local net = readall(HOME .. "/state/smart_net"):gsub("%s", "")
+	writefile(HOME .. "/smart/calib-" .. net .. ".tsv", "#calib\t1\ncal\t7,3,10\t2,4,6,8,9\t5\t4\n")
+	writefile(HOME .. "/state/smart_calib", "1\n"); later(6)
+	local O = { slot = "cal", plan = plan12, pass = 12, first = "1", base = "1-11", pri = "9" }
+	local function o(extra) local t = {}; for k, v in pairs(O) do t[k] = v end; for k, v in pairs(extra or {}) do t[k] = v end; return t end
+	local order, last = {}, nil
+	for i = 1, 40 do
+		later(); local c = conn("cal.example"); local v = packet(c, o())
+		if v ~= last then order[#order + 1] = v; last = v end
+		for k = 1, 3 do packet(c, o({ retrans = true })) end
+		okconn("anchor3.example")
+		if #order >= 6 then break end
+	end
+	local str = table.concat(order, ",")
+	check(order[1] == 7, "a new site starts on the best variant of the setup, not on first=1: " .. str)
+	check(order[2] == 3 and order[3] == 10, "then its working ones in its order (not the pri= one): " .. str)
+	check(order[4] == 1 or order[4] == 11, "then the variants it did not try: " .. str)
+	check(order[5] ~= 2 and order[5] ~= 4, "the ones that opened nothing come last: " .. str)
+	os.remove(HOME .. "/smart/calib-" .. net .. ".tsv")
+	writefile(HOME .. "/state/smart_calib", "2\n"); later(6)
+	later(); local v = packet(conn("cal2.example"), o())
+	check(v == 1, "the setup forgotten: back to first= (" .. tostring(v) .. ")")
 end
 
 section("a removed variant (its number left empty) is never picked")
 do
 	-- 15.11: eduncey #4 (TLS 35) удалён, номера остальных не сдвинуты — по ним
 	-- хранится выученное. Номер без строк в конфиге — не вариант
-	writefile(HOME .. "/state/smart_pool", "ext\n"); later(6)
 	local function gapplan()
 		local p = {}
 		for v = 1, 12 do if v ~= 7 then p[#p + 1] = { func = "tf", func_instance = "tf_" .. v, arg = { strategy = tostring(v) }, payload_filter = "all", range = {} } end end
@@ -707,7 +717,6 @@ do
 	local n = 0; for _ in pairs(seen) do n = n + 1 end
 	check(not got7, "variant 7 has no lines and is never tried")
 	check(n >= 6, "while the others are (" .. n .. " different)")
-	os.remove(HOME .. "/state/smart_pool"); later(6)
 end
 
 section("debug benchmark: the variant is forced and nothing is learned")

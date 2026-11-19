@@ -186,7 +186,9 @@ const VIEWPORTS = [
     if (scrolled > 0) truthy(Math.abs(y1 - y0) <= 1, `the mode and the hero do not move (${Math.round(y0)} → ${Math.round(y1)})`);
     else ok('the page fits the screen, nothing to scroll');
     const lead = await page.evaluate(() => [...document.querySelectorAll('.page.active .pcol-lead > :not([hidden])')].map(e => e.id || e.className));
-    truthy(lead.includes('mode-seg') && lead.includes('smart-lead'), 'the mode switch and the hero are in the main column: ' + lead.join(', '));
+    // переключатель режима в умном режиме — только при включённом выборе стратегий (19.11)
+    const pick = await page.evaluate(() => stratPickOn());
+    truthy(lead.includes('smart-lead') && lead.includes('mode-seg') === pick, 'the hero (and the mode switch, if strategies can be chosen) are in the main column: ' + lead.join(', '));
     await page.evaluate(() => { document.getElementById('scroller').scrollTop = 0; navigate('control'); }); await page.waitForTimeout(500);
     const tilesRight = await page.evaluate(() => document.getElementById('live-tiles').getBoundingClientRect().left > innerWidth / 2 - 20);
     truthy(tilesRight, 'state: the live tiles are on the right, next to the service card');

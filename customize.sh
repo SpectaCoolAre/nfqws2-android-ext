@@ -71,11 +71,12 @@ if [ -f "$CONF/nfqws2.conf" ]; then
   cp -f "$MODPATH/defaults/nfqws2.conf" "$CONF/nfqws2.conf.dist" ||
     abort "! Failed to save the default config"
 else
-  # Первая установка: сразу самая рабочая стратегия (FIRST_STRATEGY в lib/common.sh)
-  first="$MODPATH/strategies/hardcorp74.conf"
+  # Первая установка: умный режим (FIRST_STRATEGY в lib/common.sh) — он сам
+  # подбирает обход под сеть; выбор стратегий — в настройках разработчика
+  first="$MODPATH/strategies/smart.conf"
   if [ -f "$first" ] && cp -f "$first" "$CONF/nfqws2.conf"; then
-    echo hardcorp74 > "$CONF/state/active_strategy"
-    ui_print "- Created config: $CONF/nfqws2.conf (strategy hardcorp74)"
+    echo smart > "$CONF/state/active_strategy"
+    ui_print "- Created config: $CONF/nfqws2.conf (smart mode)"
   else
     cp -f "$MODPATH/defaults/nfqws2.conf" "$CONF/nfqws2.conf" ||
       abort "! Failed to create $CONF/nfqws2.conf"

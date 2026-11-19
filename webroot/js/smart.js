@@ -35,9 +35,12 @@ async function smartLoad(){
   if(SMS && smartView && !(SMS.nets || []).some(n => n.id === smartView)){ smartView = null; return smartLoad(); }
   renderSmart();
   if(openSheetId === 'smart-sheet' && smartSheetKind === 'learn') smartTrainSheet();
+  if(openSheetId === 'smart-sheet' && smartSheetKind === 'calib') calibSheet();
   clearTimeout(smartTimer);
-  // пока экран открыт — раз в 20 секунд свежая статистика (фоновое обучение идёт)
-  if(SMS && (currentPage === 'config' && isSmartMode())) smartTimer = setTimeout(() => { if((currentPage === 'config' && isSmartMode())) smartLoad(); }, 20000);
+  // пока экран открыт — раз в 20 секунд свежая статистика (фоновое обучение
+  // идёт), во время первичной настройки — раз в 4 секунды: её ход
+  const calibRun = SMS && SMS.calib && SMS.calib.running == 1;
+  if(SMS && (currentPage === 'config' && isSmartMode())) smartTimer = setTimeout(() => { if((currentPage === 'config' && isSmartMode())) smartLoad(); }, calibRun ? 4000 : 20000);
 }
 const smartNetLabel = n => n.id === 'mobile' || /^mobile-/.test(n.id) ? t('Мобильная: {0}', n.label) : n.id === 'wifi' ? t('Wi‑Fi') : t('Wi‑Fi: {0}', n.label);
 const isPassName = name => /без обхода/i.test(name || '');
@@ -136,7 +139,9 @@ function renderSmart(){
   // действия: в альбомной ориентации — в левой колонке под шапкой (там
   // иначе пусто), в портретной — после плиток
   const acts = [];
+  const cs = calibState(m);
   acts.push('<div class="list">' +
+    settingsRow({icon: cs.icon, title: 'Первичная настройка', sub: cs.sub, on: 'calibSheet()', chevron: true}) +
     settingsRow({icon: 'share', title: 'Поделиться обучением', sub: t('Файл с выученным в этой сети'), on: 'smartExport()'}) +
     settingsRow({icon: 'upload', title: 'Загрузить обучение', sub: t('Добавить выученное из файла в текущую сеть'), on: "$('smart-imp').click()"}) +
     // отладочный замер вариантов — для разработчиков
@@ -149,6 +154,59 @@ function renderSmart(){
   setHTML('smart-lead', hero + '<div class="stack land-only">' + acts.join('') + '</div>', false);
   parts.push('<div class="stack port-only">' + acts.join('') + '</div>');
   setHTML('smart-body', parts.join(''), false);
+}
+
+/* ══ Первичная настройка (ctl smart-calib) ══════════════════════════════
+   Ключевые сайты — через все варианты; итог — порядок вариантов в сети.
+   Запускается сама в сети, где её ещё не было; здесь — ход, итог и повтор */
+const CALIB_SKIP = {
+  offline: 'Не было сети — повторится сама через полчаса',
+  slow: 'Сеть была медленной ({0}) — повторится сама через полчаса',
+  nofilter: 'Ключевые сайты открывались без обхода ({0}): сеть не фильтруется или трафик уже идёт в обход (VPN, прокси). Повторится через сутки',
+  noconn: 'Ключевые сайты почти не отвечали ({0}) — повторится сама через 2 часа',
+  stopped: 'Остановлена — повторится сама через сутки'
+};
+function calibState(m){
+  const c = m.calib || {};
+  if(c.running == 1){
+    const st = c.stage === 'net' ? t('проверка сети') : c.stage === 'prep' ? t('ключевые сайты без обхода')
+      : c.stage === '2' ? t('лучшие варианты ещё раз') : c.plan ? t('вариантов {0} из {1}', c.planned, c.plan) : t('варианты');
+    return {icon: 'auto', sub: t('Идёт: {0}', st), run: true};
+  }
+  if(c.done > 0) return {icon: 'check', sub: t('Готово {0}', fmtWhen(c.done)), done: true};
+  if(c.skip) return {icon: 'info', sub: t(CALIB_SKIP[c.skip] || 'Не состоялась', c.skip_detail || '')};
+  return {icon: 'tune', sub: m.running == 1 ? t('Ещё не было — начнётся сама в течение минуты') : t('Начнётся сама, когда служба заработает')};
+}
+function fmtWhen(sec){
+  const d = new Date(sec * 1000);
+  return d.toLocaleString(LANG === 'en' ? 'en-GB' : 'ru-RU', {day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit'});
+}
+function calibSheet(){
+  const m = SMS || {}, c = m.calib || {}, cs = calibState(m), parts = [];
+  parts.push('<div class="helper">' + esc(t('Модуль открывает пятнадцать ключевых сайтов — заблокированных так, как блокирует ТСПУ, — на каждом варианте обхода, а лучшие проверяет ещё дважды. Так в новой сети сразу известно, с чего начинать и в каком порядке перебирать; дальше порядок уточняют удачи и ошибки по ходу работы. Занимает 10–15 минут и до 30 МБ трафика; не проводится без сети, на медленной сети и там, где блокировок нет.')) + '</div>');
+  parts.push('<div class="list">' + settingsRow({icon: cs.icon, title: cs.run ? t('Идёт настройка') : t('Состояние'), sub: cs.sub}) + '</div>');
+  if(c.done > 0 && (c.slots || []).length){
+    parts.push('<h2 class="subhead">' + esc(t('Лучшие варианты в этой сети')) + '</h2>');
+    parts.push('<div class="list">' + c.slots.map(sl => settingsRow({icon: sl.good ? 'check' : 'warn',
+      title: t(SMART_SLOT_TITLE[sl.slot] || sl.slot),
+      sub: sl.good ? (sl.name || '#' + sl.best) + ' · ' + t('открыли сайты: {0} вариантов из {1} · сайтов {2} из {3}', sl.good, sl.good + sl.bad, sl.solved, sl.blocked)
+        : t('ни один вариант не открыл ключевые сайты этого вида')})).join('') + '</div>');
+  }
+  const btns = [];
+  if(cs.run) btns.push('<button class="btn tonal state" onclick="calibAct(\'stop\')">' + esc(t('Остановить')) + '</button>');
+  else btns.push('<button class="btn state" onclick="calibAct(\'start\')"' + (m.running == 1 && m.active == 1 ? '' : ' disabled') + '>' +
+    esc(cs.done ? t('Настроить заново') : t('Настроить сейчас')) + '</button>');
+  parts.push('<div class="row">' + btns.join('') + '</div>');
+  if(!(m.running == 1 && m.active == 1) && !cs.run) parts.push('<div class="helper">' + esc(t('Нужен работающий умный режим.')) + '</div>');
+  const html = parts.join('');
+  if(openSheetId === 'smart-sheet' && smartSheetKind === 'calib') $('smart-sheet-body').innerHTML = html;
+  else smartSheet(t('Первичная настройка'), html, 'calib');
+}
+async function calibAct(what){
+  const r = await withBusy(['smart-calib', what]);
+  if(r.code){ toast(errText(r, what === 'stop' ? 'Не удалось остановить' : 'Не удалось начать')); return; }
+  if(what === 'start') toast(t('Первичная настройка началась'));
+  await smartLoad();
 }
 
 function smartPickNet(anchor){

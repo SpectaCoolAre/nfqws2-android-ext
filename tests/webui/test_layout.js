@@ -1103,7 +1103,12 @@ const VIEWPORTS = [
     eq('1/1,1/1', second.webTrail.join(','), 'the results land in the new rows');
     eq('Cloudflare (3.3.3.3)', second.tcp.join(','), 'TCP 16-20KB rows are replaced');
     eq('Quad9 (9.9.9.9),Yandex (77.88.8.8)', second.dns.join(','), 'DNS rows are replaced');
-    truthy(second.rec && second.rec.length > 0, 'strategy recommendation badge is displayed on completion');
+    // совет стратегии — только при включённом выборе стратегий (19.11)
+    eq('', second.rec || '', 'without strategy choice no strategy is recommended: smart mode picks the bypass');
+    await page.evaluate(() => { store.set('nfq_strat_pick', '1'); renderRecommendation(); });
+    const rec2 = await page.evaluate(() => document.querySelector('#test-recommendation')?.hidden ? '' : document.querySelector('#test-recommendation .badge')?.textContent.trim());
+    truthy(rec2 && rec2.length > 0, 'with it, the strategy recommendation badge is displayed on completion');
+    await page.evaluate(() => store.set('nfq_strat_pick', '0'));
     eq('2/2', second.report, 'the report holds only the second run');
     const card = await page.evaluate(() => [document.getElementById('net-ip').textContent, document.getElementById('net-isp').textContent]);
     eq('5.18.158.84 (RU)', card[0], 'the network card shows the IP');

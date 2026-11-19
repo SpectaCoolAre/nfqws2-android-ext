@@ -41,6 +41,9 @@ var (
 
 const fetchBodyMax = 256 << 10 // в файл тела — не больше (заглушку узнают по началу)
 
+// fetchMax — -max: читать ответ не дальше стольких байт (0 — до конца)
+var fetchMax int64
+
 type fetchResult struct {
 	code            int
 	tc, ta, tt, tot float64
@@ -237,6 +240,12 @@ func fetchWith(raw string, servers []string, ua, bodyFile string, o fetchOpt) (r
 			break
 		}
 		if r.rc == 47 {
+			break
+		}
+		// -max: прочитано сколько нужно — дальше не качаем (первичная настройка
+		// умного режима: 20 КБ уже значат, что DPI соединение пропустил, а
+		// страницы целиком на тысячу попыток — сотни мегабайт)
+		if fetchMax > 0 && r.size >= fetchMax {
 			break
 		}
 		if err != nil {

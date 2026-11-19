@@ -31,6 +31,7 @@ if(snapStatus && snapStatus.running != null){
   if(S.strategy) currentStrategy = S.strategy;
   LIVE = snapJSON('live');
   renderStatus();
+  prerenderTabs();
   splashOut();
 }
 (async () => {
@@ -39,13 +40,32 @@ if(snapStatus && snapStatus.running != null){
   if(systemTheme()) loadSystemTheme();
   if(S.running != null){ const sig = await readSig(); statSig = sigKey(sig) || ''; applySig(sig); }
   await stat();
+  if(!snapStatus || snapStatus.running == null) prerenderTabs();
   splashOut();
   initStrategySelector();
+  // свежие данные вкладки «Обход» — в фоне, пока пользователь на главной:
+  // её самый долгий запрос (сравнение конфига) не ждёт первого открытия
+  setTimeout(() => { if(currentPage !== 'config' && !pageInited.has('config')) confInit().catch(() => {}); }, 2500);
   // плитки — из слепка уже на экране; свежие — чуть позже, чтобы на холодном
   // старте не стоять в очереди перед командами открытого экрана
   if(LIVE) setTimeout(() => { if(currentPage === 'control') loadLive(); }, 1500); else loadLive();
   checkWhatsNew();
 })();
+
+/* Остальные вкладки — пока на экране логотип (19.11): из слепков прошлого
+   открытия и последнего статуса. Первое открытие вкладки показывает готовый
+   экран сразу, свежие данные приходят следом, а не пустой экран, который
+   строится на глазах. Ошибка одной вкладки не мешает остальным */
+function prerenderTabs(){
+  [() => { renderMode(); renderListFiles(); },
+   () => renderSettings(),
+   () => {
+     if(!BYP) BYP = snapJSON('byp');
+     if(!SMS && !smartView) SMS = snapJSON('sms');
+     renderBypass();
+     if(isSmartMode() && SMS) renderSmart();
+   }].forEach(f => { try { f(); } catch(e) {} });
+}
 
 /* Заставка уходит, когда «Состояние» получило первые данные и отрисовалось
    (два кадра); служба долго не отвечает — всё равно через 4 с */
@@ -54,7 +74,8 @@ function splashOut(){
   if(!el || el.classList.contains('out')) return;
   requestAnimationFrame(() => requestAnimationFrame(() => {
     el.classList.add('out');
-    setTimeout(() => el.remove(), 400);
+    // фон окна до стилей (index.html) — дальше фон темы
+    setTimeout(() => { el.remove(); document.documentElement.style.removeProperty('background'); }, 400);
   }));
 }
 setTimeout(splashOut, 4000);

@@ -538,8 +538,11 @@ function setHTML(el, html, animate, keep){
    закрытия возвращается туда, откуда диалог открыли. Иконка — 24dp цвета
    secondary над заголовком, заголовок тогда по центру. */
 let dialogCb = null, dialogReturnFocus = null;
+let dialogCountT = 0;
 function dialogResolve(val){
   if(!$('dialog-wrap').classList.contains('open')) return;
+  clearInterval(dialogCountT); dialogCountT = 0;
+  $('d-ok').disabled = false;
   const cb = dialogCb; dialogCb = null;
   $('dialog-wrap').classList.remove('open');
   const back = dialogReturnFocus; dialogReturnFocus = null;
@@ -565,6 +568,22 @@ function mdDialog(opts){
     const ok = $('d-ok');
     ok.className = 'btn text state' + (opts.danger ? ' danger' : '');
     ok.textContent = opts.ok || t('ОК');
+    /* countdown — подтверждение важного действия: кнопка серая и считает
+       секунды, пока пользователь читает пояснение; нажать — после нуля */
+    clearInterval(dialogCountT); dialogCountT = 0;
+    ok.disabled = false;
+    if(opts.countdown > 0){
+      const label = ok.textContent;
+      let left = opts.countdown;
+      ok.disabled = true;
+      ok.textContent = label + ' (' + left + ')';
+      dialogCountT = setInterval(() => {
+        left--;
+        if(left > 0){ ok.textContent = label + ' (' + left + ')'; return; }
+        clearInterval(dialogCountT); dialogCountT = 0;
+        ok.textContent = label; ok.disabled = false;
+      }, 1000);
+    }
     const cancel = $('d-cancel');
     cancel.hidden = opts.cancel === false;
     cancel.textContent = typeof opts.cancel === 'string' ? opts.cancel : t('Отмена');
@@ -1218,15 +1237,15 @@ document.querySelectorAll('.nav-dest').forEach(b => onLongPress(b, null, () => {
 }));
 
 /* ── Режим разработчика: долгое нажатие на название модуля или его значок в
-   шапке. Показывает в настройках блок «Для разработчиков» — то, что обычному
-   пользователю не нужно (контроль работы, лимиты пакетов). */
+   шапке. Экран «Для разработчиков» виден всегда (19.11); режим добавляет
+   отладочные инструменты — отладочный замер умного режима. */
 let devMode = store.get('nfq_dev') === '1';
 function toggleDevMode(){
   devMode = !devMode;
   store.set('nfq_dev', devMode ? '1' : '0');
   renderParams(S);
   if(currentPage === 'settings') renderSettings();
-  else if(currentPage === 'dev' && !devMode) navigate('settings');
+  if(currentPage === 'config' && isSmartMode() && typeof renderSmart === 'function') renderSmart();
   toast(devMode ? t('Режим разработчика включён') : t('Режим разработчика выключен'));
 }
 ['app-title', 'brand-logo'].forEach(id => onLongPress($(id), null, () => {
@@ -1255,7 +1274,7 @@ function inGestureZone(x, y, bottomOnly){
    (или в конце) прокрутки и продолжает тянуть — страница растягивается по
    вертикали от упора, с затуханием, отпустил — возвращается. Пока тянем
    мы, touchmove гасится, чтобы браузер не передал упор WebView. */
-const stretch = {el: null, pull: 0, y: 0, sp: 0, anim: null};
+const stretch = {el: null, pull: 0, y: 0, sp: 0, anim: null, own: false, oy: null, side: 0, raf: 0};
 /* HyperOS: страница не растягивается, а сдвигается за пальцем с
    сопротивлением и возвращается пружиной без отскока (как overScrollVertical
    в miuix: критическое затухание, период 0,4 с). Сопротивление — туже, чем в
@@ -1289,9 +1308,18 @@ function stretchApply(){
   }
   // отзывчивее у начала: 100 px — уже ~2,5%, предел — 9%
   const k = 1 + .09 * (1 - Math.exp(-Math.abs(p) / 300));
-  // точка упора: верх страницы или нижний край экрана в её координатах
-  const oy = p > 0 ? 0 : scroller.clientHeight - el.getBoundingClientRect().top;
-  el.style.transformOrigin = '50% ' + oy + 'px';
+  // Точка упора: верх страницы или нижний край экрана в её координатах. Её
+  // место — один раз, когда растяжение с этой стороны началось и страница
+  // ещё не растянута (19.11): раньше оно бралось каждый кадр из уже
+  // растянутой страницы, точка уплывала с каждым движением, и упор снизу
+  // дрожал под пальцем
+  const side = p > 0 ? 1 : -1;
+  if(stretch.side !== side || stretch.oy == null){
+    el.style.transform = '';
+    stretch.oy = p > 0 ? 0 : scroller.clientHeight - el.getBoundingClientRect().top;
+    stretch.side = side;
+  }
+  el.style.transformOrigin = '50% ' + stretch.oy + 'px';
   el.style.transform = 'scaleY(' + k + ')';
 }
 /* Свайп вбок забрал жест: оттягивание снимается сразу, без анимации
@@ -1301,7 +1329,7 @@ function stretchApply(){
 function stretchDrop(){
   const el = stretch.el;
   if(stretch.anim){ stretch.anim.cancel(); stretch.anim = null; }
-  stretch.el = null; stretch.pull = 0;
+  stretch.el = null; stretch.pull = 0; stretch.oy = null; stretch.side = 0;
   if(el){
     el.classList.remove('stretch', 'stretch-release');
     el.style.transform = ''; el.style.transformOrigin = '';
@@ -1309,8 +1337,10 @@ function stretchDrop(){
 }
 function stretchRelease(){
   const el = stretch.el, pulled = stretch.pull;
-  stretch.el = null; stretch.pull = 0;
+  stretch.el = null; stretch.pull = 0; stretch.oy = null; stretch.side = 0;
   if(!el || !el.classList.contains('stretch')) return;
+  // жест кончился на нуле — возвращать нечего, только снять слой
+  if(!pulled){ el.classList.remove('stretch'); el.style.transform = ''; el.style.transformOrigin = ''; return; }
   if(isMx()){
     el.classList.remove('stretch');
     el.style.transform = '';
@@ -1328,6 +1358,8 @@ function stretchRelease(){
 }
 document.addEventListener('touchstart', e => {
   stretchRelease();
+  stretchFlingStop();
+  stretch.own = false;
   if(e.touches.length !== 1 || !e.target.closest || !e.target.closest('#content')) return;
   if(openSheetId || editorCtx || transitionCleanup || textBusy() || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   // внутри своей прокрутки (журнал, редактор, листаемые блоки) — не наше
@@ -1362,25 +1394,64 @@ document.addEventListener('touchmove', e => {
   // ещё прокрутила страницу (moved): в оттягивание идёт только остаток. Раньше
   // шёл весь путь — у края страница разом прыгала на лишние 50–100 px, и
   // быстрая прокрутка у края выглядела рывком с ускорением
-  let p = stretch.pull;
+  let p = stretch.pull, rest = 0;
   const eff = p === 0 ? dy + moved : dy;
-  if(p > 0 || (p === 0 && dy > 0 && atTop)) p = Math.max(0, p + eff);
-  else if(p < 0 || (p === 0 && dy < 0 && atBottom)) p = Math.min(0, p + eff);
+  if(p > 0 || (p === 0 && dy > 0 && atTop)){
+    p += eff;
+    // назад через упор: короткая страница (нечего прокручивать) — сразу в
+    // растяжение от другого края, иначе остаток пути — в прокрутку
+    if(p < 0 && !atBottom){ rest = p; p = 0; }
+  } else if(p < 0 || (p === 0 && dy < 0 && atBottom)){
+    p += eff;
+    if(p > 0 && !atTop){ rest = p; p = 0; }
+  } else if(stretch.own) rest = dy;
+  // Жест наш (касание уже гасилось): браузер эту страницу в нём больше не
+  // прокручивает — прокручиваем сами, за пальцем (19.11). Раньше, оттянув
+  // страницу и поведя палец обратно, её нельзя было прокрутить до отпускания
+  if(stretch.own && rest && e.cancelable){ scroller.scrollTop -= rest; stretch.sp = scrollPos(); }
   // упор тянем сами: браузер это касание не получает и не запускает
   // системное растяжение WebView (оно двигало шапку и навигацию)
-  if(p !== 0 && e.cancelable) e.preventDefault();
+  if((p !== 0 || stretch.own) && e.cancelable){ e.preventDefault(); stretch.own = true; }
 
   if(p === stretch.pull) return;
   stretch.pull = p;
-  if(p === 0){
-    el.classList.remove('stretch'); el.style.transform = ''; el.style.transformOrigin = '';
-    return;
-  }
+  // Слой страницы (класс stretch) живёт весь жест: снимать его на нуле и
+  // заводить снова на каждом проходе через упор — пересоздание слоя, рывок
+  // при каждом движении пальца вверх-вниз у края
   el.classList.add('stretch');
   el.classList.remove('stretch-release');
+  if(p === 0){ el.style.transform = isMx() ? 'translateY(0px)' : 'scaleY(1)'; return; }
   stretchApply();
 }, {passive: false});
-document.addEventListener('touchend', e => { if(!e.touches.length) stretchRelease(); }, {passive: true});
+/* Наш жест прокручивал страницу сам — и инерцию после отпускания даём сами,
+   со скоростью пальца, затухание как у прокрутки Android (≈ 325 мс) */
+function stretchFlingStop(){ if(stretch.raf){ cancelAnimationFrame(stretch.raf); stretch.raf = 0; } }
+function stretchFling(v){
+  stretchFlingStop();
+  if(Math.abs(v) < .1) return;
+  let t0 = performance.now();
+  const step = now => {
+    const dt = Math.min(32, now - t0); t0 = now;
+    const before = scrollPos();
+    scroller.scrollTop = before - v * dt;
+    v *= Math.exp(-dt / 325);
+    const max = scroller.scrollHeight - scroller.clientHeight, top = scrollPos();
+    // долетела до края — отскок, как у прокрутки браузера
+    if(top <= 0 && v > .3){ stretch.raf = 0; stretchAbsorb(true, -v); return; }
+    if(top >= max && v < -.3){ stretch.raf = 0; stretchAbsorb(false, -v); return; }
+    if(Math.abs(v) < .02 || top === before){ stretch.raf = 0; return; }
+    stretch.raf = requestAnimationFrame(step);
+  };
+  stretch.raf = requestAnimationFrame(step);
+}
+document.addEventListener('touchend', e => {
+  if(e.touches.length) return;
+  const own = stretch.own && !stretch.pull && stretch.el;
+  stretch.own = false;
+  stretchRelease();
+  // отпущен в прокрутке, которую вели мы, — инерция (палец недавно двигался)
+  if(own && performance.now() - finger.t < 80) stretchFling(finger.v);
+}, {passive: true});
 
 /* Отскок на инерции: прокрутка с разгона влетела в край, когда палец уже
    отпущен, — страница коротко растягивается от края пропорционально

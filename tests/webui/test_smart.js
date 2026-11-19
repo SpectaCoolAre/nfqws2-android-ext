@@ -167,6 +167,9 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   truthy(p2 < p, 'and the ring shows its own, lower score (' + p2 + ')');
 
   sect('switching to strategies');
+  // 19.11: без «Включить выбор стратегий» в умном режиме переключателя нет
+  truthy(await page.evaluate(() => $('mode-seg').hidden), 'without strategy choice (the default) smart mode shows no mode switch');
+  await page.evaluate(() => setStratPick(true));
   await page.click('#mode-seg .seg[data-mode="strat"]');
   await page.waitForTimeout(400);
   truthy(await page.evaluate(() => $('dialog-wrap').classList.contains('open')), 'switching modes asks first');

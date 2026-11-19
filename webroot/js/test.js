@@ -122,6 +122,8 @@ function renderTestWarn(){
   if(S.running === false) w += banner('', 'info', S.paused
     ? (S.paused === '@vpn'
         ? t('Служба на паузе, пока включён VPN: проверяется прямое соединение, без обхода.')
+        : S.paused === '@offline'
+        ? t('Служба на паузе: нет сети.')
         : S.paused === '@wl'
         ? t('Служба на паузе: у оператора белые списки. Проверяется прямое соединение, без обхода.')
         : t('Служба на паузе в домашнем Wi‑Fi: проверяется прямое соединение, без обхода.'))
@@ -453,7 +455,9 @@ function renderRecommendation(){
   if(!el) return;
   const rec = analyzeProbeResults(webResults, tcp16Results, dnsResults);
   lastRecommendation = rec;
-  if(!rec){
+  // совет стратегии — только при включённом выборе стратегий: без него обход
+  // подбирает умный режим
+  if(!rec || !stratPickOn()){
     el.hidden = true;
     el.innerHTML = '';
     return;

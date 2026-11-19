@@ -324,14 +324,24 @@ const SW = [
 ];
 // Меняют аргументы nfqws2 — служба перезапускается сама, без вопроса
 const RESTART_KEYS = {};
+/* Переключатели разработчика [ключ, подпись, поле статуса] */
 const DEV_SW = [
   ['META_QUIC_REJECT', 'Отказ QUIC для Instagram', 'meta_quic'],
-  ['WL_PAUSE', 'Отключать при белых списках', 'wl_pause'],
-  ['SMART_POOL', 'Расширенный пул умного режима', 'smart_pool'],
-  ['PUSH_FIX', 'Вылечить уведомления (пульс Google в мобильной сети)', 'push_fix'],
-  ['YT_RAMP', 'YouTube: широкое окно (больше нагрузки)', 'yt_ramp'],
+  ['PUSH_FIX', 'Вылечить уведомления', 'push_fix'],
+  ['YT_RAMP', 'Широкое окно для YouTube', 'yt_ramp'],
   ['SMART_PROBE', 'Умный режим: подсети сначала без обхода', 'smart_probe']
 ];
+/* Пояснения важных переключателей: перед включением или выключением
+   показывается окно с ним и кнопкой «Подтвердить», которая 5 секунд серая с
+   отсчётом */
+const DEV_INFO = {
+  META_QUIC_REJECT:
+    'Instagram, Facebook и WhatsApp сначала пробуют QUIC, а провайдер его глушит: приложение ждёт несколько секунд и только потом переходит на TCP. С этим пунктом модуль сразу отказывает QUIC к адресам Meta, и приложение переходит на TCP без ожидания. Выключать стоит, только если QUIC у Meta в вашей сети работает.',
+  PUSH_FIX:
+    'Мобильный оператор молча обрывает соединение уведомлений Google, если оно долго молчит, а Google шлёт пульс раз в 28 минут — уведомления приходят пачками с опозданием. С этим пунктом модуль раз в 5 минут будит телефон и просит Google Play Services послать пульс. Только в мобильной сети; расходует немного батареи.',
+  YT_RAMP:
+    'Для главных сетей видео YouTube модуль занижает окно TCP не до минимума, а вдвое шире, и пересчитывает его в каждом пакете соединения. Видео грузится быстрее там, где узкое окно его тормозит, но через nfqws2 идут все пакеты этих соединений, а не первые 15 — заметно больше работы процессору и батарее. Только в умном режиме.'
+};
 /* Переключатели разработчика, доступные в этой сборке */
 const devSwitches = () => DEV_SW;
 const LIMITS = [
@@ -358,12 +368,40 @@ function renderHeroActions(){
   $('bt-pause').hidden = !run || !!svcBusy || !S.home_override;
 }
 
-function switchRow(k, label, on){
+function switchRow(k, label, on, confirm){
   return '<label class="list-item clickable state">' +
     '<span class="li-text"><span class="li-primary">' + esc(t(label)) + '</span></span>' +
     '<span class="li-trail"><input type="checkbox" class="switch" role="switch" aria-label="' + esc(t(label)) + '"' +
-      (on ? ' checked' : '') + ' onchange="setp(' + jsArg(k) + ', this.checked ? 1 : 0)"></span>' +
+      (on ? ' checked' : '') + ' onchange="' + (confirm ? 'devConfirm(this, ' + jsArg(k) + ')' : 'setp(' + jsArg(k) + ', this.checked ? 1 : 0)') + '"></span>' +
   '</label>';
+}
+/* Важный переключатель разработчика: сначала пояснение и подтверждение с
+   отсчётом, переключатель меняется только после «Подтвердить» */
+async function devConfirm(el, k){
+  const want = el.checked, row = DEV_SW.find(x => x[0] === k);
+  el.checked = !want;
+  if(!row) return;
+  const ok = await mdConfirm(t(row[1]) + ': ' + (want ? t('включить?') : t('выключить?')), t(DEV_INFO[k]),
+    {ok: t('Подтвердить'), countdown: 5, iconName: 'info'});
+  if(!ok) return;
+  el.checked = want;
+  setp(k, want ? 1 : 0);
+}
+/* Выбор стратегий (для разработчиков, по умолчанию выключен): без него модуль
+   работает только в умном режиме, а список из сорока стратегий не путает
+   тех, кто в них не разбирается. Настройка этого WebUI, не модуля */
+const stratPickOn = () => store.get('nfq_strat_pick') === '1';
+function stratPickRow(){
+  return '<label class="list-item clickable state">' +
+    '<span class="li-text"><span class="li-primary">' + esc(t('Включить выбор стратегий')) + '</span></span>' +
+    '<span class="li-trail"><input type="checkbox" class="switch" role="switch" aria-label="' + esc(t('Включить выбор стратегий')) + '"' +
+      (stratPickOn() ? ' checked' : '') + ' onchange="setStratPick(this.checked)"></span>' +
+  '</label>';
+}
+function setStratPick(on){
+  store.set('nfq_strat_pick', on ? '1' : '0');
+  updateModeUi();
+  if(BYP || currentStrategy) renderBypass();
 }
 function renderParams(j){
   j = j || {};
@@ -378,7 +416,7 @@ function renderParams(j){
           '<span class="li-value">' + esc(j[jk] != null ? j[jk] : '—') + '</span>' + icon('chevron-right', 's24') +
         '</span>' +
       '</div>');
-    setHTML('dev-sws', devSwitches(j).map(([k, label, jk]) => switchRow(k, label, j[jk] == 1)).concat(lim).join(''), false);
+    setHTML('dev-sws', [stratPickRow()].concat(devSwitches(j).map(([k, label, jk]) => switchRow(k, label, j[jk] == 1, !!DEV_INFO[k])), lim).join(''), false);
   }
 }
 
@@ -407,10 +445,11 @@ function renderStatus(){
   // DNS — своя плитка ниже. Подпись — одна строка; подробности паузы — в title.
   const part = (text, go) => '<span data-go="' + go + '">' + esc(text) + '</span>';
   const sub = paused
-    ? (j.paused === '@vpn' ? esc(t('Включён VPN')) : j.paused === '@wl' ? esc(t('Белые списки')) : part(t('Домашний Wi‑Fi'), 'wifi'))
+    ? (j.paused === '@vpn' ? esc(t('Включён VPN')) : j.paused === '@offline' ? esc(t('Нет сети')) : j.paused === '@wl' ? esc(t('Белые списки')) : part(t('Домашний Wi‑Fi'), 'wifi'))
     : esc(t('Режим') + ' ' + (j.mode || '—'));
   setHTML('sub', sub, false);
   $('sub').title = paused ? (j.paused === '@vpn' ? t('Включён VPN. Обход возобновится, когда VPN отключится.')
+    : j.paused === '@offline' ? t('Нет ни Wi‑Fi, ни мобильной сети: обход на паузе и не тратит батарею. Возобновится сразу, как появится сеть.')
     : j.paused === '@wl' ? t('Мобильный оператор включил белые списки: открываются только разрешённые сервисы, обход тут не поможет. Обход возобновится, когда белые списки выключат.')
     : t('Домашний Wi‑Fi «{0}». Обход возобновится, когда телефон уйдёт из этой сети.', j.paused)) : '';
   if(j.running) startUptTimer(j.uptime_ms != null ? j.uptime_ms : (j.uptime || 0) * 1000); else stopUptTimer();

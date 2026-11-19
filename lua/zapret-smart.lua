@@ -72,10 +72,9 @@
 --                ответы (API) до порога не дорастают
 --   retrans=N, udp_in=N, udp_out=N — как у стандартного детектора
 --   base=СПИСОК  основной набор: номера через запятую, диапазоны через дефис
---                (base=1-6,10,22) или просто число N — это 1…N. Остальные
---                варианты (расширенный пул) идут в перебор, только когда в
---                state/smart_pool записано ext. Номера при этом не меняются, и
---                выученное с ними остаётся верным
+--                (base=1-6,10,22) или просто число N — это 1…N. Непроверенные
+--                варианты набора пробуются раньше остальных (расширенного
+--                пула); перебирается весь пул
 --
 -- Отладочный замер (ctl smart-bench): пока в state/smart_bench записано число
 -- его исполнителей W, в state/smart_bench.0 … .(W-1) — «сайт вариант время»:
@@ -554,17 +553,53 @@ local function save()
 	SM.dirty = false
 end
 
+-- Первичная настройка (ctl smart-calib, smart/calib-<сеть>.tsv): порядок
+-- вариантов каждого профиля по ключевым сайтам этой сети. Строка: профиль,
+-- рабочие варианты (лучший — первым), не открывшие ни одного сайта
+local function load_calib(net)
+	SM.cal = {}
+	local f = io.open(SM.home .. "/smart/calib-" .. net .. ".tsv", "r")
+	if not f then return end
+	for line in f:lines() do
+		local slot, good, bad = line:match("^([^\t#]+)\t([^\t]*)\t([^\t]*)")
+		if slot then
+			local c, i = { rank = {}, bad = {} }, 0
+			for x in good:gmatch("%d+") do
+				i = i + 1; c.rank[tonumber(x)] = i
+				if i == 1 then c.first = tonumber(x) end
+			end
+			for x in bad:gmatch("%d+") do c.bad[tonumber(x)] = true end
+			SM.cal[slot] = c
+		end
+	end
+	f:close()
+end
+-- порядок профиля; профили TLS делят раскладку вариантов — у профиля без
+-- своих ключевых сайтов берётся порядок обычных сайтов
+local function calib(slot)
+	local c = SM.cal and SM.cal[slot]
+	if c then return c end
+	if SM.cal and slot:find("^tls") then return SM.cal.tls end
+	return nil
+end
+
 -- Сеть: модуль пишет её id в state/smart_net (или offline, если сети нет)
 local function check_net()
 	local t = now()
 	if t - SM.netcheck < NET_EVERY then return end
 	SM.netcheck = t
-	SM.pool_ext = readline(SM.home .. "/state/smart_pool") == "ext"
 	SM.bench = tonumber((readline(SM.home .. "/state/smart_bench") or ""):match("^(%d+)") or "")
 	local net = readline(SM.home .. "/state/smart_net") or "default"
 	net = net:gsub("[^%w%-_.]", "_")
 	if net == "" then net = "default" end
 	SM.offline = (net == "offline")
+	-- порядок первичной настройки: заново при смене сети и когда настройка
+	-- закончилась (ctl меняет метку state/smart_calib)
+	local cr = readline(SM.home .. "/state/smart_calib") or ""
+	if not SM.offline and (cr ~= SM.calrev or net ~= SM.calnet) then
+		SM.calrev, SM.calnet = cr, net
+		load_calib(net)
+	end
 	if SM.offline or net == SM.net then return end
 	if SM.net then save() end
 	local prev = SM.net
@@ -599,6 +634,9 @@ local function leader(slot, n, first, pass)
 		end
 	end
 	if best and bs >= 0.6 then return best end
+	-- явного лучшего у сети нет — лучший по первичной настройке
+	local c = calib(slot)
+	if c and c.first and c.first ~= pass and c.first <= n and allowed(slot, c.first) then return c.first end
 	return first
 end
 
@@ -623,9 +661,15 @@ local function next_strategy(slot, r, n, t, pass)
 			-- (pri=), потом основной набор, расширенный пул — последним. Раньше
 			-- шли просто по номеру после текущего, и с Youtube_circular #1 (21)
 			-- до hardcorp74 (1), который работал, перебор шёл десятки минут
+			-- С первичной настройкой — её порядок: рабочие в ней — раньше всех и по
+			-- её местам, не открывшие ни одного ключевого сайта — после всех
+			-- непроверенных; свои удачи и ошибки сети его потом перекрывают
 			if seen < 0.5 and (s.ok[v] or 0) + (s.err[v] or 0) < 0.5 and not m then
+				local c = calib(slot)
 				local pr = SM.pri[slot] and SM.pri[slot][v]
-				if pr then sc = sc + 0.03 - pr * 0.001
+				if c and c.rank[v] then sc = sc + 0.05 - c.rank[v] * 0.0005
+				elseif c and c.bad[v] then sc = sc - 0.04
+				elseif pr then sc = sc + 0.03 - pr * 0.001
 				elseif SM.isbase[slot] and SM.isbase[slot][v] then sc = sc + 0.01 end
 			end
 			-- при равенстве — авторский вариант, ближайший по номеру после текущего
@@ -1141,12 +1185,10 @@ function smart(ctx, desync)
 	local host = site_key(desync)
 	local nall = count_strategies(desync)
 	local n = nall
-	-- расширенный пул выключен — перебор только по основному набору
-	if desync.arg.base and not SM.pool_ext then
-		SM.allow[slot], SM.nallow[slot] = base_set(desync.arg.base, nall)
-	else
-		SM.allow[slot], SM.nallow[slot] = nil, nil
-	end
+	-- перебор — по всему пулу (19.11: переключатель «расширенный пул» убран):
+	-- основной набор только идёт в очереди раньше остальных, а порядок в
+	-- сети задают удачи — и первичная настройка (ctl smart-calib)
+	SM.allow[slot], SM.nallow[slot] = nil, nil
 	-- основной набор и первые в очереди (pri=) — для порядка перебора
 	-- непроверенных вариантов (см. next_strategy)
 	SM.isbase[slot] = desync.arg.base and (base_set(desync.arg.base, nall)) or nil

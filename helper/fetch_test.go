@@ -41,6 +41,20 @@ func TestFetchOK(t *testing.T) {
 	}
 }
 
+// -max: дальше нужного ответ не читается, и это удача, а не обрыв
+func TestFetchMax(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(strings.Repeat("x", 500000)))
+	}))
+	defer srv.Close()
+	fetchMax = 40000
+	defer func() { fetchMax = 0 }()
+	r := fetch(srv.URL+"/", nil, "", "")
+	if r.rc != 0 || r.code != 200 || r.size < 40000 || r.size > 40000+(32<<10) {
+		t.Fatalf("max: %+v", r)
+	}
+}
+
 func TestFetchRefused(t *testing.T) {
 	l, _ := net.Listen("tcp", "127.0.0.1:0")
 	addr := l.Addr().String()

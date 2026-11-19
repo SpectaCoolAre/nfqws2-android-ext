@@ -368,6 +368,32 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   }));
   eq(overlap[0], overlap[1], 'a fling bounce during the release spring does not stack a second animation: ' + overlap.join(' → '));
   await page.waitForTimeout(600);
+
+  sect('pulled at the top, then up and down without lifting the finger');
+  // 19.11: оттянув страницу у верха и поведя палец обратно, её нельзя было
+  // прокрутить до отпускания (касание уже наше — браузер его не крутит), а
+  // слой страницы снимался и заводился на каждом проходе через упор — рывки
+  await page.evaluate(() => scrollToY(0)); await page.waitForTimeout(300);
+  const ud = [];
+  const upts = [[200, 300]];
+  for (let i = 1; i <= 6; i++) upts.push([200, 300 + i * 15]);      // вниз: оттягивание
+  for (let i = 1; i <= 14; i++) upts.push([200, 390 - i * 15]);     // вверх: обратно и прокрутка
+  for (let i = 1; i <= 6; i++) upts.push([200, 180 + i * 15]);      // снова вниз
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 200, y: 300 }] });
+  for (const [x, y] of upts.slice(1)) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y }] });
+    await page.waitForTimeout(20);
+    ud.push(await page.evaluate(() => [Math.round(stretch.pull), Math.round(scroller.scrollTop), document.querySelector('.page.active').classList.contains('stretch') ? 1 : 0]));
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  truthy(ud[5][0] > 40, 'pulling down at the top pulls: ' + ud.slice(0, 6).map(t => t[0]).join(','));
+  const top = Math.max(...ud.slice(6, 20).map(t => t[1]));
+  truthy(top >= 90 && top <= 130, 'back up past the edge, the page scrolls with the finger in the same touch: ' + ud.slice(6, 20).map(t => t[1]).join(','));
+  truthy(ud.slice(ud.findIndex(t => t[0] !== 0), 20).every(t => t[2] === 1), 'and the page layer is kept for the whole touch, not dropped at the edge: ' + ud.slice(0, 20).map(t => t.join('/')).join(' '));
+  const down = ud.slice(20).map(t => t[1]);
+  truthy(down[down.length - 1] < down[0], 'down again: it scrolls back: ' + down.join(','));
+  await page.waitForTimeout(700);
+  eq('', await page.evaluate(() => document.querySelector('.page.active').style.transform), 'released: nothing is left stretched');
   await page.evaluate(() => { $('content').style.minHeight = ''; scrollToY(0); });
 
   sect('holding the logs icon anywhere on it');

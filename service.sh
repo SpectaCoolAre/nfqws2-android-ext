@@ -638,9 +638,10 @@ netwatch() {
         shift; rq="$*"
         if [ "$(net_signature)" != "$netsig" ]; then netwatch_apply "перепроверка"
         else
-          # сеть та же — сверить сеть умного режима; в последний раз — и паузу
+          # сеть та же — сверить сеть умного режима; в последний раз — и паузу.
+          # Сети нет — паузу каждый раз: «нет сети» ставится через 20 с без неё
           smart_net_update
-          [ -z "$rq" ] && home_check
+          { [ -z "$rq" ] || [ -f "$OFFLINE_FILE" ]; } && home_check
         fi
       fi
     fi
@@ -715,6 +716,11 @@ watchdog() {
     # место фильтра в этой сети (раз в неделю, не во сне): для фейков умного режима
     [ "$rare" = 1 ] && [ "$per" = 20 ] && is_running && smart_active && dpi_ttl_due &&
       ( sh "$MODDIR/bin/nfqws2-ctl" dpi-distance </dev/null >/dev/null 2>&1 & )
+    # первичная настройка умного режима в сети, где её ещё не было (не во сне):
+    # порядок вариантов по ключевым сайтам. Ctl сам проверяет, пора ли
+    [ "$rare" = 1 ] && [ "$per" = 20 ] && is_running && smart_active &&
+      [ ! -s "$SMART_DIR/calib-$(cat "$SMART_NET_FILE" 2>/dev/null).tsv" ] &&
+      ( sh "$MODDIR/bin/nfqws2-ctl" smart-calib auto </dev/null >/dev/null 2>&1 & )
     # DNS — до проверки WATCHDOG: упавший dnsproxy с правилами перехвата
     # оставил бы телефон совсем без DNS
     # DNS запущен без DNS сети (сети не было), а она появилась — перезапуск:
@@ -771,7 +777,20 @@ home_check() {
   mkdir "$STATE_DIR/home.lock" 2>/dev/null || return 0
   # Пауза — домашний Wi‑Fi (в файле SSID) или VPN (метка @vpn). Ручной запуск
   # оставляет то же значение в override: оно действует, пока причина не уйдёт.
-  local ssid="" vpn=0 wl=0 ovr="" want=""
+  local ssid="" vpn=0 wl=0 off=0 ovr="" want=""
+  # Сети нет (маршрута наружу нет) дольше 20 с — пауза, как при VPN (19.11):
+  # обход без сети ничего не делает, а служба и её проверки будят процессор.
+  # 20 с — чтобы не останавливать службу на переходе Wi‑Fi ↔ мобильная сеть
+  if offline_now; then
+    local up since
+    read -r up _ < /proc/uptime; up=${up%.*}
+    [ -f "$OFFLINE_FILE" ] || echo "$up" > "$OFFLINE_FILE"
+    read -r since < "$OFFLINE_FILE" 2>/dev/null
+    case "$since" in ''|*[!0-9]*) since=$up ;; esac
+    [ $((up - since)) -ge "${OFFLINE_AFTER:-20}" ] && off=1
+  else
+    rm -f "$OFFLINE_FILE"
+  fi
   [ "$HOME_WIFI" = "1" ] && ssid=$(active_ssid)
   [ "$VPN_PAUSE" = "1" ] && vpn_active && vpn=1
   [ "$WL_PAUSE" = "1" ] && [ -f "$WL_FILE" ] && wl=1
@@ -779,6 +798,7 @@ home_check() {
   case "$ovr" in
     '') ;;
     @vpn) [ "$vpn" = 1 ] || { rm -f "$HOME_OVERRIDE_FILE"; ovr=""; } ;;
+    @offline) [ "$off" = 1 ] || { rm -f "$HOME_OVERRIDE_FILE"; ovr=""; } ;;
     @wl) [ "$wl" = 1 ] || { rm -f "$HOME_OVERRIDE_FILE"; ovr=""; } ;;
     *) [ "$ovr" = "$ssid" ] || { rm -f "$HOME_OVERRIDE_FILE"; ovr=""; } ;;
   esac
@@ -790,7 +810,9 @@ home_check() {
     if [ -n "$athome" ]; then printf '%s' "$athome" > "$HOME_AT_FILE"; else rm -f "$HOME_AT_FILE"; fi
     [ -f "$DNS_HOME_FILE" ] && dns_enabled && dns_start "домашний Wi‑Fi"
   fi
-  if [ "$vpn" = 1 ] && [ "$ovr" != "@vpn" ]; then
+  if [ "$off" = 1 ] && [ "$ovr" != "@offline" ]; then
+    want="@offline"
+  elif [ "$vpn" = 1 ] && [ "$ovr" != "@vpn" ]; then
     want="@vpn"
   elif [ "$wl" = 1 ] && [ "$ovr" != "@wl" ]; then
     want="@wl"
@@ -801,6 +823,7 @@ home_check() {
     if is_running && [ ! -f "$HOME_PAUSED_FILE" ]; then
       case "$want" in
         @vpn) log_msg "Включён VPN — обход приостановлен" ;;
+        @offline) log_msg "Нет сети — обход приостановлен до её появления" ;;
         @wl)  log_msg "У оператора включены белые списки — обход приостановлен" ;;
         *)    log_msg "Домашний Wi-Fi «$want» — обход приостановлен" ;;
       esac
@@ -816,6 +839,7 @@ home_check() {
   elif [ -f "$HOME_PAUSED_FILE" ]; then
     case "$(cat "$HOME_PAUSED_FILE" 2>/dev/null)" in
       @vpn) log_msg "VPN выключен — обход возобновлён" ;;
+      @offline) log_msg "Сеть появилась — обход возобновлён" ;;
       @wl)  log_msg "Белые списки выключены — обход возобновлён" ;;
       *)
         # Wi‑Fi на месте, но трафик не через неё: Android не считает её
@@ -840,7 +864,10 @@ home_check() {
 manual_start() {
   local ssid
   rm -f "$HOME_PAUSED_FILE"
-  if [ "$VPN_PAUSE" = "1" ] && vpn_active; then
+  if offline_now; then
+    # запущен вручную без сети — пауза «нет сети» до её появления не мешает
+    printf '%s' "@offline" > "$HOME_OVERRIDE_FILE"
+  elif [ "$VPN_PAUSE" = "1" ] && vpn_active; then
     printf '%s' "@vpn" > "$HOME_OVERRIDE_FILE"
   elif [ "$WL_PAUSE" = "1" ] && [ -f "$WL_FILE" ]; then
     # запущен вручную при белых списках — пока они не кончатся, не мешаем

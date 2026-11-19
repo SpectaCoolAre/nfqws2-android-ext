@@ -672,6 +672,33 @@ svc stop >/dev/null 2>&1
 conf_reset
 unset NFQWS_SYSNET
 
+# ── pause with no network (19.11) ────────────────────────────────────────────
+section "no network for a while: the bypass pauses, like with a VPN"
+echo rmnet_data1 > "$MOCK_DIR/route"
+printf '#!/bin/sh\ncase "$1 $2" in\n  "route get") d=$(cat "%s" 2>/dev/null); [ -n "$d" ] || { echo "RTNETLINK answers: Network is unreachable" >&2; exit 2; }\n    echo "1.1.1.1 via 10.0.0.1 dev $d src 10.0.0.2 uid 0" ;;\nesac\nexit 0\n' "$MOCK_DIR/route" > "$MOCKBIN/ip"
+chmod 0755 "$MOCKBIN/ip"
+printf 'WATCHDOG=0\n' >> "$CONFFILE"
+rm -f "$OFFLINE_FILE"
+svc start >/dev/null 2>&1
+assert_file "$PIDFILE" "with a network the bypass runs"
+: > "$MOCK_DIR/route"
+svc home_check >/dev/null 2>&1
+assert_file "$PIDFILE" "the network just dropped: no pause yet (a switch Wi‑Fi ↔ mobile looks the same)"
+assert_file "$OFFLINE_FILE" "but the moment is remembered"
+OFFLINE_AFTER=0; export OFFLINE_AFTER; svc home_check >/dev/null 2>&1; unset OFFLINE_AFTER
+assert_no_file "$PIDFILE" "no network long enough: the bypass pauses"
+assert_eq "@offline" "$(cat "$HOME_PAUSED_FILE" 2>/dev/null)" "marked as «no network»"
+ctl json-status
+assert_contains "$ctl_out" '"paused":"@offline"' "the WebUI sees why"
+echo rmnet_data1 > "$MOCK_DIR/route"
+svc home_check >/dev/null 2>&1
+assert_file "$PIDFILE" "the network is back: the bypass resumes at once"
+assert_no_file "$HOME_PAUSED_FILE" "and the pause is cleared"
+assert_no_file "$OFFLINE_FILE" "as is the moment it dropped"
+svc stop >/dev/null 2>&1
+rm -f "$MOCKBIN/ip" "$MOCK_DIR/route" "$OFFLINE_FILE"
+conf_reset
+
 # ── boot-completed.sh lifecycle hook ──────────────────────────────────────────
 section "a lost nfqws2 of ours is stopped before a start"
 # Honor, MagicOS 11: служба потеряла свой nfqws2 (PID-файл сброшен), а он

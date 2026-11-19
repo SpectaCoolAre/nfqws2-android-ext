@@ -1,0 +1,29 @@
+# Ключевые сайты первичной настройки умного режима (ctl smart-calib).
+# По замерам 07–13.11.2026 (МТС и домашний Wi‑Fi): заблокированы ТСПУ в обеих
+# сетях, а через обход отвечают всегда — по ним видно, как фильтрует сеть.
+# Подобраны по профилям умного режима, чтобы порядок вариантов был у каждого:
+# обычные сайты (tls), Cloudflare (tls_cf), обрыв после 16 КБ (tls_16),
+# хостинги по AS (tls_as) и Google (YouTube).
+# Если большинство из них открывается без обхода, сеть не фильтруется (или
+# трафик уже идёт в обход), и настройка не проводится.
+
+# обычные сайты
+instagram.com
+nytimes.com
+bbc.com
+fastly.com
+# Cloudflare
+x.com
+linkedin.com
+discord.com
+rutracker.org
+# обрыв после 16 КБ
+coursera.org
+soundcloud.com
+patreon.com
+# хостинги по AS
+mullvad.net
+protonvpn.com
+# Google
+youtube.com
+ytimg.com
