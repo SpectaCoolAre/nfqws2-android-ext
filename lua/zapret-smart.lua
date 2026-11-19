@@ -1218,7 +1218,12 @@ function smart(ctx, desync)
 	if SM.dirty and t - SM.saved >= SAVE_EVERY then save() end
 
 	local slot = desync.arg.slot or "default"
+	-- key=<имя>: все соединения профиля — один «сайт» (19.11, WebSocket
+	-- Telegram через Cloudflare: приложение перебирает два десятка доменов, и
+	-- обрыв у одного не засчитывался — следующее соединение шло уже к другому;
+	-- рабочий вариант одного домена сразу у всех). Только у соединений с именем
 	local host = site_key(desync)
+	if host and desync.arg.key then host = desync.arg.key end
 	local nall = count_strategies(desync)
 	local n = nall
 	-- перебор — по всему пулу (19.11: переключатель «расширенный пул» убран):
@@ -1291,16 +1296,30 @@ function smart(ctx, desync)
 		crec.smart = { maxin = 0, tin = t, v = r.cur, key = key, slot = slot, n = n, pass = pass, t = t, first = tonumber(desync.arg.first) or 1 }
 		-- прежнее соединение к этому сайту замерло на 14–17 КБ и браузер скоро
 		-- открыл новое — это обрыв по объёму. Ответ, который просто уложился в
-		-- эти размеры, так не выглядит: новое соединение сразу после него не нужно
-		local prev = r.lastc
-		if prev and not prev.done and prev.maxin >= 14000 and prev.maxin < 17000 and t - prev.tin <= 30 then
-			prev.done = true
-			prev.slow = true
-			DLOG("smart: " .. key .. ": previous connection stalled at " .. prev.maxin .. " bytes")
-			SJ(key .. ": соединение замерло на " .. prev.maxin .. " байтах (обрыв на 16 КБ) — ошибка " .. vname(slot, prev.v))
-			-- начало у него было удачным (больше 4 КБ) — это обрыв посреди работы
-			on_err(slot, key, r, prev.v, n, t, pass, prev.ok, prev)
+		-- эти размеры, так не выглядит: новое соединение сразу после него не нужно.
+		-- Смотрятся все недавние соединения сайта, а не только последнее
+		-- (19.11): приложения открывают их параллельно, и замершее перекрывалось
+		-- свежим. И только если данных от него нет уже 2 с: живое соединение на
+		-- 15 КБ так не выглядит, а раньше его объявляли обрывом, стоило
+		-- приложению открыть рядом второе
+		r.recent = r.recent or {}
+		for i = #r.recent, 1, -1 do
+			local prev = r.recent[i]
+			if prev.done or t - prev.tin > 30 then
+				table.remove(r.recent, i)
+			elseif prev.maxin >= 14000 and prev.maxin < 17000 and t - prev.tin >= 2 then
+				table.remove(r.recent, i)
+				prev.done = true
+				prev.slow = true
+				DLOG("smart: " .. key .. ": previous connection stalled at " .. prev.maxin .. " bytes")
+				SJ(key .. ": соединение замерло на " .. prev.maxin .. " байтах (обрыв на 16 КБ) — ошибка " .. vname(slot, prev.v))
+				-- начало у него было удачным (больше 4 КБ) — это обрыв посреди работы
+				on_err(slot, key, r, prev.v, n, t, pass, prev.ok, prev)
+				break
+			end
 		end
+		r.recent[#r.recent + 1] = crec.smart
+		if #r.recent > 8 then table.remove(r.recent, 1) end
 		r.lastc = crec.smart
 		-- для наблюдателя: по локальному порту он узнает сайт и вариант
 		if desync.dis.tcp and desync.outgoing then

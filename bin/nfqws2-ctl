@@ -2791,6 +2791,62 @@ cmd_smart_usage() { # [сеть]
       printf "]}\n"
     }' "$f"
 }
+# Домены WebSocket-обхода Telegram через Cloudflare (lists/telegram_ws.list,
+# 19.11) — из тех же источников, что у teleweb и tg-ws-proxy: списки
+# cfproxy-domains.txt. Там домены зашифрованы: буквы имени перед .com сдвинуты
+# на длину имени вперёд, а .com значит .co.uk (virkgj.com → pclead.co.uk).
+# Новые дописываются к списку (прежние остаются: приложение у пользователя
+# может быть старее списка), nfqws2 перечитывает списки. Раз в сутки — сам
+# (service.sh, сторож), вручную — ctl tgws-update
+TGWS_URLS="https://raw.githubusercontent.com/Flowseal/tg-ws-proxy/main/.github/cfproxy-domains.txt
+https://raw.githubusercontent.com/spatiumstas/tg-ws-proxy-go/main-go/.github/cfproxy-domains.txt
+https://raw.githubusercontent.com/nikitos4683/nzapret/nztg/.github/cfproxy-domains.txt"
+tgws_decode() { # stdin: строки списка -> имена .co.uk
+  tr -d '\r' | tr 'A-Z' 'a-z' | awk '
+    BEGIN { ab = "abcdefghijklmnopqrstuvwxyz" }
+    { s = $1; sub(/^\.+/, "", s); sub(/\.+$/, "", s) }
+    s == "" || s ~ /^#/ { next }
+    s !~ /\.com$/ { if (s ~ /^[a-z0-9.-]+\.[a-z]+$/) print s; next }
+    {
+      b = substr(s, 1, length(s) - 4); n = 0
+      for (i = 1; i <= length(b); i++) if (index(ab, substr(b, i, 1))) n++
+      out = ""
+      for (i = 1; i <= length(b); i++) {
+        c = substr(b, i, 1); k = index(ab, c)
+        if (k) { k = ((k - 1 - n) % 26 + 26) % 26; c = substr(ab, k + 1, 1) }
+        out = out c
+      }
+      if (out ~ /^[a-z0-9-]+$/) print out ".co.uk"
+    }'
+}
+cmd_tgws_update() {
+  local f="$LISTS_DIR/telegram_ws.list" tool kind bin tmp u n=0 got=0 add
+  [ -f "$f" ] || { echo "Нет списка telegram_ws.list" >&2; return 1; }
+  [ "$(cat "$SMART_NET_FILE" 2>/dev/null)" = offline ] && { echo "Нет сети" >&2; return 1; }
+  tool=$(probe_tool); kind="${tool%% *}"; bin="${tool#* }"
+  tmp="$STATE_DIR/tgws.$$"; : > "$tmp"
+  for u in $TGWS_URLS; do
+    if [ "$kind" = curl ]; then
+      "$bin" -s -f -m 15 "$u" -o "$tmp.one" 2>/dev/null </dev/null
+    elif [ -x "$HELPER_BIN" ]; then
+      "$HELPER_BIN" -fetch "$u" -resolve "$(bench_dns)" -o "$tmp.one" >/dev/null 2>&1 </dev/null
+    fi
+    [ -s "$tmp.one" ] && { got=$((got + 1)); tgws_decode < "$tmp.one" >> "$tmp"; }
+    rm -f "$tmp.one"
+  done
+  date +%s > "$STATE_DIR/tgws_updated"
+  if [ "$got" = 0 ]; then rm -f "$tmp"; log_msg "Домены Telegram через Cloudflare: источники не ответили — список прежний" >/dev/null; echo 0; return 0; fi
+  add=$(awk 'NR == FNR { sub(/#.*/, ""); gsub(/[[:space:]]/, ""); if ($0 != "") have[$0] = 1; next }
+    !($1 in have) && !seen[$1]++ { print $1 }' "$f" "$tmp")
+  rm -f "$tmp"
+  if [ -n "$add" ]; then
+    printf '%s\n' "$add" >> "$f"
+    n=$(printf '%s\n' "$add" | grep -c .)
+    log_msg "Домены Telegram через Cloudflare: новых $n ($(printf '%s' "$add" | tr '\n' ' '))" >/dev/null
+    is_running && sh "$SERVICE" reload >/dev/null 2>&1
+  fi
+  echo "$n"
+}
 cmd_smart_calib() {
   case "$1" in
     start|auto)
@@ -3249,6 +3305,7 @@ EOF
   smart-bench) shift; cmd_smart_bench "$@" ;;
   smart-calib) shift; cmd_smart_calib "$@" ;;
   smart-usage) cmd_smart_usage "$2" ;;
+  tgws-update) cmd_tgws_update ;;
   # smart-turbo on|off — игра-пасхалка: фоновое обучение чаще (метка на 45 с)
   smart-turbo)
     case "$2" in

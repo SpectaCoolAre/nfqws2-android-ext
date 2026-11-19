@@ -1097,4 +1097,31 @@ assert_rc 0 "$ctl_rc" "without a cache and generator pm is the fallback"
 assert_contains "$ctl_out" "com.fallback.one" "package names without the prefix"
 rm -f "$MOCKBIN/pm"
 
+# ── домены WebSocket-обхода Telegram через Cloudflare (19.11) ────────────────
+section "Telegram over Cloudflare: the domain list updates itself"
+cp -f "$REPO_DIR/lists/telegram_ws.list" "$LISTS_DIR/telegram_ws.list"
+echo mobile-25001 > "$SMART_NET_FILE"
+# источники: два отвечают (как у tg-ws-proxy — зашифрованные .com), третий нет
+cat > "$MOCKBIN/curl" <<'X'
+#!/bin/sh
+o=""; u=""; for a; do [ "$p" = "-o" ] && o="$a"; case "$a" in http*) u="$a" ;; esac; p="$a"; done
+case "$u" in
+  *Flowseal*) printf 'virkgj.com\nzaftuzsftqdq.com\n' > "$o" ;;
+  *spatiumstas*) printf '# new\nabcdefg.com\n' > "$o" ;;
+  *) exit 22 ;;
+esac
+X
+chmod 0755 "$MOCKBIN/curl"
+before=$(grep -c . "$LISTS_DIR/telegram_ws.list")
+ctl tgws-update
+assert_rc 0 "$ctl_rc" "an update runs"
+assert_eq "1" "$ctl_out" "the names are decoded (virkgj.com is pclead.co.uk, already there): one new"
+assert_contains "$(cat "$LISTS_DIR/telegram_ws.list")" "tuvwxyz.co.uk" "the new one is added (abcdefg.com shifted back by its 7 letters)"
+assert_eq "$((before + 1))" "$(grep -c . "$LISTS_DIR/telegram_ws.list")" "the known ones are not added twice"
+assert_contains "$(cat "$LISTS_DIR/telegram_ws.list")" "pclead.co.uk" "and the old ones stay"
+assert_file "$STATE_DIR/tgws_updated" "the time of the update is kept: once a day"
+ctl tgws-update
+assert_eq "0" "$ctl_out" "nothing new the second time"
+rm -f "$MOCKBIN/curl" "$STATE_DIR/tgws_updated"
+
 harness_finish

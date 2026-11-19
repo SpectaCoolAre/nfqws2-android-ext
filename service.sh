@@ -716,6 +716,10 @@ watchdog() {
     # место фильтра в этой сети (раз в неделю, не во сне): для фейков умного режима
     [ "$rare" = 1 ] && [ "$per" = 20 ] && is_running && smart_active && dpi_ttl_due &&
       ( sh "$MODDIR/bin/nfqws2-ctl" dpi-distance </dev/null >/dev/null 2>&1 & )
+    # домены WebSocket-обхода Telegram (lists/telegram_ws.list) — раз в сутки
+    [ "$rare" = 1 ] && [ "$per" = 20 ] && is_running && smart_active &&
+      ! { [ -f "$STATE_DIR/tgws_updated" ] && [ $(( $(date +%s) - $(cat "$STATE_DIR/tgws_updated" 2>/dev/null || echo 0) )) -lt 86400 ]; } &&
+      ( sh "$MODDIR/bin/nfqws2-ctl" tgws-update </dev/null >/dev/null 2>&1 & )
     # первичная настройка умного режима в сети, где её ещё не было (не во сне):
     # порядок вариантов по ключевым сайтам. Ctl сам проверяет, пора ли
     [ "$rare" = 1 ] && [ "$per" = 20 ] && is_running && smart_active &&

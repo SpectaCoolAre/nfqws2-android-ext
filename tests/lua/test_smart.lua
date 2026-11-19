@@ -54,7 +54,7 @@ local function packet(track, opts)
 	local desync = { target = {},
 		track = track, outgoing = not opts.incoming, l7payload = "tls_client_hello",
 		dis = { tcp = { th_flags = (opts.rst and TH_RST or 0) + (opts.fin and TH_FIN or 0), th_sport = track.port, th_dport = 443, th_ack = opts.ack }, payload = string.rep("x", opts.len or 100) },
-		arg = { slot = opts.slot or "tls", home = HOME, pass = tostring(opts.pass or N), first = opts.first, base = opts.base, pri = opts.pri, probe = opts.probe },
+		arg = { slot = opts.slot or "tls", home = HOME, pass = tostring(opts.pass or N), first = opts.first, base = opts.base, pri = opts.pri, probe = opts.probe, key = opts.key },
 		func_instance = "smart_" .. (opts.slot or "tls"), plan = (opts.plan or plan)()
 	}
 	if opts.outgoing then desync.outgoing = true end
@@ -283,6 +283,34 @@ local u1 = conn(sm); packet(u1); packet(u1, { incoming = true, seq = 9000, len =
 later(100)
 packet(conn(sm))
 check(next(rec(sm).err) == nil, "a small reply long ago is not a stall")
+
+section("parallel connections: the stalled one is noticed, not just the last")
+-- 19.11: приложения (teleweb) открывают соединения параллельно — замершее на
+-- 16 КБ перекрывалось свежим, и обрыв не засчитывался
+do
+	later(400)
+	local pk = "par.example"
+	local p1 = conn(pk); local v0 = packet(p1); packet(p1, { incoming = true, seq = 14500, len = 1400 })
+	local p2 = conn(pk); packet(p2); packet(p2, { incoming = true, seq = 30000 })   -- параллельное, живое
+	check((rec(pk).err[v0] or 0) == 0, "a second connection opened alongside a live one does not make the first a «stall»")
+	later(5)
+	packet(conn(pk))                                -- новое: p1 молчит 5 с на 15 КБ
+	check((rec(pk).err[v0] or 0) > 0, "the stalled one among parallel connections is an error of its variant")
+end
+
+section("one key for a whole profile (Telegram over Cloudflare)")
+-- 19.11: teleweb перебирает два десятка доменов — у каждого был свой учёт, и
+-- обрыв у одного домена не засчитывался: следующее соединение шло к другому
+do
+	later(400)
+	local K = { slot = "tls_tg", key = "telegram-ws" }
+	local function k(extra) local t = {}; for a, b in pairs(K) do t[a] = b end; for a, b in pairs(extra or {}) do t[a] = b end; return t end
+	local a1 = conn("kws2.aaa.co.uk"); local v0 = packet(a1, k()); packet(a1, k({ incoming = true, seq = 14500, len = 1400 }))
+	later(5)
+	local b1 = conn("kws4.bbb.co.uk"); packet(b1, k())
+	check(rec("telegram-ws", "tls_tg") ~= nil and rec("aaa.co.uk", "tls_tg") == nil, "all its domains are one site in what is learned")
+	check((rec("telegram-ws", "tls_tg").err[v0] or 0) > 0, "a stall on one domain counts when the app moves on to another")
+end
 
 section("old events weigh less")
 local ag = rec("g.example")
