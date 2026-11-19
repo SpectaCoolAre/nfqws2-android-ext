@@ -2761,6 +2761,8 @@ cmd_smart_usage() { # [сеть]
       if (h ~ /(^|\.)(openai\.com|chatgpt\.com|oaistatic\.com|oaiusercontent\.com)$/) return "ChatGPT"
       if (h ~ /(^|\.)(claude\.ai|anthropic\.com)$/) return "Claude"
       if (h ~ /(^|\.)(linkedin\.com|licdn\.com)$/) return "LinkedIn"
+      if (h ~ /(^|\.)(github\.com|githubusercontent\.com|githubassets\.com|github\.io)$/) return "GitHub"
+      if (h ~ /(^|\.)(quad9\.net|cloudflare-dns\.com|dns\.google|adguard-dns\.com|nextdns\.io|opendns\.com|controld\.com|dns\.sb|mullvad\.net)$/) return "DNS через HTTPS"
       if (h ~ /(^|\.)(google\.com|google\.ru|googleapis\.com|gstatic\.com|googleusercontent\.com|gvt1\.com|gvt2\.com)$/) return "Google"
       return ""
     }
@@ -2768,7 +2770,7 @@ cmd_smart_usage() { # [сеть]
     {
       w = sum($4) + sum($5); sites++; if ($8 == "e") eo++
       n = split($4 "," $5, a, ","); for (i = 1; i <= n; i++) { split(a[i], x, ":"); if (x[1] != "") vv[$1 SUBSEP x[1]] = 1 }
-      g = svc($2); if (g == "") g = "~"
+      g = svc($2); if (g == "") { g = "~"; ow[$2] += w }
       gw[g] += w; gh[g]++; tot += w
     }
     END {
@@ -2776,6 +2778,15 @@ cmd_smart_usage() { # [сеть]
       printf "{\"total\":%.1f,\"sites\":%d,\"everok\":%d,\"variants\":%d,\"groups\":[", tot, sites, eo + 0, nv + 0
       # сравнения — вне списка printf: awk прошивки их там не разбирает
       for (g in gw) { nm = g; if (nm == "~") nm = ""; printf "%s{\"name\":\"%s\",\"w\":%.1f,\"sites\":%d}", (m++ ? "," : ""), nm, gw[g], gh[g] }
+      # «Другие» — их главные сайты: в сумме видно, что туда попало
+      printf "],\"others\":["
+      for (i = 0; i < 12; i++) {
+        b = ""; bw = 0
+        for (h in ow) if (ow[h] > bw) { b = h; bw = ow[h] }
+        if (b == "") break
+        printf "%s{\"host\":\"%s\",\"w\":%.1f}", (i ? "," : ""), b, bw
+        delete ow[b]
+      }
       printf "]}\n"
     }' "$f"
 }

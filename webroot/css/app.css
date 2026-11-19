@@ -352,6 +352,10 @@ html[data-containers="true"] .settings-grid .list > .list-item:active {
   background: var(--md-sys-color-surface-container-highest); }
 .usage-bar > i { display: block; height: 100%; border-radius: inherit; background: var(--md-sys-color-primary); }
 /* кольцо — кнопка: подробности обучения */
+/* .state делает детей position: relative — число в кольце уезжало под него и
+   обрезалось (пустое кольцо, 19.11): у кольца-кнопки оно снова поверх */
+.smart-ring-box.state > .smart-ring-val { position: absolute; inset: 0; z-index: 1; }
+.smart-ring-box.state > .smart-ring { position: absolute; inset: 0; }
 button.smart-ring-box { appearance: none; border: none; background: none; padding: 0; color: inherit; cursor: pointer; border-radius: 50%; }
 .seg-mode { display: flex; height: 48px; border: 1px solid var(--md-sys-color-outline); border-radius: var(--shape-full); overflow: hidden; }
 .seg-mode .seg { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 8px;

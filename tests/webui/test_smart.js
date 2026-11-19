@@ -183,6 +183,13 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   });
   truthy(ring.fresh[0].includes('Ещё не обучен') && ring.fresh[1], 'a network with nothing learned offers the first setup right in the hero: ' + ring.fresh[0]);
   truthy(ring.run[0].startsWith('48') && ring.run[1].includes('Первичная настройка'), 'while it runs the ring shows its progress: ' + ring.run.join(' | '));
+  // 19.11: у кольца-кнопки (.state) число уезжало под кольцо и обрезалось
+  const rv = await page.evaluate(() => {
+    const b = document.querySelector('.smart-hero .smart-ring-box').getBoundingClientRect();
+    const v = document.querySelector('.smart-hero .smart-ring-val').getBoundingClientRect();
+    return [Math.abs((v.top + v.height / 2) - (b.top + b.height / 2)), Math.abs((v.left + v.width / 2) - (b.left + b.width / 2)), v.height];
+  });
+  truthy(rv[0] < 2 && rv[1] < 2 && rv[2] > 20, 'the percentage sits in the middle of the ring, visible: ' + rv.join(','));
   await page.click('.smart-hero .smart-ring-box');
   await page.waitForTimeout(400);
   const rs = await page.textContent('#smart-sheet');

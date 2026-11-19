@@ -239,6 +239,16 @@ assert_eq "2" "$(grep -c . "$MOCK_DIR/curl.urls" 2>/dev/null)" "nothing without 
 printf 'mobile-25001\n' > "$SMART_NET_FILE"
 ctl smart-status
 assert_contains "$ctl_out" '"learn":1,"bg":{"n":"2","ok":"2"' "the screen sees it"
+
+section "what goes through the bypass, by service"
+printf '#v4 header\ngoogle\tgooglevideo.com\t3\t3:30.0\t3:2.0\t\t1\te\ngoogle\tytimg.com\t3\t3:8.0\t\t\t1\te\ntls\tinstagram.com\t1\t1:10.0\t\t\t1\te\ntls_cf\tpclead.co.uk\t2\t2:40.0\t2:10.0\t\t1\te\ntls\tsmall.example\t1\t1:0.5\t\t\t1\t\n' > "$SMART_DIR/usage-test.tsv"
+ctl smart-usage usage-test
+assert_contains "$ctl_out" '"total":100.5' "connections of every learned site add up"
+assert_contains "$ctl_out" '{"name":"YouTube","w":40.0,"sites":2}' "video servers and images count as YouTube"
+assert_contains "$ctl_out" '{"name":"Instagram","w":10.0,"sites":1}' "Instagram on its own"
+assert_contains "$ctl_out" '{"name":"","w":50.5,"sites":2}' "the rest is «Others»"
+assert_contains "$ctl_out" '"others":[{"host":"pclead.co.uk","w":50.0},{"host":"small.example","w":0.5}]' "with its biggest sites listed, largest first"
+rm -f "$SMART_DIR/usage-test.tsv"
 ctl set SMART_LEARN 0
 assert_contains "$(cat "$CONFFILE")" 'SMART_LEARN="0"' "it can be turned off"
 ctl set SMART_LEARN 1

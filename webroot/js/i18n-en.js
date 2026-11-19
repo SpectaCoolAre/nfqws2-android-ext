@@ -5,6 +5,8 @@
 /* Словарь EN для t(): ключ — русская строка интерфейса как она написана в коде
    и в разметке (data-t / data-ta). Новую строку интерфейса добавляйте сюда же. */
 EN = {
+ "Доля по числу соединений через обход за последние часы, не по объёму трафика: видео идёт немногими долгими соединениями, и его доля здесь меньше, чем по трафику. Сайтов {0}, открывались хоть раз — {1}, вариантов проверено — {2}.": "Share by the number of connections through the bypass over the last hours, not by traffic volume: video goes over a few long connections, so its share here is smaller than by traffic. Sites {0}, opened at least once — {1}, variants tried — {2}.",
+ "Больше всего среди «Других»": "Largest among “Others”",
  "Ещё не обучен": "Not trained yet",
  "Первичная настройка подберёт обход за 10–15 минут": "The first setup picks the bypass in 10–15 minutes",
  "Подробнее об обучении": "Training details",
@@ -19,7 +21,6 @@ EN = {
  "Что идёт через обход": "What goes through the bypass",
  "Обучение в этой сети": "Training on this network",
  "Другие": "Others",
- "По соединениям через nfqws2 за последние часы: {0} сайтов, открывались хоть раз — {1}, вариантов проверено — {2}.": "By connections through nfqws2 over the last hours: {0} sites, opened at least once — {1}, variants tried — {2}.",
  "Идёт настройка: {0}%": "Setting up: {0}%",
  "Первичная настройка началась: ход — в кольце": "First setup started: its progress is in the ring",
  "Умный режим учится сам, по ходу работы. Фоновое обучение раз в две минуты открывает один сайт из списков, которые и так идут в обход (ваш, YouTube, Discord, выученные автоматически и ключевые сайты), — так он заранее знает обход для каждого вида соединений. Оно идёт, пока работает служба: на паузе и без сети ждёт и продолжается само.": "Smart mode learns by itself as it works. Every two minutes background training opens one site from the lists that go through the bypass anyway (yours, YouTube, Discord, the auto-learned ones and the key sites), so it knows the bypass for every kind of connection in advance. It runs while the service runs: paused or without a network it waits and goes on by itself.",

@@ -236,13 +236,19 @@ function usageHtml(u){
   const top = named.slice(0, 8), rest = named.slice(8).concat(u.groups.filter(g => !g.name));
   const other = rest.reduce((a, g) => ({w: a.w + g.w, sites: a.sites + g.sites}), {w: 0, sites: 0});
   const rows = top.concat(other.w > 0 ? [{name: t('Другие'), w: other.w, sites: other.sites}] : []);
-  return '<div class="helper">' + esc(t('По соединениям через nfqws2 за последние часы: {0} сайтов, открывались хоть раз — {1}, вариантов проверено — {2}.', u.sites, u.everok, u.variants)) + '</div>' +
+  const oth = (u.others || []).map(h => {
+    const p = Math.round(100 * h.w / u.total);
+    return '<div class="list-item usage-other"><span class="li-text"><span class="li-secondary li-mono">' + esc(h.host) + '</span></span>' +
+      '<span class="li-trail li-value">' + (p < 1 ? '<1' : p) + '%</span></div>';
+  }).join('');
+  return '<div class="helper">' + esc(t('Доля по числу соединений через обход за последние часы, не по объёму трафика: видео идёт немногими долгими соединениями, и его доля здесь меньше, чем по трафику. Сайтов {0}, открывались хоть раз — {1}, вариантов проверено — {2}.', u.sites, u.everok, u.variants)) + '</div>' +
     '<div class="list">' + rows.map(g => {
       const p = Math.round(100 * g.w / u.total);
       return '<div class="list-item two-line usage-row"><span class="li-text"><span class="li-primary">' + esc(g.name) + '</span>' +
         '<span class="usage-bar" aria-hidden="true"><i style="width:' + Math.max(1, p) + '%"></i></span></span>' +
         '<span class="li-trail li-value">' + (p < 1 ? '<1' : p) + '%</span></div>';
-    }).join('') + '</div>';
+    }).join('') + '</div>' +
+    (oth ? '<h2 class="subhead">' + esc(t('Больше всего среди «Других»')) + '</h2><div class="list">' + oth + '</div>' : '');
 }
 function calibHtml(m){
   const c = m.calib || {}, cs = calibState(m), parts = [];
