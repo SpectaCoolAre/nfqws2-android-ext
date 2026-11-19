@@ -579,6 +579,9 @@ end
 local function calib(slot)
 	local c = SM.cal and SM.cal[slot]
 	if c then return c end
+	-- WebSocket Telegram через Cloudflare (tls_tg) режут на 16 КБ — его порядок
+	-- ближе всего к профилю с обрывом на 16 КБ
+	if SM.cal and slot == "tls_tg" and SM.cal.tls_16 then return SM.cal.tls_16 end
 	if SM.cal and slot:find("^tls") then return SM.cal.tls end
 	return nil
 end

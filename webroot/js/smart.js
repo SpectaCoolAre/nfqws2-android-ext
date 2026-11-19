@@ -10,12 +10,12 @@ let SMS = null, smartTimer = null, smartView = null;
 // Виды соединений: в каждый входят наборы вариантов (slot) своих профилей
 // [ключ, заголовок плитки, заголовок подробностей, значок, наборы]
 const SMART_GROUPS = [
-  ['tls', 'TLS', 'Сайты (TLS)', 'globe', ['tls', 'tls_cf', 'tls_16', 'tls_as']],
+  ['tls', 'TLS', 'Сайты (TLS)', 'globe', ['tls', 'tls_cf', 'tls_16', 'tls_as', 'tls_tg']],
   ['google', 'Google', 'Google и YouTube', 'shield', ['google']],
   ['quic', 'QUIC', 'QUIC', 'tune', ['quic', 'quic_16']]
 ];
 const SMART_SLOT_TITLE = {tls: 'Обычные сайты', tls_cf: 'Сайты за Cloudflare', tls_16: 'Хостинги и CDN (обрыв на 16 КБ)',
-  tls_as: 'Хостинги: Contabo, Frantech и другие', google: 'Google и YouTube', quic: 'QUIC', quic_16: 'QUIC на хостингах и CDN'};
+  tls_as: 'Хостинги: Contabo, Frantech и другие', tls_tg: 'Telegram через Cloudflare (WebSocket)', google: 'Google и YouTube', quic: 'QUIC', quic_16: 'QUIC на хостингах и CDN'};
 /* Фоновое обучение идёт вместе со службой: на паузе или остановленной оно
    ждёт и продолжится само, когда служба снова заработает */
 function smartLearnState(m){

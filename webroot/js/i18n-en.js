@@ -5,6 +5,7 @@
 /* Словарь EN для t(): ключ — русская строка интерфейса как она написана в коде
    и в разметке (data-t / data-ta). Новую строку интерфейса добавляйте сюда же. */
 EN = {
+ "Telegram через Cloudflare (WebSocket)": "Telegram over Cloudflare (WebSocket)",
  "Доля по числу соединений через обход за последние часы, не по объёму трафика: видео идёт немногими долгими соединениями, и его доля здесь меньше, чем по трафику. Сайтов {0}, открывались хоть раз — {1}, вариантов проверено — {2}.": "Share by the number of connections through the bypass over the last hours, not by traffic volume: video goes over a few long connections, so its share here is smaller than by traffic. Sites {0}, opened at least once — {1}, variants tried — {2}.",
  "Больше всего среди «Других»": "Largest among “Others”",
  "Ещё не обучен": "Not trained yet",

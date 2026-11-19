@@ -2770,7 +2770,8 @@ cmd_smart_usage() { # [сеть]
     {
       w = sum($4) + sum($5); sites++; if ($8 == "e") eo++
       n = split($4 "," $5, a, ","); for (i = 1; i <= n; i++) { split(a[i], x, ":"); if (x[1] != "") vv[$1 SUBSEP x[1]] = 1 }
-      g = svc($2); if (g == "") { g = "~"; ow[$2] += w }
+      # профиль WebSocket Telegram через Cloudflare (lists/telegram_ws.list)
+      g = ($1 == "tls_tg") ? "Telegram" : svc($2); if (g == "") { g = "~"; ow[$2] += w }
       gw[g] += w; gh[g]++; tot += w
     }
     END {

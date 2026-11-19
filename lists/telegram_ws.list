@@ -1,0 +1,27 @@
+# Домены WebSocket-обхода Telegram через Cloudflare (kws<N>.<домен>.co.uk:
+# приложения-прокси вроде teleweb ведут через них соединения с дата-центрами
+# Telegram). Адреса — общие подсети Cloudflare (104.21.0.0/17, 172.67.0.0/16,
+# 2606:4700:3030::/44), у МТС с 19.11 — обрыв на 16 КБ. По имени — свой
+# профиль умного режима (slot tls_tg): все домены учатся вместе (рабочий
+# вариант одного сразу у всех) и никогда не пробуются без обхода. Собраны по
+# журналу teleweb и выученному умным режимом (07–19.11)
+cakeisalie.co.uk
+ebally.co.uk
+fixtelega.co.uk
+havegreatday.co.uk
+kartoshka.co.uk
+lovetrue.co.uk
+nebally.co.uk
+noskomnadzor.co.uk
+notelega.co.uk
+nothingthere.co.uk
+offshor.co.uk
+onedaychamp.co.uk
+pclead.co.uk
+pomogite.co.uk
+pyatdesyatdva.co.uk
+pyatdesyatodin.co.uk
+sadnews.co.uk
+sorokdva.co.uk
+sorokodin.co.uk
+stopblocking.co.uk

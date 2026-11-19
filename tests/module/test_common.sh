@@ -361,6 +361,8 @@ for sl in tls_cf tls_16 quic_16 tls_as; do
 done
 assert_not_contains "$args" "slot=tls:probe" "ordinary sites are not touched"
 assert_not_contains "$args" "slot=google:probe" "nor Google"
+assert_not_contains "$args" "slot=tls_tg:probe" "nor Telegram over Cloudflare: its WebSocket is cut at 16 KB, a first try without bypass would stall it"
+assert_contains "$args" "--hostlist=$LISTS_DIR/telegram_ws.list" "Telegram over Cloudflare has its own profile by name"
 conf_reset
 reload_conf
 
