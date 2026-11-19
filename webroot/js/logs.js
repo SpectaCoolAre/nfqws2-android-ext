@@ -68,8 +68,9 @@ async function logsLongAction(){
     toast(r.code ? errText(r, 'Не удалось очистить журналы') : t('Журналы очищены'));
     if(currentPage === 'logs') loadLog();
   } else {
+    // долгое нажатие — всегда все журналы, что бы ни было отмечено в листе
     toast(t('Экспорт журналов'));
-    exportLogsRun('save');
+    exportLogsRun('save', exportItems().map(x => x[0]));
   }
 }
 onLongPress($('logs-btn'), null, () => logsLongAction());
@@ -114,32 +115,34 @@ const EXPORT_ITEMS = [['service', 'Служба', 'service.log'], ['nfqws', 'П�
   ['smart', 'Умный режим', 'smart.log'], ['smartdata', 'Выученное умным режимом', 'Варианты по сетям и замеры'],
   ['diag', 'Диагностика', 'Проверка модуля, счётчики правил, аргументы запуска']];
 const exportItems = () => EXPORT_ITEMS.filter(([k]) => (k !== 'dns' || S.dns_available == 1) && (k !== 'debug' || S.log_level == 1));
+/* Выбор в листе не запоминается (19.11): лист открывается со всеми
+   отмеченными, а долгое нажатие экспортирует всё. Раньше выбор хранился, и
+   долгое нажатие брало то, что когда-то отметили в листе */
 function exportSel(){
-  const saved = store.get('nfq_logs_export');
-  const all = exportItems().map(x => x[0]);
-  if(!saved) return all;
-  const sel = saved.split(',').filter(k => all.includes(k));
-  return sel.length ? sel : all;
+  const box = $('logs-export-list');
+  return box ? [...box.querySelectorAll('input[data-lx]:checked')].map(cb => cb.dataset.lx) : [];
 }
+try { store.set('nfq_logs_export', ''); } catch(e) {}
 function renderExportSheet(){
-  const sel = exportSel();
+  const sel = exportItems().map(x => x[0]);
   setHTML('logs-export-list', exportItems().map(([k, label, sub]) =>
     '<label class="list-item two-line clickable state">' +
       '<span class="li-text"><span class="li-primary">' + esc(t(label)) + '</span>' +
       '<span class="li-secondary">' + esc(t(sub)) + '</span></span>' +
       '<span class="li-trail"><input type="checkbox" class="checkbox" data-lx="' + k + '"' + (sel.includes(k) ? ' checked' : '') + '></span>' +
     '</label>').join(''), false);
-  $('logs-export-list').querySelectorAll('input[data-lx]').forEach(cb => { cb.onchange = exportSelChanged; });
+  // разметка та же — setHTML её не пересоздаёт: галочки ставятся заново
+  $('logs-export-list').querySelectorAll('input[data-lx]').forEach(cb => { cb.checked = sel.includes(cb.dataset.lx); cb.onchange = exportSelChanged; });
   exportSelChanged();
 }
 function exportSelChanged(){
-  const sel = [...$('logs-export-list').querySelectorAll('input[data-lx]:checked')].map(cb => cb.dataset.lx);
-  if(sel.length) store.set('nfq_logs_export', sel.join(','));
+  const sel = exportSel();
   $('lx-share').disabled = $('lx-save').disabled = !sel.length;
 }
 function exportLogs(){ renderExportSheet(); openSheet('logs-export-sheet'); }
-async function exportLogsRun(how){
-  const keys = exportSel().join(',');
+async function exportLogsRun(how, list){
+  const keys = (list || exportSel()).join(',');
+  if(!keys) return;
   if(openSheetId === 'logs-export-sheet') closeSheet();
   const ksu = !!window.ksu;
   // в KernelSU файл отдаётся по пути: base64 архива не нужен (большой вывод

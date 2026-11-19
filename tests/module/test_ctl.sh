@@ -523,7 +523,7 @@ assert_eq "" "$(tar -tf "$(printf '%s' "$ctl_out" | cut -f2)" | grep '^\./')" "e
 # видно, какой сервер у сайта и что меняется между проверками
 mkdir -p "$DNS_GEO_SCAN_DIR"; printf '#time=1\n' > "$DNS_GEO_SCAN_DIR/wifi-test.tsv"; printf 'claude.ai dns.example\n' > "$DNS_GEO_SCAN_DIR/wifi-test.tsv.pin"
 ctl export-logs path dns
-assert_match "$ctl_out" "^nfqws2-logs-.*\.tar	" "with the geo server checks the DNS log goes into an archive"
+assert_match "$ctl_out" "^nfqws2-dns-[0-9]{8}-[0-9]{6}\.tar	" "with the geo server checks the DNS log goes into an archive named after it"
 assert_contains "$(tar -tf "$(printf '%s' "$ctl_out" | cut -f2)")" "dns/wifi-test.tsv.pin" "with the checks and the servers pinned to sites"
 rm -rf "$DNS_GEO_SCAN_DIR"
 ctl export-logs path nosuch

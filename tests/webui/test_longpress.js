@@ -225,8 +225,17 @@ function truthy(cond, msg) { cond ? ok(msg) : fail(msg); }
   await page.click('#lx-save'); await page.waitForTimeout(400);
   eq(1, await calls("'export-logs' 'path' 'dns'"), 'Export saves just the chosen log, without the share sheet');
   eq(false, await page.evaluate(() => $('logs-export-sheet').classList.contains('open')), 'and closes the sheet');
+  // 19.11: выбор не запоминается — лист снова со всеми отмеченными, а
+  // долгое нажатие на значок журналов всегда экспортирует всё
   await page.click('#bar-actions button[aria-label="Экспорт логов"]'); await page.waitForTimeout(500);
-  eq('dns', await page.evaluate(() => [...$('logs-export-list').querySelectorAll('input[data-lx]:checked')].map(x => x.dataset.lx).join(',')), 'the choice is remembered');
+  const all = await page.evaluate(() => exportItems().map(x => x[0]).join(','));
+  eq(all, await page.evaluate(() => [...$('logs-export-list').querySelectorAll('input[data-lx]:checked')].map(x => x.dataset.lx).join(',')), 'the sheet opens with everything ticked again');
+  await page.$$eval('#logs-export-list input[data-lx]', r => r.forEach(x => { if(x.dataset.lx !== 'dns'){ x.checked = false; x.onchange(); } }));
+  const ex0 = await calls("'export-logs' 'path' '" + all + "'");
+  await page.evaluate(() => logsLongAction()); await page.waitForTimeout(400);
+  eq(ex0 + 1, await calls("'export-logs' 'path' '" + all + "'"), 'the long press exports every log, whatever is ticked in the sheet');
+  await page.click('#bar-actions button[aria-label="Экспорт логов"]'); await page.waitForTimeout(500);
+  await page.$$eval('#logs-export-list input[data-lx]', r => r.forEach(x => { if(x.dataset.lx !== 'dns'){ x.checked = false; x.onchange(); } }));
   await page.click('#lx-share'); await page.waitForTimeout(400);
   eq(1, await calls("'export-logs' 'share' 'dns'"), 'Share builds a temporary one for the share sheet');
   await page.evaluate(() => $('prompt-container').classList.remove('show'));

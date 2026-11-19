@@ -712,7 +712,9 @@ cmd_export_logs() {
     out_file="$dir/$name"
     cp -f "$out" "$out_file" 2>/dev/null || { rm -rf "$tmp"; echo "Не удалось сохранить $out_file" >&2; return 1; }
   else
-    name="nfqws2-logs-$stamp.tar"
+    # Один журнал, но с папкой (DNS: журнал и файлы по сетям) — тоже архив, и
+    # имя — по журналу (nfqws2-dns-…tar), а не как у набора журналов
+    case "$keys" in *' '*) name="nfqws2-logs-$stamp.tar" ;; *) name="nfqws2-$keys-$stamp.tar" ;; esac
     out_file="$dir/$name"
     if ! (cd "$tmp" && set -- * && tar_cmd -cf "$out_file" "$@") 2>/dev/null; then
       rm -f "$out_file"   # недописанный архив выглядел бы как настоящий
