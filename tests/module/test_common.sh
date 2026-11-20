@@ -363,6 +363,21 @@ assert_not_contains "$args" "slot=tls:probe" "ordinary sites are not touched"
 assert_not_contains "$args" "slot=google:probe" "nor Google"
 assert_not_contains "$args" "slot=tls_tg:probe" "nor Telegram over Cloudflare: its WebSocket is cut at 16 KB, a first try without bypass would stall it"
 assert_contains "$args" "--hostlist=$LISTS_DIR/telegram_ws.list" "Telegram over Cloudflare has its own profile by name"
+
+# 20.11: кэш Google у провайдера (googlevideo.com не на адрес Google) — без обхода
+first=$(printf '%s' "$args" | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^--hostlist-domains=googlevideo.com$/) { print i; exit } }')
+pass_at=$(printf '%s' "$args" | awk '{ for (i = 1; i <= NF; i++) if ($i == "--lua-desync=pass") { print i; exit } }')
+syn_at=$(printf '%s' "$args" | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^--lua-desync=nz_first2:syn/) { print i; exit } }')
+assert_contains "$args" "--ipset-exclude=$LISTS_DIR/ipset_google.list --lua-desync=pass" "googlevideo.com outside Google's own networks (a provider cache) goes without bypass"
+assert_eq "1" "$([ -n "$pass_at" ] && [ "$pass_at" -lt "$syn_at" ] && echo 1)" "before any video step, the SYN one too"
+python3 -I - "$REPO_DIR/lists/ipset_google.list" <<'X' > "$SANDBOX/goog.chk"
+import ipaddress, sys
+nets = [ipaddress.ip_network(l.strip()) for l in open(sys.argv[1]) if l.strip() and not l.startswith('#')]
+for ip in ['188.234.130.204', '74.125.104.202', '173.194.1.1', '2a02:2698:a100:3::c']:
+    a = ipaddress.ip_address(ip); print(ip, any(a in n for n in nets if n.version == a.version))
+X
+assert_contains "$(cat "$SANDBOX/goog.chk")" "188.234.130.204 False" "the DOM.RU cache is not a Google network"
+assert_contains "$(cat "$SANDBOX/goog.chk")" "74.125.104.202 True" "Google's video nodes are (they keep their bypass)"
 conf_reset
 reload_conf
 

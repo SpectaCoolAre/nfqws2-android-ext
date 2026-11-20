@@ -362,8 +362,11 @@ assert_contains "$(grep 'strategy=53$' "$REPO_DIR/strategies/smart.conf")" "seqo
 assert_contains "$(grep -A30 '^NFQWS_BASE_ARGS=' "$REPO_DIR/strategies/smart.conf")" "tls_clienthello_7.bin" "with its tls7 blob"
 assert_contains "$(grep '^#@bench-google' "$REPO_DIR/strategies/smart.conf")" ",49-56" "the benchmark tries the new Google variants"
 assert_contains "$(grep '^#@bench-tls' "$REPO_DIR/strategies/smart.conf")" ",55-58" "and the new TLS ones"
-# с кэшем имён профиль с хостлистом и без --filter-l7 сработал бы уже на SYN
-assert_eq "" "$(printf '%s\n' "$prof" | grep -E -- '--hostlist(-domains)?=' | grep -v -- '--filter-l7=')" "every hostlist profile has an l7 filter: the name cache changes no other profile"
+# с кэшем имён профиль с хостлистом и без --filter-l7 сработал бы уже на SYN.
+# Кроме профилей «без обхода» (кэш Google у провайдера, 20.11): им и нужен SYN —
+# чтобы соединение с кэшем не ушло в шаг малого окна по имени
+assert_eq "" "$(printf '%s\n' "$prof" | grep -E -- '--hostlist(-domains)?=' | grep -v -- '--filter-l7=' | grep -v -- '--lua-desync=pass')" "every hostlist profile has an l7 filter: the name cache changes no other profile"
+assert_eq "2" "$(printf '%s\n' "$prof" | grep -c -- '--hostlist-domains=googlevideo.com --ipset-exclude=[^ ]*ipset_google.list --lua-desync=pass')" "the only ones without it pass a provider's Google cache (TCP and QUIC) and do nothing else"
 # видео YouTube на МТС — с кэшей Google в сети оператора: там hostfakesplit
 # google.com (Youtube_circular #1) открыл 94 из 94, одиночный fake — 0 из 41
 assert_contains "$(grep 'slot=google' "$REPO_DIR/strategies/smart.conf")" ",21,34," "Youtube_circular #1 is in the Google base set"
